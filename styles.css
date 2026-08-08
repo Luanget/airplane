@@ -73,6 +73,9 @@ main { padding: 6px 16px 28px; }
 .section-head h2 { font-size:17px; margin:0; }
 .text-button { color:var(--green); font-size:13px; font-weight:650; }
 
+.balance-card .budget-top { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
+.balance-value { font-size:32px; line-height:1.08; letter-spacing:-.7px; font-weight:760; font-variant-numeric:tabular-nums; }
+.balance-note { margin-top:10px; }
 .budget-card .budget-top { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; }
 .budget-amount { font-size:24px; font-weight:750; font-variant-numeric:tabular-nums; }
 .budget-amount .of { color:var(--muted); font-size:14px; font-weight:550; }

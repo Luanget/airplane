@@ -1,6 +1,6 @@
 
 const STORAGE_KEY = 'airplane-pwa-v1';
-const VERSION = 1;
+const VERSION = 2;
 
 const ICONS = {
   plane: '<path d="M3 14.5 21 3l-6.2 18-4.1-6.2L3 14.5Z"/><path d="m10.7 14.8 4.1-4.1"/>',
@@ -48,7 +48,7 @@ const DEFAULT_CATEGORIES = [
 ].map((c,i)=>({id:`default-${i+1}`,name:c[0],type:c[1],icon:c[2],color:c[3],custom:false,hidden:false,order:i}));
 
 function freshData(){
-  return {version:VERSION, transactions:[], categories:structuredClone(DEFAULT_CATEGORIES), budgets:{}, prefs:{}};
+  return {version:VERSION, transactions:[], categories:structuredClone(DEFAULT_CATEGORIES), budgets:{}, balanceAdjustments:[], prefs:{initialBalance:null}};
 }
 
 let data = loadData();
@@ -60,7 +60,7 @@ function loadData(){
     if(!raw) return freshData();
     const parsed = JSON.parse(raw);
     if(!parsed.categories?.length) parsed.categories = structuredClone(DEFAULT_CATEGORIES);
-    parsed.transactions ||= []; parsed.budgets ||= {}; parsed.prefs ||= {}; parsed.version ||= VERSION;
+    parsed.transactions ||= []; parsed.budgets ||= {}; parsed.balanceAdjustments ||= []; parsed.prefs ||= {}; if(!('initialBalance' in parsed.prefs)) parsed.prefs.initialBalance=null; parsed.version ||= VERSION;
     return parsed;
   } catch(e){
     console.warn('Airplane data reset after invalid local storage', e);
@@ -89,6 +89,13 @@ function monthTotals(m){
   return txForMonth(m).reduce((a,t)=>{a[t.type]+=Number(t.amount)||0; return a;},{expense:0,income:0});
 }
 function budgetFor(m){ return Number(data.budgets[m]||0); }
+function initialBalance(){ return Number(data.prefs?.initialBalance ?? 0); }
+function balanceAdjustmentTotal(){ return (data.balanceAdjustments||[]).reduce((s,a)=>s+Number(a.delta||0),0); }
+function currentBalance(){
+  const txNet=data.transactions.reduce((s,t)=>s+(t.type==='income'?Number(t.amount||0):-Number(t.amount||0)),0);
+  return initialBalance()+txNet+balanceAdjustmentTotal();
+}
+function hasInitialBalance(){ return data.prefs?.initialBalance !== null && data.prefs?.initialBalance !== undefined; }
 function categoryById(id){ return data.categories.find(c=>c.id===id); }
 function dateDisplay(iso){ const d=new Date(`${iso}T12:00:00`); return `${d.getMonth()+1}月${d.getDate()}日`; }
 function weekday(iso){ return ['周日','周一','周二','周三','周四','周五','周六'][new Date(`${iso}T12:00:00`).getDay()]; }
@@ -99,20 +106,22 @@ function txSnapshotCategory(t){
 
 function budgetMetrics(m){
   const budget=budgetFor(m), totals=monthTotals(m), dim=daysInMonth(m), now=new Date();
-  const elapsed = isCurrentMonth(m) ? now.getDate() : dim;
-  const dailyLimit = budget>0 ? budget/dim : 0;
-  const plannedToDate = dailyLimit*elapsed;
+  const current=isCurrentMonth(m);
+  const elapsed = current ? now.getDate() : dim;
+  const baseDaily = budget>0 ? budget/dim : 0;
+  const plannedToDate = baseDaily*elapsed;
   const delta = totals.expense-plannedToDate;
   const remainingBudget = budget-totals.expense;
-  const remainingDays = isCurrentMonth(m) ? Math.max(dim-now.getDate()+1,1) : 0;
-  const remainingDaily = remainingDays>0 ? Math.max(remainingBudget,0)/remainingDays : 0;
   const today = localISO(now);
-  const todayExpense = isCurrentMonth(m) ? data.transactions.filter(t=>t.type==='expense'&&t.date===today).reduce((s,t)=>s+Number(t.amount),0) : 0;
+  const todayExpense = current ? data.transactions.filter(t=>t.type==='expense'&&t.date===today).reduce((s,t)=>s+Number(t.amount),0) : 0;
+  const expenseBeforeToday = current ? Math.max(totals.expense-todayExpense,0) : totals.expense;
+  const remainingDays = current ? Math.max(dim-now.getDate()+1,1) : dim;
+  const dailyLimit = current ? (budget>0 ? Math.max(budget-expenseBeforeToday,0)/remainingDays : 0) : baseDaily;
   const todayDelta = todayExpense-dailyLimit;
   const timeProgress = elapsed/dim;
   const budgetProgress = budget>0 ? totals.expense/budget : 0;
   const projection = elapsed>0 ? totals.expense/elapsed*dim : 0;
-  return {budget,...totals,dim,elapsed,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,remainingDaily,todayExpense,todayDelta,timeProgress,budgetProgress,projection};
+  return {budget,...totals,dim,elapsed,baseDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayDelta,timeProgress,budgetProgress,projection};
 }
 
 function render(){
@@ -124,30 +133,41 @@ function render(){
   bindViewEvents();
 }
 
+function balanceCard(){
+  const balance=currentBalance();
+  return `<section class="card balance-card">
+    <div class="budget-top"><div><div class="eyebrow">当前余额</div><div class="balance-value ${balance<0?'negative':''}">${amount(balance)}</div></div><button class="text-button" data-action="balance">${hasInitialBalance()?'调整':'设置'}</button></div>
+    <div class="helper balance-note">收入会增加余额，支出会减少余额；月预算仍由你单独设置，不会因收入自动提高。</div>
+  </section>`;
+}
+
 function renderHome(){
   const m=budgetMetrics(ui.selectedMonth), current=isCurrentMonth(ui.selectedMonth);
   if(!m.budget){
     return `<div class="stack">
+      ${balanceCard()}
       <section class="card hero empty">
         <div class="empty-icon">${icon('wallet')}</div>
         <h3>先设置${current?'本月':'这个月'}预算</h3>
-        <p>预算由你每个月单独填写。设置后 Airplane 会自动计算每日控制线和月度节奏。</p>
+        <p>预算由你每个月单独填写。设置后 Airplane 会根据此前实际支出动态计算今天的控制额度。</p>
         <button class="primary-button" data-action="budget">设置${current?'本月':'该月'}预算</button>
       </section>
       ${recentCard()}
     </div>`;
   }
-  const heroLabel = current ? '今日不宜超过' : '当月每日控制线';
-  const status = current ? (m.todayDelta>0 ? `<span class="negative">今日已超出 ${amount(m.todayDelta)}</span>` : `<span class="positive">今日还可支出 ${amount(Math.max(-m.todayDelta,0))}</span>`) : `<span class="muted">按当月天数平均计算</span>`;
+  const heroLabel = current ? '今日不宜超过' : '当月日均预算';
+  const status = current ? (m.todayDelta>0 ? `<span class="negative">今日已超出 ${amount(m.todayDelta)}</span>` : `<span class="positive">今日还可支出 ${amount(Math.max(-m.todayDelta,0))}</span>`) : `<span class="muted">按当月预算平均计算</span>`;
   const planText = m.delta>0 ? `多支出 ${amount(m.delta)}` : `节省 ${amount(Math.abs(m.delta))}`;
   const planClass = m.delta>0 ? 'negative' : 'positive';
+  const useRatio = current ? (m.dailyLimit>0 ? m.todayExpense/m.dailyLimit : (m.todayExpense>0?1:0)) : m.budgetProgress;
   return `<div class="stack">
+    ${balanceCard()}
     <section class="card hero">
       <div class="eyebrow">${heroLabel}</div>
       <div class="big-money"><small>¥</small>${m.dailyLimit.toFixed(2)}</div>
       <div class="hero-status">${status}</div>
-      ${current?`<div class="metric-grid"><div class="metric"><div class="metric-label">今日已支出</div><div class="metric-value">${amount(m.todayExpense)}</div></div><div class="metric"><div class="metric-label">今日控制线</div><div class="metric-value">${amount(m.dailyLimit)}</div></div></div>`:''}
-      <div class="progress-row"><div class="progress-meta"><span>${current?'今日':'月均'}使用</span><span>${current?pct(m.dailyLimit?m.todayExpense/m.dailyLimit:0):pct(m.budgetProgress)}</span></div><div class="progress ${current&&m.todayDelta>0?'danger':''}"><span style="width:${Math.min((current?m.todayExpense/m.dailyLimit:m.budgetProgress)*100,100)}%"></span></div></div>
+      ${current?`<div class="metric-grid"><div class="metric"><div class="metric-label">今日已支出</div><div class="metric-value">${amount(m.todayExpense)}</div></div><div class="metric"><div class="metric-label">今日动态额度</div><div class="metric-value">${amount(m.dailyLimit)}</div></div></div>`:''}
+      <div class="progress-row"><div class="progress-meta"><span>${current?'今日':'月均'}使用</span><span>${pct(useRatio)}</span></div><div class="progress ${current&&m.todayDelta>0?'danger':''}"><span style="width:${Math.min(useRatio*100,100)}%"></span></div></div>
     </section>
 
     <section class="card budget-card">
@@ -155,7 +175,7 @@ function renderHome(){
       <div class="progress-row"><div class="progress-meta"><span>预算使用 ${pct(m.budgetProgress)}</span><span>时间进度 ${pct(m.timeProgress)}</span></div><div class="progress ${m.budgetProgress>m.timeProgress?'danger':''}"><span style="width:${Math.min(m.budgetProgress*100,100)}%"></span></div></div>
       <div class="plan-grid">
         <div class="plan-tile"><div class="metric-label">本月较计划</div><strong class="${planClass}">${planText}</strong></div>
-        <div class="plan-tile"><div class="metric-label">${current?'余下每日不宜超过':'当月结余'}</div><strong>${current?amount(m.remainingDaily):amount(m.budget-m.expense)}</strong></div>
+        <div class="plan-tile"><div class="metric-label">剩余预算</div><strong class="${m.remainingBudget<0?'negative':''}">${amount(m.remainingBudget)}</strong></div>
       </div>
     </section>
     ${recentCard()}
@@ -212,7 +232,8 @@ function renderSettings(){
   const b=budgetFor(ui.selectedMonth);
   return `<div class="stack"><div class="section-head"><h2>设置</h2></div>
     <section class="card settings-section">
-      <button class="setting-row" data-action="budget"><span class="mini-icon">${icon('wallet')}</span><span class="setting-copy"><span class="setting-title">月预算</span><span class="setting-sub">${monthLabel(ui.selectedMonth)} · ${b?amount(b):'未设置'}</span></span><span class="chevron">${icon('chevron')}</span></button>
+      <button class="setting-row" data-action="balance"><span class="mini-icon">${icon('wallet')}</span><span class="setting-copy"><span class="setting-title">当前余额</span><span class="setting-sub">${hasInitialBalance()?amount(currentBalance()):'未设置初始余额'}</span></span><span class="chevron">${icon('chevron')}</span></button>
+      <button class="setting-row" data-action="budget"><span class="mini-icon">${icon('calendar')}</span><span class="setting-copy"><span class="setting-title">月预算</span><span class="setting-sub">${monthLabel(ui.selectedMonth)} · ${b?amount(b):'未设置'}</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="categories"><span class="mini-icon">${icon('list')}</span><span class="setting-copy"><span class="setting-title">分类管理</span><span class="setting-sub">默认分类 + 自定义收入/支出分类</span></span><span class="chevron">${icon('chevron')}</span></button>
     </section>
     <div class="section-head"><h2>数据</h2></div>
@@ -229,6 +250,7 @@ function renderSettings(){
 
 function bindViewEvents(){
   document.querySelectorAll('[data-action="budget"]').forEach(b=>b.onclick=()=>openBudgetModal());
+  document.querySelectorAll('[data-action="balance"]').forEach(b=>b.onclick=()=>openBalanceModal());
   document.querySelector('[data-action="go-records"]')?.addEventListener('click',()=>{ui.tab='records';render();});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{ui.recordFilter=b.dataset.filter;render();});
   document.querySelectorAll('[data-edit-tx]').forEach(b=>b.onclick=()=>openTransactionModal(data.transactions.find(t=>t.id===b.dataset.editTx)));
@@ -260,9 +282,23 @@ function openMonthModal(){
 
 function openBudgetModal(){
   const existing=budgetFor(ui.selectedMonth);
-  openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}支出预算</label><input id="budgetInput" class="large-input" inputmode="decimal" placeholder="例如 2000" value="${existing||''}"><div class="helper">每个月可以单独设置和修改。修改后，“今日不宜超过”“本月较计划”“余下每日不宜超过”会立即重新计算。</div></section>`);
+  openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}支出预算</label><input id="budgetInput" class="large-input" inputmode="decimal" placeholder="例如 2000" value="${existing||''}"><div class="helper">每个月可以单独设置和修改。当前月会按“剩余预算 ÷ 包含今天在内的剩余天数”动态计算“今日不宜超过”；收入不会自动提高预算。</div></section>`);
   const input=document.getElementById('budgetInput'); input.focus();
   document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)||v<0){toast('请输入有效预算');return;} data.budgets[ui.selectedMonth]=Math.round(v*100)/100;saveData();closeModal();render();toast('月预算已保存');};
+}
+
+function openBalanceModal(){
+  const initialized=hasInitialBalance();
+  const current=currentBalance();
+  if(!initialized){
+    openModal(`${modalHead('设置初始余额')}<section class="card input-card"><label>开始使用 Airplane 时已有的总余额</label><input id="balanceInput" class="large-input" inputmode="decimal" placeholder="例如 10000"><div class="helper">初始余额只用于建立起点。之后收入会增加余额、支出会减少余额；两者都不会改变你手动设置的月预算。</div></section>`);
+    const input=document.getElementById('balanceInput'); input.focus();
+    document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)){toast('请输入有效余额');return;} data.prefs.initialBalance=Math.round(v*100)/100;saveData();closeModal();render();toast('初始余额已保存');};
+    return;
+  }
+  openModal(`${modalHead('调整当前余额')}<section class="card input-card"><label>Airplane 当前余额</label><div class="budget-amount">${amount(current)}</div><label style="margin-top:8px">调整为</label><input id="balanceInput" class="large-input" inputmode="decimal" value="${current.toFixed(2)}"><div class="helper">适合补记遗漏造成的余额偏差。余额调整不计入收入、支出，也不会占用月预算。</div></section>`);
+  const input=document.getElementById('balanceInput'); input.focus(); input.select();
+  document.getElementById('modalSave').onclick=()=>{const target=Number(input.value.replace(',','.')); if(!Number.isFinite(target)){toast('请输入有效余额');return;} const delta=Math.round((target-current)*100)/100; if(Math.abs(delta)>=0.01)data.balanceAdjustments.push({id:uid('bal'),delta,targetBalance:Math.round(target*100)/100,createdAt:new Date().toISOString()});saveData();closeModal();render();toast(Math.abs(delta)>=0.01?'当前余额已调整':'余额没有变化');};
 }
 
 function openTransactionModal(existing=null){
@@ -347,7 +383,7 @@ function exportCSV(){
   const rows=[['日期','时间','类型','金额','分类','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.note||''])];
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\r\n');downloadBlob(`Airplane-records-${localISO()}.csv`,csv,'text/csv;charset=utf-8');toast('CSV 已导出');
 }
-function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：预算、分类和账单都会被清空。'))return; data=freshData();saveData();ui.selectedMonth=monthKey(new Date());render();toast('本机数据已清空'); }
+function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; data=freshData();saveData();ui.selectedMonth=monthKey(new Date());render();toast('本机数据已清空'); }
 function toast(msg){ document.querySelector('.toast')?.remove(); const d=document.createElement('div');d.className='toast';d.textContent=msg;document.body.appendChild(d);setTimeout(()=>d.remove(),2200); }
 
 // Global navigation
@@ -357,7 +393,7 @@ document.getElementById('monthButton').onclick=openMonthModal;
 document.getElementById('quickBudgetButton').onclick=openBudgetModal;
 document.getElementById('importInput').addEventListener('change', async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
-  try{const parsed=JSON.parse(await file.text());const incoming=parsed.data||parsed;if(!Array.isArray(incoming.transactions)||!Array.isArray(incoming.categories)||typeof incoming.budgets!=='object')throw new Error('invalid');if(!confirm('恢复此备份会替换当前设备上的 Airplane 数据。继续吗？'))return;data=incoming;data.version=VERSION;saveData();render();toast('备份已恢复');}catch(err){toast('无法识别这个 Airplane 备份');}
+  try{const parsed=JSON.parse(await file.text());const incoming=parsed.data||parsed;if(!Array.isArray(incoming.transactions)||!Array.isArray(incoming.categories)||typeof incoming.budgets!=='object')throw new Error('invalid');if(!confirm('恢复此备份会替换当前设备上的 Airplane 数据。继续吗？'))return;data=incoming;data.balanceAdjustments ||= [];data.prefs ||= {};if(!('initialBalance' in data.prefs))data.prefs.initialBalance=null;data.version=VERSION;saveData();render();toast('备份已恢复');}catch(err){toast('无法识别这个 Airplane 备份');}
 });
 
 if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn)); }
