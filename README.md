@@ -38,9 +38,11 @@ python3 -m http.server 8080
 App updates keep the permanent `airplane-pwa-v1` data key, migrate schemas additively, and maintain an on-device recovery copy. Deploy new files to the same HTTPS origin/path; do not change the hosting domain if you expect existing browser data to follow automatically.
 
 
-## 0.6 交互完善
-- 默认/自定义分类支持拖动排序；记账页同步顺序。
-- 记账 Sheet 支持下拉关闭，并保留 30 分钟未完成草稿。
-- 明细点整行编辑、左滑删除并支持撤销。
-- 记住最近使用的收入/支出分类。
-- 月份支持左右快捷切换；扩大触控区域并改善键盘遮挡。
+## 0.7 首页与交互重构
+- 底部只保留“首页 / 记一笔 / 统计”，设置移动到首页右上角。
+- 完整账单合并到首页，并支持“全部 / 收入 / 支出”筛选与按日期分组。
+- 今日控制卡去掉重复状态文字，直接显示今日已支出和今日还可支出/已超支。
+- 月份选择改成自绘的年份 + 12 个月网格，避免 iOS 原生月份控件错位。
+- “记一笔”中的“添加分类”升级为“整理分类”，可新增、编辑、隐藏、删除和触摸拖动排序。
+- 继续保留草稿、左滑删除/撤销、持久化存储和离线使用。
+- Service Worker 更新后自动接管并刷新一次；设置页也提供手动检查更新。

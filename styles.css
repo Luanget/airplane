@@ -240,3 +240,110 @@ main { padding: 6px 16px 28px; }
   .action-pill { padding:7px 8px; font-size:10px; }
   .drag-handle { width:38px; margin-left:-8px; }
 }
+
+/* Airplane 0.7 information architecture + iPhone interaction polish */
+.tabbar {
+  grid-template-columns: 1fr 76px 1fr;
+  padding-left: 28px;
+  padding-right: 28px;
+}
+.topbar > div:first-child { min-width:0; }
+#settingsButton { flex:0 0 auto; }
+
+.daily-card { padding-bottom:20px; }
+.daily-metrics { margin-top:20px; }
+.daily-metrics .metric { min-height:78px; display:flex; flex-direction:column; justify-content:center; }
+.daily-metrics .metric-value { font-size:19px; }
+.ledger-section { display:grid; gap:10px; margin-top:2px; }
+.ledger-head { margin-top:4px; }
+.ledger-month { font-size:12px; }
+.ledger-filters { padding:0; gap:6px; }
+.ledger-filters .filter { border-radius:14px; padding:10px 12px; }
+.day-group { margin-top:2px; }
+.day-head { padding:5px 4px 7px; }
+
+/* Custom month picker: avoids iOS native month-input geometry/alignment issues. */
+.month-picker-card { padding:14px; overflow:hidden; }
+.month-year-nav {
+  display:grid;
+  grid-template-columns:46px minmax(0,1fr) 46px;
+  align-items:center;
+  gap:8px;
+  margin-bottom:14px;
+}
+.month-year-nav strong { text-align:center; font-size:20px; letter-spacing:-.25px; }
+.month-year-step {
+  width:46px; height:46px; border-radius:15px;
+  display:grid; place-items:center;
+  color:var(--muted); background:var(--surface-2);
+}
+.month-year-step:first-child svg { transform:rotate(180deg); }
+.month-year-step svg { width:18px; height:18px; }
+.month-year-step:active { transform:scale(.96); }
+.month-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }
+.month-cell {
+  min-width:0; height:54px; border-radius:16px;
+  display:flex; align-items:baseline; justify-content:center; gap:2px;
+  background:var(--surface-2); color:var(--text);
+  font-variant-numeric:tabular-nums;
+}
+.month-cell span { font-size:18px; font-weight:720; }
+.month-cell small { font-size:11px; color:var(--muted); }
+.month-cell.selected { background:var(--green); color:#fff; box-shadow:0 8px 20px rgba(54,184,106,.22); }
+.month-cell.selected small { color:rgba(255,255,255,.78); }
+.month-current { margin-top:12px; }
+
+/* Category organizer lives beside the recording workflow. */
+.organize-categories { display:inline-flex; align-items:center; justify-content:flex-end; padding:0 4px; }
+.category-manage-toolbar { display:flex; align-items:center; gap:12px; margin:10px 2px 8px; }
+.category-manage-toolbar .helper { flex:1; }
+.category-manager-card { padding:4px 14px; }
+.category-manage-row {
+  display:grid;
+  grid-template-columns:34px 42px minmax(0,1fr);
+  align-items:center;
+  column-gap:10px;
+  row-gap:5px;
+  min-height:74px;
+  padding:10px 0;
+  transition:transform .12s ease, background .12s ease, box-shadow .12s ease;
+}
+.category-manage-row .drag-handle { grid-column:1; grid-row:1 / span 2; }
+.category-manage-row .category-symbol { grid-column:2; grid-row:1 / span 2; }
+.category-manage-row .name { grid-column:3; grid-row:1; min-width:0; }
+.category-row-actions { grid-column:3; grid-row:2; display:flex; justify-content:flex-start; flex-wrap:wrap; gap:6px; }
+.drag-handle {
+  width:34px; height:50px; margin:0; padding:0;
+  display:flex; flex-direction:column; justify-content:center; align-items:center; gap:4px;
+  color:var(--muted); touch-action:none; user-select:none; -webkit-user-select:none;
+}
+.drag-handle span { display:block; width:16px; height:2px; border-radius:999px; background:currentColor; opacity:.72; }
+.category-manage-row.dragging {
+  position:relative; z-index:5; opacity:.96;
+  background:color-mix(in srgb,var(--green-soft) 60%,var(--surface));
+  border-radius:16px; box-shadow:0 14px 30px rgba(20,35,25,.14);
+}
+body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
+.action-pill { min-width:42px; min-height:34px; padding:7px 10px; }
+
+.settings-modal-body { padding-bottom:4px; }
+.settings-stack { gap:12px; }
+.settings-modal-body .section-head { margin-top:8px; }
+
+@media (max-width:390px){
+  main { padding-left:13px; padding-right:13px; }
+  .topbar { padding-left:16px; padding-right:16px; }
+  .tabbar { padding-left:18px; padding-right:18px; }
+  .card { border-radius:20px; }
+  .big-money { font-size:35px; }
+  .metric-grid, .plan-grid { gap:8px; }
+  .metric, .plan-tile { padding-left:12px; padding-right:12px; }
+  .month-grid { gap:7px; }
+  .month-cell { height:50px; border-radius:14px; }
+  .category-manager-card { padding-left:12px; padding-right:12px; }
+}
+
+@media (max-width:340px){
+  .month-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .metric-grid, .plan-grid { grid-template-columns:1fr; }
+}

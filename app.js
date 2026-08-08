@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.7.0';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -180,6 +180,14 @@ function budgetMetrics(m){
   return {budget,...totals,dim,elapsed,baseDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayDelta,timeProgress,budgetProgress,projection};
 }
 
+function refreshStorageProtectionUI(){
+  const el=document.querySelector('[data-action="storage-persist"] .setting-sub');
+  if(!el)return;
+  const p=storageProtectionStatus();
+  el.className=`setting-sub ${p.cls}`;
+  el.textContent=p.label;
+}
+
 function storageProtectionStatus(){
   if(!storageProtection.supported) return {label:'当前环境不支持', cls:'muted'};
   if(!storageProtection.checked) return {label:'正在检查…', cls:'muted'};
@@ -191,7 +199,7 @@ function storageProtectionStatus(){
 async function ensurePersistentStorage(showToast=false){
   if(!storageProtection.supported){
     storageProtection.checked=true;
-    if(ui.tab==='settings') render();
+    refreshStorageProtectionUI();
     if(showToast) toast('当前浏览器不支持持久化存储申请');
     return false;
   }
@@ -200,14 +208,14 @@ async function ensurePersistentStorage(showToast=false){
     if(!persisted) persisted=await navigator.storage.persist();
     storageProtection.persisted=!!persisted;
     storageProtection.checked=true;
-    if(ui.tab==='settings') render();
+    refreshStorageProtectionUI();
     if(showToast) toast(persisted?'本地数据保护已启用':'系统暂未授予持久化存储');
     return !!persisted;
   }catch(err){
     console.warn('Persistent storage request failed', err);
     storageProtection.persisted=false;
     storageProtection.checked=true;
-    if(ui.tab==='settings') render();
+    refreshStorageProtectionUI();
     if(showToast) toast('持久化存储检查失败');
     return false;
   }
@@ -217,7 +225,7 @@ function render(){
   document.getElementById('monthButton').innerHTML = `${monthLabel(ui.selectedMonth)} ${icon('chevron')}`;
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===ui.tab));
   const app=document.getElementById('app');
-  app.innerHTML = ui.tab==='home' ? renderHome() : ui.tab==='records' ? renderRecords() : ui.tab==='stats' ? renderStats() : renderSettings();
+  app.innerHTML = ui.tab==='stats' ? renderStats() : renderHome();
   hydrateIcons();
   bindViewEvents();
 }
@@ -232,31 +240,37 @@ function balanceCard(){
 
 function renderHome(){
   const m=budgetMetrics(ui.selectedMonth), current=isCurrentMonth(ui.selectedMonth);
+  const ledger=renderLedgerSection();
   if(!m.budget){
     return `<div class="stack">
       ${balanceCard()}
-      <section class="card hero empty">
+      <section class="card hero empty budget-empty">
         <div class="empty-icon">${icon('wallet')}</div>
         <h3>先设置${current?'本月':'这个月'}预算</h3>
-        <p>预算由你每个月单独填写。设置后 Airplane 会根据此前实际支出动态计算今天的控制额度。</p>
+        <p>预算由你每个月单独填写。设置后 Airplane 会根据此前实际支出动态计算每天的控制额度。</p>
         <button class="primary-button" data-action="budget">设置${current?'本月':'该月'}预算</button>
       </section>
-      ${recentCard()}
+      ${ledger}
     </div>`;
   }
-  const heroLabel = current ? '今日不宜超过' : '当月日均预算';
-  const status = current ? (m.todayDelta>0 ? `<span class="negative">今日已超出 ${amount(m.todayDelta)}</span>` : `<span class="positive">今日还可支出 ${amount(Math.max(-m.todayDelta,0))}</span>`) : `<span class="muted">按当月预算平均计算</span>`;
   const planText = m.delta>0 ? `多支出 ${amount(m.delta)}` : `节省 ${amount(Math.abs(m.delta))}`;
   const planClass = m.delta>0 ? 'negative' : 'positive';
   const useRatio = current ? (m.dailyLimit>0 ? m.todayExpense/m.dailyLimit : (m.todayExpense>0?1:0)) : m.budgetProgress;
+  const remainingToday=Math.max(m.dailyLimit-m.todayExpense,0);
+  const overToday=Math.max(m.todayExpense-m.dailyLimit,0);
+  const rightLabel=current ? (overToday>0?'今日已超支':'今日还可支出') : '剩余预算';
+  const rightValue=current ? (overToday>0?overToday:remainingToday) : m.remainingBudget;
+  const rightClass=current&&overToday>0?'negative':(current?'positive':(m.remainingBudget<0?'negative':''));
   return `<div class="stack">
     ${balanceCard()}
-    <section class="card hero">
-      <div class="eyebrow">${heroLabel}</div>
+    <section class="card hero daily-card">
+      <div class="eyebrow">${current?'今日不宜超过':'当月日均预算'}</div>
       <div class="big-money"><small>¥</small>${m.dailyLimit.toFixed(2)}</div>
-      <div class="hero-status">${status}</div>
-      ${current?`<div class="metric-grid"><div class="metric"><div class="metric-label">今日已支出</div><div class="metric-value">${amount(m.todayExpense)}</div></div><div class="metric"><div class="metric-label">今日动态额度</div><div class="metric-value">${amount(m.dailyLimit)}</div></div></div>`:''}
-      <div class="progress-row"><div class="progress-meta"><span>${current?'今日':'月均'}使用</span><span>${pct(useRatio)}</span></div><div class="progress ${current&&m.todayDelta>0?'danger':''}"><span style="width:${Math.min(useRatio*100,100)}%"></span></div></div>
+      <div class="metric-grid daily-metrics">
+        <div class="metric"><div class="metric-label">${current?'今日已支出':'当月已支出'}</div><div class="metric-value">${amount(current?m.todayExpense:m.expense)}</div></div>
+        <div class="metric"><div class="metric-label">${rightLabel}</div><div class="metric-value ${rightClass}">${amount(rightValue)}</div></div>
+      </div>
+      <div class="progress-row"><div class="progress-meta"><span>${current?'今日额度使用':'预算使用'}</span><span>${pct(useRatio)}</span></div><div class="progress ${current&&overToday>0?'danger':''}"><span style="width:${Math.min(useRatio*100,100)}%"></span></div></div>
     </section>
 
     <section class="card budget-card">
@@ -267,39 +281,30 @@ function renderHome(){
         <div class="plan-tile"><div class="metric-label">剩余预算</div><strong class="${m.remainingBudget<0?'negative':''}">${amount(m.remainingBudget)}</strong></div>
       </div>
     </section>
-    ${recentCard()}
+    ${ledger}
   </div>`;
 }
 
-function recentCard(){
-  const items=[...txForMonth(ui.selectedMonth)].sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time)).slice(0,5);
-  return `<div class="section-head"><h2>最近记录</h2>${items.length?'<button class="text-button" data-action="go-records">全部</button>':''}</div>
-  <section class="card transaction-list">${items.length?items.map(txRow).join(''):`<div class="empty"><div class="empty-icon">${icon('list')}</div><h3>还没有记录</h3><p>点击下方绿色 ＋ 记下第一笔。</p></div>`}</section>`;
-}
-
-function txRow(t, swipe=false){
-  const c=txSnapshotCategory(t); const sign=t.type==='expense'?'-':'+'; const cls=t.type==='expense'?'':'positive';
-  const row=`<div class="tx-row tx-row-interactive" data-open-tx="${t.id}" role="button" tabindex="0">
-    <div class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</div>
-    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}</div><div class="tx-sub">${escapeHTML(t.note||dateDisplay(t.date))}</div></div>
-    <div><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(t.time||'')}</div></div>
-  </div>`;
-  if(!swipe) return row;
-  return `<div class="tx-swipe" data-swipe-tx="${t.id}"><button class="tx-delete-action" data-delete-tx="${t.id}" type="button">删除</button>${row}</div>`;
-}
-function renderRecords(){
+function renderLedgerSection(){
   let tx=[...txForMonth(ui.selectedMonth)];
   if(ui.recordFilter!=='all') tx=tx.filter(t=>t.type===ui.recordFilter);
   tx.sort((a,b)=>(b.date+(b.time||'')).localeCompare(a.date+(a.time||'')));
   const groups=Object.groupBy ? Object.groupBy(tx,t=>t.date) : tx.reduce((g,t)=>((g[t.date]??=[]).push(t),g),{});
   const body=Object.keys(groups).sort().reverse().map(date=>{
-    const rows=groups[date], sum=rows.reduce((s,t)=>s+(t.type==='expense'?-Number(t.amount):Number(t.amount)),0);
-    return `<div class="day-group"><div class="day-head"><span>${dateDisplay(date)} ${weekday(date)}</span><span class="${sum>=0?'positive':'negative'}">${sum>=0?'+':'-'}${amount(Math.abs(sum))}</span></div><section class="card transaction-list">${rows.map(t=>txRow(t,true)).join('')}</section></div>`;
+    const rows=groups[date];
+    const expense=rows.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount||0),0);
+    const income=rows.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount||0),0);
+    let summary=''; let cls='muted';
+    if(ui.recordFilter==='expense'){summary=`-${amount(expense)}`;cls='negative';}
+    else if(ui.recordFilter==='income'){summary=`+${amount(income)}`;cls='positive';}
+    else if(income||expense){const net=income-expense;summary=`${net>=0?'+':'-'}${amount(Math.abs(net))}`;cls=net>=0?'positive':'negative';}
+    return `<div class="day-group"><div class="day-head"><span>${dateDisplay(date)} ${weekday(date)}</span><span class="${cls}">${summary}</span></div><section class="card transaction-list">${rows.map(t=>txRow(t,true)).join('')}</section></div>`;
   }).join('');
-  return `<div class="stack"><div class="section-head"><h2>明细</h2><span class="muted" style="font-size:12px">${monthLabel(ui.selectedMonth)}</span></div>
-    <div class="filters"><button class="filter ${ui.recordFilter==='all'?'active':''}" data-filter="all">全部</button><button class="filter ${ui.recordFilter==='expense'?'active':''}" data-filter="expense">支出</button><button class="filter ${ui.recordFilter==='income'?'active':''}" data-filter="income">收入</button></div>
-    ${body||`<section class="card empty"><div class="empty-icon">${icon('list')}</div><h3>这个月还没有记录</h3><p>记账后会按日期自动整理在这里。</p></section>`}
-  </div>`;
+  return `<section class="ledger-section">
+    <div class="section-head ledger-head"><h2>账单</h2><span class="muted ledger-month">${monthLabel(ui.selectedMonth)}</span></div>
+    <div class="filters ledger-filters"><button class="filter ${ui.recordFilter==='all'?'active':''}" data-filter="all">全部</button><button class="filter ${ui.recordFilter==='income'?'active':''}" data-filter="income">收入</button><button class="filter ${ui.recordFilter==='expense'?'active':''}" data-filter="expense">支出</button></div>
+    ${body||`<section class="card empty"><div class="empty-icon">${icon('list')}</div><h3>这里还没有${ui.recordFilter==='income'?'收入':ui.recordFilter==='expense'?'支出':'账单'}记录</h3><p>点击下方绿色 ＋ 记下第一笔。</p></section>`}
+  </section>`;
 }
 
 function renderStats(){
@@ -318,14 +323,13 @@ function renderStats(){
   </div>`;
 }
 
-function renderSettings(){
+function settingsContent(){
   const b=budgetFor(ui.selectedMonth);
   const protection=storageProtectionStatus();
-  return `<div class="stack"><div class="section-head"><h2>设置</h2></div>
+  return `<div class="stack settings-stack">
     <section class="card settings-section">
       <button class="setting-row" data-action="balance"><span class="mini-icon">${icon('wallet')}</span><span class="setting-copy"><span class="setting-title">当前余额</span><span class="setting-sub">${hasInitialBalance()?amount(currentBalance()):'未设置初始余额'}</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="budget"><span class="mini-icon">${icon('calendar')}</span><span class="setting-copy"><span class="setting-title">月预算</span><span class="setting-sub">${monthLabel(ui.selectedMonth)} · ${b?amount(b):'未设置'}</span></span><span class="chevron">${icon('chevron')}</span></button>
-      <button class="setting-row" data-action="categories"><span class="mini-icon">${icon('list')}</span><span class="setting-copy"><span class="setting-title">分类管理</span><span class="setting-sub">默认分类 + 自定义收入/支出分类</span></span><span class="chevron">${icon('chevron')}</span></button>
     </section>
     <div class="section-head"><h2>数据</h2></div>
     <section class="card settings-section">
@@ -333,19 +337,36 @@ function renderSettings(){
       <button class="setting-row" data-action="export-csv"><span class="mini-icon">${icon('file')}</span><span class="setting-copy"><span class="setting-title">导出明细 CSV</span><span class="setting-sub">方便在 Excel / Numbers 中查看</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="import"><span class="mini-icon">${icon('upload')}</span><span class="setting-copy"><span class="setting-title">恢复备份</span><span class="setting-sub">从 Airplane JSON 备份恢复</span></span><span class="chevron">${icon('chevron')}</span></button>
     </section>
-    <div class="section-head"><h2>安装与隐私</h2></div>
+    <div class="section-head"><h2>安装与保护</h2></div>
     <section class="card settings-section">
       <button class="setting-row" data-action="storage-persist"><span class="mini-icon">${icon('shield')}</span><span class="setting-copy"><span class="setting-title">本地数据保护</span><span class="setting-sub ${protection.cls}">${protection.label}</span></span><span class="chevron">${icon('chevron')}</span></button>
+      <button class="setting-row" data-action="check-update"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">程序更新</span><span class="setting-sub">当前 ${APP_VERSION} · 联网自动检查，也可点此立即检查</span></span><span class="chevron">${icon('chevron')}</span></button>
     </section>
-    <section class="card"><div class="helper"><strong style="color:var(--text)">iPhone 安装：</strong>Safari 打开 Airplane → 分享 → 添加到主屏幕。安装后请长期从主屏幕 Airplane 使用；Safari 网页与主屏幕 App 在 iOS 上属于不同的本地数据空间，不会自动同步。<br><br>主屏幕 Airplane 在联网启动时会检查程序更新；更新只替换程序缓存，不会重建余额、预算、分类或账单。Airplane 也会自动申请持久化存储。人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。<br><br>当前程序版本：${APP_VERSION}</div></section>
+    <section class="card"><div class="helper">主屏幕 Airplane 与 Safari 网页在 iOS 上属于不同的本地数据空间。长期使用请固定从主屏幕 Airplane 进入；程序更新只替换程序文件，不会重建余额、预算、分类或账单。人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。</div></section>
     <button class="danger-button" data-action="reset">清空本机全部数据</button>
   </div>`;
+}
+
+function openSettingsModal(){
+  openModal(`${modalHead('设置','完成')}<div class="settings-modal-body">${settingsContent()}</div>`);
+  document.getElementById('modalSave').onclick=()=>closeModal({runDismiss:false});
+  bindSettingsEvents();
+}
+
+function bindSettingsEvents(){
+  document.querySelectorAll('[data-action="budget"]').forEach(b=>b.onclick=()=>openBudgetModal());
+  document.querySelectorAll('[data-action="balance"]').forEach(b=>b.onclick=()=>openBalanceModal());
+  document.querySelector('[data-action="export-json"]')?.addEventListener('click',exportJSON);
+  document.querySelector('[data-action="export-csv"]')?.addEventListener('click',exportCSV);
+  document.querySelector('[data-action="import"]')?.addEventListener('click',()=>document.getElementById('importInput').click());
+  document.querySelector('[data-action="storage-persist"]')?.addEventListener('click',()=>ensurePersistentStorage(true));
+  document.querySelector('[data-action="check-update"]')?.addEventListener('click',()=>checkForAppUpdate(true));
+  document.querySelector('[data-action="reset"]')?.addEventListener('click',resetAll);
 }
 
 function bindViewEvents(){
   document.querySelectorAll('[data-action="budget"]').forEach(b=>b.onclick=()=>openBudgetModal());
   document.querySelectorAll('[data-action="balance"]').forEach(b=>b.onclick=()=>openBalanceModal());
-  document.querySelector('[data-action="go-records"]')?.addEventListener('click',()=>{ui.tab='records';render();});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{ui.recordFilter=b.dataset.filter;render();});
   document.querySelectorAll('[data-open-tx]').forEach(row=>{
     const open=()=>openTransactionModal(data.transactions.find(t=>t.id===row.dataset.openTx));
@@ -354,12 +375,6 @@ function bindViewEvents(){
   });
   document.querySelectorAll('[data-delete-tx]').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteTransaction(b.dataset.deleteTx);});
   bindTransactionSwipes();
-  document.querySelector('[data-action="categories"]')?.addEventListener('click',openCategoryManager);
-  document.querySelector('[data-action="export-json"]')?.addEventListener('click',exportJSON);
-  document.querySelector('[data-action="export-csv"]')?.addEventListener('click',exportCSV);
-  document.querySelector('[data-action="import"]')?.addEventListener('click',()=>document.getElementById('importInput').click());
-  document.querySelector('[data-action="storage-persist"]')?.addEventListener('click',()=>ensurePersistentStorage(true));
-  document.querySelector('[data-action="reset"]')?.addEventListener('click',resetAll);
 }
 function hydrateIcons(){
   document.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});
@@ -409,8 +424,16 @@ function bindSheetSwipe(modal,backdrop){
 }
 
 function openMonthModal(){
-  openModal(`${modalHead('选择月份','完成')}<section class="card input-card"><label>查看月份</label><input id="monthInput" class="large-input" type="month" value="${ui.selectedMonth}"></section>`);
-  document.getElementById('modalSave').onclick=()=>{const v=document.getElementById('monthInput').value;if(v){ui.selectedMonth=v;closeModal({runDismiss:false});render();}};
+  let {y,mo}=parseMonth(ui.selectedMonth);
+  const draw=()=>{
+    openModal(`${modalHead('选择月份','完成')}<section class="card month-picker-card"><div class="month-year-nav"><button id="pickerPrevYear" class="month-year-step" type="button" aria-label="上一年">${icon('chevron')}</button><strong id="pickerYear">${y}年</strong><button id="pickerNextYear" class="month-year-step" type="button" aria-label="下一年">${icon('chevron')}</button></div><div class="month-grid" id="monthGrid">${Array.from({length:12},(_,i)=>`<button class="month-cell ${i+1===mo?'selected':''}" data-month-value="${i+1}" type="button"><span>${i+1}</span><small>月</small></button>`).join('')}</div><button class="secondary-button month-current" id="pickerCurrentMonth" type="button">回到本月</button></section>`);
+    document.getElementById('pickerPrevYear').onclick=()=>{y--;draw();};
+    document.getElementById('pickerNextYear').onclick=()=>{y++;draw();};
+    document.querySelectorAll('[data-month-value]').forEach(b=>b.onclick=()=>{mo=Number(b.dataset.monthValue);draw();});
+    document.getElementById('pickerCurrentMonth').onclick=()=>{const n=new Date();y=n.getFullYear();mo=n.getMonth()+1;draw();};
+    document.getElementById('modalSave').onclick=()=>{ui.selectedMonth=`${y}-${pad(mo)}`;closeModal({runDismiss:false});render();window.scrollTo({top:0,behavior:'smooth'});};
+  };
+  draw();
 }
 function shiftMonth(delta){
   const {y,mo}=parseMonth(ui.selectedMonth);const d=new Date(y,mo-1+delta,1);ui.selectedMonth=monthKey(d);render();window.scrollTo({top:0,behavior:'smooth'});
@@ -461,7 +484,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   let dirty=!!restored;
   const captureDraft=()=>({type,selectedCategoryId:selected,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔')}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button" id="quickAddCategory">＋ 添加分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div><button id="txSubmit" class="primary-button" style="margin-top:14px">${existing?'保存修改':'完成'}</button>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔')}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div><button id="txSubmit" class="primary-button" style="margin-top:14px">${existing?'保存修改':'完成'}</button>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const markDirty=()=>{dirty=true;persistDraft();};
   const renderChooser=()=>{
     document.getElementById('expenseTab').className=`expense ${type==='expense'?'active':''}`;
@@ -476,7 +499,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   ['txAmount','txDate','txTime','txNote'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',markDirty);el?.addEventListener('change',markDirty);});
   document.getElementById('quickAddCategory').onclick=()=>{
     const draft={...captureDraft(),savedAt:Date.now()};dirty=true;saveTransactionDraft(draft);
-    openCategoryEditor(type,null,{cancelLabel:'返回',onBack:()=>openTransactionModal(existing,draft),onDone:newCat=>openTransactionModal(existing,{...draft,type,selectedCategoryId:newCat.id})});
+    openCategoryManager(type,{fromTransaction:true,draft,existing,onReturn:(returnType)=>openTransactionModal(existing,{...draft,type:returnType,selectedCategoryId:(returnType===type?selected:preferredCategoryId(returnType))})});
   };
   renderChooser();
   const submit=()=>{
@@ -515,33 +538,48 @@ function bindTransactionSwipes(){
   });
 }
 
-function openCategoryManager(initialType='expense'){
+function openCategoryManager(initialType='expense',options={}){
   let type=initialType;
+  const returnToTransaction=()=>{closeModal({runDismiss:false});options.onReturn?.(type);};
   const draw=()=>{
-    openModal(`${modalHead('分类管理','完成')}<div class="segmented"><button id="catExpense" class="expense ${type==='expense'?'active':''}">支出分类</button><button id="catIncome" class="income ${type==='income'?'active':''}">收入分类</button></div><div class="helper reorder-tip">按住右侧 ≡ 可拖动调整顺序，记账页会同步变化。</div><section class="card" style="margin-top:10px" id="categoryManageList"></section><button class="secondary-button" id="addCategory" style="margin-top:12px;color:var(--green)">＋ 添加自定义分类</button>`);
-    document.getElementById('modalSave').onclick=()=>closeModal({runDismiss:false});
+    openModal(`${modalHead('整理分类','完成',options.fromTransaction?'返回':'取消')}<div class="segmented"><button id="catExpense" class="expense ${type==='expense'?'active':''}">支出分类</button><button id="catIncome" class="income ${type==='income'?'active':''}">收入分类</button></div><div class="category-manage-toolbar"><div class="helper reorder-tip">按住左侧拖动柄，上下移动即可调整记账页顺序。</div><button class="text-button" id="addCategory" type="button">＋ 新增</button></div><section class="card category-manager-card" id="categoryManageList"></section>`,{onDismiss:options.fromTransaction?()=>options.onReturn?.(type):null});
+    document.getElementById('modalSave').onclick=()=>options.fromTransaction?returnToTransaction():closeModal({runDismiss:false});
+    document.querySelector('.modal-head .cancel').onclick=()=>options.fromTransaction?returnToTransaction():closeModal({runDismiss:false});
     document.getElementById('catExpense').onclick=()=>{type='expense';draw();};
     document.getElementById('catIncome').onclick=()=>{type='income';draw();};
     const list=data.categories.filter(c=>c.type===type).sort((a,b)=>a.order-b.order);
-    document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序">≡</button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)} ${c.custom?'':'<span class="pill static-pill">默认</span>'}</span><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button>${c.custom?`<button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button>`:''}</div>`).join('');
+    document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序"><span></span><span></span><span></span></button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)} ${c.custom?'':'<span class="pill static-pill">默认</span>'}</span><span class="category-row-actions"><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button>${c.custom?`<button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button>`:''}</span></div>`).join('');
     document.querySelectorAll('[data-toggle-cat]').forEach(b=>b.onclick=()=>{const c=categoryById(b.dataset.toggleCat);c.hidden=!c.hidden;saveData();draw();});
-    document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),{cancelLabel:'返回',onBack:()=>openCategoryManager(type),onDone:()=>openCategoryManager(type)}));
-    document.querySelectorAll('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCategory(b.dataset.removeCat,type));
-    document.getElementById('addCategory').onclick=()=>openCategoryEditor(type,null,{cancelLabel:'返回',onBack:()=>openCategoryManager(type),onDone:()=>openCategoryManager(type)});
+    document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),{cancelLabel:'返回',onBack:draw,onDone:draw}));
+    document.querySelectorAll('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCategory(b.dataset.removeCat,type,draw));
+    document.getElementById('addCategory').onclick=()=>openCategoryEditor(type,null,{cancelLabel:'返回',onBack:draw,onDone:draw});
     bindCategoryReorder(type);
-  }; draw();
+  };
+  draw();
 }
 
 function bindCategoryReorder(type){
   const container=document.getElementById('categoryManageList');if(!container)return;
+  const saveOrder=()=>{[...container.querySelectorAll('[data-category-row]')].forEach((r,i)=>{const c=categoryById(r.dataset.categoryRow);if(c)c.order=i;});saveData();};
+  const moveRow=(row,clientY)=>{
+    const rows=[...container.querySelectorAll('[data-category-row]')].filter(x=>x!==row);
+    const before=rows.find(x=>clientY < x.getBoundingClientRect().top + x.getBoundingClientRect().height/2);
+    container.insertBefore(row,before||null);
+    const modal=container.closest('.modal');
+    if(modal){const rect=modal.getBoundingClientRect();if(clientY>rect.bottom-80)modal.scrollTop+=10;else if(clientY<rect.top+90)modal.scrollTop-=10;}
+  };
   container.querySelectorAll('.drag-handle').forEach(handle=>{
-    handle.addEventListener('pointerdown',e=>{
-      const row=handle.closest('[data-category-row]');if(!row)return;e.preventDefault();
-      row.classList.add('dragging');handle.setPointerCapture?.(e.pointerId);
-      const move=ev=>{const others=[...container.querySelectorAll('[data-category-row]')].filter(x=>x!==row);const before=others.find(x=>ev.clientY<x.getBoundingClientRect().top+x.getBoundingClientRect().height/2);container.insertBefore(row,before||null);};
-      const finish=()=>{row.classList.remove('dragging');handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',finish);handle.removeEventListener('pointercancel',finish);[...container.querySelectorAll('[data-category-row]')].forEach((r,i)=>{const c=categoryById(r.dataset.categoryRow);if(c)c.order=i;});saveData();};
-      handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);
-    });
+    const row=handle.closest('[data-category-row]');if(!row)return;
+    let active=false;
+    const begin=()=>{active=true;row.classList.add('dragging');document.body.classList.add('reordering');};
+    const end=()=>{if(!active)return;active=false;row.classList.remove('dragging');document.body.classList.remove('reordering');saveOrder();};
+    handle.addEventListener('touchstart',e=>{if(e.touches.length!==1)return;begin();e.preventDefault();},{passive:false});
+    handle.addEventListener('touchmove',e=>{if(!active||!e.touches[0])return;moveRow(row,e.touches[0].clientY);e.preventDefault();},{passive:false});
+    handle.addEventListener('touchend',end,{passive:true});
+    handle.addEventListener('touchcancel',end,{passive:true});
+    handle.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')return;begin();handle.setPointerCapture?.(e.pointerId);e.preventDefault();});
+    handle.addEventListener('pointermove',e=>{if(!active||e.pointerType==='touch')return;moveRow(row,e.clientY);e.preventDefault();});
+    handle.addEventListener('pointerup',end);handle.addEventListener('pointercancel',end);
   });
 }
 
@@ -564,10 +602,10 @@ function openCategoryEditor(type,existing=null,options={}){
   };
 }
 
-function removeCategory(id,type){
+function removeCategory(id,type,onDone){
   const c=categoryById(id); if(!c?.custom) return;
   if(!confirm(`删除自定义分类“${c.name}”？历史账单会继续保留原来的分类名称和图标。`)) return;
-  data.categories=data.categories.filter(x=>x.id!==id);saveData();openCategoryManager(type);toast('分类已删除，历史账单已保留');
+  data.categories=data.categories.filter(x=>x.id!==id);saveData();onDone?.();toast('分类已删除，历史账单已保留');
 }
 function downloadBlob(filename,content,type){ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
 function exportJSON(){ const backup={app:'Airplane',exportedAt:new Date().toISOString(),data}; downloadBlob(`Airplane-backup-${localISO()}.json`,JSON.stringify(backup,null,2),'application/json');toast('完整备份已导出'); }
@@ -593,7 +631,7 @@ document.getElementById('addButton').onclick=()=>openTransactionModal();
 document.getElementById('monthButton').onclick=openMonthModal;
 document.getElementById('prevMonthButton')?.addEventListener('click',()=>shiftMonth(-1));
 document.getElementById('nextMonthButton')?.addEventListener('click',()=>shiftMonth(1));
-document.getElementById('quickBudgetButton').onclick=openBudgetModal;
+document.getElementById('settingsButton').onclick=openSettingsModal;
 document.getElementById('importInput').addEventListener('change', async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
   try{const parsed=JSON.parse(await file.text());const incoming=normalizeData(parsed.data||parsed);if(!confirm('恢复此备份会替换当前设备上的 Airplane 数据。继续吗？'))return;data=incoming;saveData();render();toast('备份已恢复');}catch(err){toast('无法识别这个 Airplane 备份');}
@@ -610,14 +648,28 @@ document.addEventListener('focusin',e=>{
   if(e.target.matches('input,textarea')&&e.target.closest('.modal')) setTimeout(()=>e.target.scrollIntoView({block:'center',behavior:'smooth'}),220);
 });
 
+let swReloading=false;
+let airplaneRegistration=null;
+async function checkForAppUpdate(showToast=false){
+  if(!('serviceWorker' in navigator)){if(showToast)toast('当前环境不支持自动更新');return;}
+  try{
+    const registration=airplaneRegistration||await navigator.serviceWorker.getRegistration('./');
+    if(!registration){if(showToast)toast('更新服务尚未就绪');return;}
+    await registration.update();
+    if(showToast)toast(registration.waiting||registration.installing?'发现新版，正在切换':'已检查，当前已是最新版本');
+  }catch(err){console.warn('Airplane update check failed',err);if(showToast)toast('暂时无法连接更新服务器，继续使用本地版本');}
+}
 async function registerAirplaneServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   try{
-    // updateViaCache:'none' keeps the Service Worker update check independent of HTTP cache.
-    const registration=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
-    // Installed Home Screen Web Apps keep their own local ledger. We update only the
-    // program shell; localStorage/IndexedDB are intentionally untouched.
-    await registration.update();
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(swReloading)return;
+      swReloading=true;
+      window.location.reload();
+    });
+    airplaneRegistration=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
+    await airplaneRegistration.update();
+    document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkForAppUpdate(false);});
   }catch(err){
     console.warn('Airplane Service Worker registration/update failed',err);
   }

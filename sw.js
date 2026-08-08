@@ -1,4 +1,4 @@
-const CACHE = "airplane-shell-v7";
+const CACHE = "airplane-shell-v8";
 const SHELL = [
   "./",
   "./index.html",
