@@ -3,8 +3,10 @@
 // Keeping one stable key lets new program versions reuse the user's existing ledger.
 const STORAGE_KEY = 'airplane-pwa-v1';
 const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
+const DRAFT_KEY = 'airplane-transaction-draft-v1';
+const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -67,6 +69,8 @@ function normalizeData(parsed){
   if(!Array.isArray(parsed.balanceAdjustments)) parsed.balanceAdjustments=[];
   if(!parsed.prefs || typeof parsed.prefs !== 'object' || Array.isArray(parsed.prefs)) parsed.prefs={};
   if(!('initialBalance' in parsed.prefs)) parsed.prefs.initialBalance=null;
+  if(!('lastExpenseCategoryId' in parsed.prefs)) parsed.prefs.lastExpenseCategoryId=null;
+  if(!('lastIncomeCategoryId' in parsed.prefs)) parsed.prefs.lastIncomeCategoryId=null;
   parsed.version=SCHEMA_VERSION;
   return parsed;
 }
@@ -273,15 +277,16 @@ function recentCard(){
   <section class="card transaction-list">${items.length?items.map(txRow).join(''):`<div class="empty"><div class="empty-icon">${icon('list')}</div><h3>还没有记录</h3><p>点击下方绿色 ＋ 记下第一笔。</p></div>`}</section>`;
 }
 
-function txRow(t, actions=false){
+function txRow(t, swipe=false){
   const c=txSnapshotCategory(t); const sign=t.type==='expense'?'-':'+'; const cls=t.type==='expense'?'':'positive';
-  return `<div class="tx-row">
+  const row=`<div class="tx-row tx-row-interactive" data-open-tx="${t.id}" role="button" tabindex="0">
     <div class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</div>
-    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}</div><div class="tx-sub">${escapeHTML(t.note||dateDisplay(t.date))}</div>${actions?`<div class="swipe-actions"><button class="row-action" data-edit-tx="${t.id}">编辑</button><button class="row-action delete" data-delete-tx="${t.id}">删除</button></div>`:''}</div>
+    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}</div><div class="tx-sub">${escapeHTML(t.note||dateDisplay(t.date))}</div></div>
     <div><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(t.time||'')}</div></div>
   </div>`;
+  if(!swipe) return row;
+  return `<div class="tx-swipe" data-swipe-tx="${t.id}"><button class="tx-delete-action" data-delete-tx="${t.id}" type="button">删除</button>${row}</div>`;
 }
-
 function renderRecords(){
   let tx=[...txForMonth(ui.selectedMonth)];
   if(ui.recordFilter!=='all') tx=tx.filter(t=>t.type===ui.recordFilter);
@@ -342,8 +347,13 @@ function bindViewEvents(){
   document.querySelectorAll('[data-action="balance"]').forEach(b=>b.onclick=()=>openBalanceModal());
   document.querySelector('[data-action="go-records"]')?.addEventListener('click',()=>{ui.tab='records';render();});
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{ui.recordFilter=b.dataset.filter;render();});
-  document.querySelectorAll('[data-edit-tx]').forEach(b=>b.onclick=()=>openTransactionModal(data.transactions.find(t=>t.id===b.dataset.editTx)));
-  document.querySelectorAll('[data-delete-tx]').forEach(b=>b.onclick=()=>deleteTransaction(b.dataset.deleteTx));
+  document.querySelectorAll('[data-open-tx]').forEach(row=>{
+    const open=()=>openTransactionModal(data.transactions.find(t=>t.id===row.dataset.openTx));
+    row.addEventListener('click',()=>{if(row.dataset.suppressClick!=='1') open(); row.dataset.suppressClick='0';});
+    row.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}});
+  });
+  document.querySelectorAll('[data-delete-tx]').forEach(b=>b.onclick=e=>{e.stopPropagation();deleteTransaction(b.dataset.deleteTx);});
+  bindTransactionSwipes();
   document.querySelector('[data-action="categories"]')?.addEventListener('click',openCategoryManager);
   document.querySelector('[data-action="export-json"]')?.addEventListener('click',exportJSON);
   document.querySelector('[data-action="export-csv"]')?.addEventListener('click',exportCSV);
@@ -351,30 +361,66 @@ function bindViewEvents(){
   document.querySelector('[data-action="storage-persist"]')?.addEventListener('click',()=>ensurePersistentStorage(true));
   document.querySelector('[data-action="reset"]')?.addEventListener('click',resetAll);
 }
-
 function hydrateIcons(){
   document.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);});
 }
 
-function openModal(content){
+let modalDismissHandler=null;
+let activeUndo=null;
+
+function openModal(content, options={}){
   const root=document.getElementById('modalRoot');
-  root.innerHTML=`<div class="modal-backdrop"><div class="modal"><div class="modal-grabber"></div>${content}</div></div>`;
-  root.querySelector('.modal-backdrop').addEventListener('click',e=>{if(e.target.classList.contains('modal-backdrop'))closeModal();});
-  root.querySelectorAll('[data-close]').forEach(b=>b.onclick=closeModal);
+  modalDismissHandler=options.onDismiss||null;
+  root.innerHTML=`<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true"><div class="modal-grabber" aria-label="下拉关闭"></div>${content}</div></div>`;
+  const backdrop=root.querySelector('.modal-backdrop');
+  const modal=root.querySelector('.modal');
+  backdrop.addEventListener('click',e=>{if(e.target===backdrop)closeModal({reason:'backdrop'});});
+  root.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closeModal({reason:'cancel'}));
+  bindSheetSwipe(modal,backdrop);
 }
-function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
-function modalHead(title,saveLabel='保存'){ return `<div class="modal-head"><button class="cancel" data-close>取消</button><h2>${title}</h2><button class="save" id="modalSave">${saveLabel}</button></div>`; }
+function closeModal({runDismiss=true,reason='dismiss'}={}){
+  const root=document.getElementById('modalRoot');
+  const cb=modalDismissHandler;
+  modalDismissHandler=null;
+  root.innerHTML='';
+  if(runDismiss&&cb) cb(reason);
+}
+function modalHead(title,saveLabel='保存',cancelLabel='取消'){ return `<div class="modal-head"><button class="cancel" data-close>${cancelLabel}</button><h2>${title}</h2><button class="save" id="modalSave">${saveLabel}</button></div>`; }
+
+function bindSheetSwipe(modal,backdrop){
+  const grabber=modal.querySelector('.modal-grabber');
+  if(!grabber) return;
+  let startY=0,lastY=0,startAt=0,dragging=false;
+  const reset=()=>{modal.style.transition='transform .18s ease-out';backdrop.style.transition='background .18s ease-out';modal.style.transform='';backdrop.style.background='';setTimeout(()=>{modal.style.transition='';backdrop.style.transition='';},190);};
+  grabber.addEventListener('pointerdown',e=>{
+    dragging=true;startY=lastY=e.clientY;startAt=performance.now();
+    grabber.setPointerCapture?.(e.pointerId);modal.style.transition='none';backdrop.style.transition='none';e.preventDefault();
+  });
+  grabber.addEventListener('pointermove',e=>{
+    if(!dragging)return;lastY=e.clientY;const dy=Math.max(0,e.clientY-startY);
+    modal.style.transform=`translateY(${dy}px)`;
+    backdrop.style.background=`rgba(15,18,15,${Math.max(.08,.38-dy/700)})`;
+  });
+  const finish=e=>{
+    if(!dragging)return;dragging=false;const dy=Math.max(0,lastY-startY);const velocity=dy/Math.max(1,performance.now()-startAt);
+    if(dy>Math.min(120,modal.clientHeight*.18)||velocity>.75){modal.style.transition='transform .16s ease-in';modal.style.transform='translateY(110%)';setTimeout(()=>closeModal({reason:'swipe'}),140);}else reset();
+  };
+  grabber.addEventListener('pointerup',finish);grabber.addEventListener('pointercancel',finish);
+}
 
 function openMonthModal(){
   openModal(`${modalHead('选择月份','完成')}<section class="card input-card"><label>查看月份</label><input id="monthInput" class="large-input" type="month" value="${ui.selectedMonth}"></section>`);
-  document.getElementById('modalSave').onclick=()=>{const v=document.getElementById('monthInput').value;if(v){ui.selectedMonth=v;closeModal();render();}};
+  document.getElementById('modalSave').onclick=()=>{const v=document.getElementById('monthInput').value;if(v){ui.selectedMonth=v;closeModal({runDismiss:false});render();}};
+}
+function shiftMonth(delta){
+  const {y,mo}=parseMonth(ui.selectedMonth);const d=new Date(y,mo-1+delta,1);ui.selectedMonth=monthKey(d);render();window.scrollTo({top:0,behavior:'smooth'});
 }
 
 function openBudgetModal(){
   const existing=budgetFor(ui.selectedMonth);
   openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}支出预算</label><input id="budgetInput" class="large-input" inputmode="decimal" placeholder="例如 2000" value="${existing||''}"><div class="helper">每个月可以单独设置和修改。当前月会按“剩余预算 ÷ 包含今天在内的剩余天数”动态计算“今日不宜超过”；收入不会自动提高预算。</div></section>`);
   const input=document.getElementById('budgetInput'); input.focus();
-  document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)||v<0){toast('请输入有效预算');return;} data.budgets[ui.selectedMonth]=Math.round(v*100)/100;saveData();closeModal();render();toast('月预算已保存');};
+  document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)||v<0){toast('请输入有效预算');return;} data.budgets[ui.selectedMonth]=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('月预算已保存');};
 }
 
 function openBalanceModal(){
@@ -383,71 +429,127 @@ function openBalanceModal(){
   if(!initialized){
     openModal(`${modalHead('设置初始余额')}<section class="card input-card"><label>开始使用 Airplane 时已有的总余额</label><input id="balanceInput" class="large-input" inputmode="decimal" placeholder="例如 10000"><div class="helper">初始余额只用于建立起点。之后收入会增加余额、支出会减少余额；两者都不会改变你手动设置的月预算。</div></section>`);
     const input=document.getElementById('balanceInput'); input.focus();
-    document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)){toast('请输入有效余额');return;} data.prefs.initialBalance=Math.round(v*100)/100;saveData();closeModal();render();toast('初始余额已保存');};
+    document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)){toast('请输入有效余额');return;} data.prefs.initialBalance=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('初始余额已保存');};
     return;
   }
   openModal(`${modalHead('调整当前余额')}<section class="card input-card"><label>Airplane 当前余额</label><div class="budget-amount">${amount(current)}</div><label style="margin-top:8px">调整为</label><input id="balanceInput" class="large-input" inputmode="decimal" value="${current.toFixed(2)}"><div class="helper">适合补记遗漏造成的余额偏差。余额调整不计入收入、支出，也不会占用月预算。</div></section>`);
   const input=document.getElementById('balanceInput'); input.focus(); input.select();
-  document.getElementById('modalSave').onclick=()=>{const target=Number(input.value.replace(',','.')); if(!Number.isFinite(target)){toast('请输入有效余额');return;} const delta=Math.round((target-current)*100)/100; if(Math.abs(delta)>=0.01)data.balanceAdjustments.push({id:uid('bal'),delta,targetBalance:Math.round(target*100)/100,createdAt:new Date().toISOString()});saveData();closeModal();render();toast(Math.abs(delta)>=0.01?'当前余额已调整':'余额没有变化');};
+  document.getElementById('modalSave').onclick=()=>{const target=Number(input.value.replace(',','.')); if(!Number.isFinite(target)){toast('请输入有效余额');return;} const delta=Math.round((target-current)*100)/100; if(Math.abs(delta)>=0.01)data.balanceAdjustments.push({id:uid('bal'),delta,targetBalance:Math.round(target*100)/100,createdAt:new Date().toISOString()});saveData();closeModal({runDismiss:false});render();toast(Math.abs(delta)>=0.01?'当前余额已调整':'余额没有变化');};
 }
 
-function openTransactionModal(existing=null){
-  let type=existing?.type||'expense';
-  let selected=existing?.categoryId||data.categories.find(c=>c.type===type&&!c.hidden)?.id;
+function preferredCategoryId(type){
+  const saved=type==='expense'?data.prefs.lastExpenseCategoryId:data.prefs.lastIncomeCategoryId;
+  const visible=data.categories.filter(c=>c.type===type&&!c.hidden).sort((a,b)=>a.order-b.order);
+  return visible.some(c=>c.id===saved)?saved:visible[0]?.id;
+}
+function loadTransactionDraft(){
+  try{
+    const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');
+    if(!d||!d.savedAt||Date.now()-d.savedAt>DRAFT_TTL_MS){localStorage.removeItem(DRAFT_KEY);return null;}
+    return d;
+  }catch{localStorage.removeItem(DRAFT_KEY);return null;}
+}
+function saveTransactionDraft(d){ localStorage.setItem(DRAFT_KEY,JSON.stringify({...d,savedAt:Date.now()})); }
+function clearTransactionDraft(){ localStorage.removeItem(DRAFT_KEY); }
+
+function openTransactionModal(existing=null,suppliedDraft=null){
+  const restored=suppliedDraft||(!existing?loadTransactionDraft():null);
+  let type=restored?.type||existing?.type||'expense';
+  let selected=restored?.selectedCategoryId||existing?.categoryId||preferredCategoryId(type);
   const currentTime=new Date().toTimeString().slice(0,5);
-  openModal(`${modalHead(existing?'编辑记录':'记一笔')}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" placeholder="0.00" value="${existing?Number(existing.amount).toFixed(2):''}"></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button" id="quickAddCategory">＋ 添加分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${existing?.date||localISO()}"></div><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${existing?.time||currentTime}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(existing?.note||'')}</textarea></div></div><button id="txSubmit" class="primary-button" style="margin-top:14px">${existing?'保存修改':'完成'}</button>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`);
+  const initial={amount:restored?.amount??(existing?Number(existing.amount).toFixed(2):''),date:restored?.date||existing?.date||localISO(),time:restored?.time||existing?.time||currentTime,note:restored?.note??existing?.note??''};
+  let dirty=!!restored;
+  const captureDraft=()=>({type,selectedCategoryId:selected,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
+  const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
+  openModal(`${modalHead(existing?'编辑记录':'记一笔')}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button" id="quickAddCategory">＋ 添加分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div><button id="txSubmit" class="primary-button" style="margin-top:14px">${existing?'保存修改':'完成'}</button>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  const markDirty=()=>{dirty=true;persistDraft();};
   const renderChooser=()=>{
     document.getElementById('expenseTab').className=`expense ${type==='expense'?'active':''}`;
     document.getElementById('incomeTab').className=`income ${type==='income'?'active':''}`;
     const cats=data.categories.filter(c=>c.type===type&&!c.hidden).sort((a,b)=>a.order-b.order);
-    if(!cats.some(c=>c.id===selected)) selected=cats[0]?.id;
+    if(!cats.some(c=>c.id===selected)) selected=preferredCategoryId(type);
     document.getElementById('categoryChooser').innerHTML=cats.map(c=>`<button class="category-choice ${c.id===selected?'selected':''}" data-cat="${c.id}" style="--choice-color:${c.color}"><span class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><small>${escapeHTML(c.name)}</small></button>`).join('');
-    document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{selected=b.dataset.cat;renderChooser();});
+    document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{selected=b.dataset.cat;markDirty();renderChooser();});
   };
-  document.getElementById('expenseTab').onclick=()=>{type='expense';selected=null;renderChooser();};
-  document.getElementById('incomeTab').onclick=()=>{type='income';selected=null;renderChooser();};
-  document.getElementById('quickAddCategory').onclick=()=>openCategoryEditor(type,null,()=>openTransactionModal(existing));
+  document.getElementById('expenseTab').onclick=()=>{type='expense';selected=preferredCategoryId(type);markDirty();renderChooser();};
+  document.getElementById('incomeTab').onclick=()=>{type='income';selected=preferredCategoryId(type);markDirty();renderChooser();};
+  ['txAmount','txDate','txTime','txNote'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',markDirty);el?.addEventListener('change',markDirty);});
+  document.getElementById('quickAddCategory').onclick=()=>{
+    const draft={...captureDraft(),savedAt:Date.now()};dirty=true;saveTransactionDraft(draft);
+    openCategoryEditor(type,null,{cancelLabel:'返回',onBack:()=>openTransactionModal(existing,draft),onDone:newCat=>openTransactionModal(existing,{...draft,type,selectedCategoryId:newCat.id})});
+  };
   renderChooser();
   const submit=()=>{
     const value=Number(document.getElementById('txAmount').value.replace(',','.')); const c=categoryById(selected);
     if(!value||value<=0){toast('请输入金额');return;} if(!c){toast('请选择分类');return;}
     const record={id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:document.getElementById('txDate').value||localISO(),time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
     if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;} else data.transactions.push(record);
-    saveData();closeModal();render();toast(existing?'记录已修改':'已记下');
+    if(type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
+    clearTransactionDraft();saveData();closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
   };
   document.getElementById('txSubmit').onclick=submit;
   document.getElementById('modalSave').onclick=submit;
-  document.getElementById('txDelete')?.addEventListener('click',()=>{closeModal();deleteTransaction(existing.id);});
-  setTimeout(()=>document.getElementById('txAmount')?.focus(),50);
+  document.getElementById('txDelete')?.addEventListener('click',()=>{closeModal({runDismiss:false});deleteTransaction(existing.id);});
+  setTimeout(()=>document.getElementById('txAmount')?.focus(),80);
 }
 
 function deleteTransaction(id){
-  const t=data.transactions.find(x=>x.id===id); if(!t) return;
-  if(!confirm(`删除这笔 ${amount(t.amount)} 的记录？`)) return;
-  data.transactions=data.transactions.filter(x=>x.id!==id);saveData();render();toast('记录已删除');
+  const index=data.transactions.findIndex(x=>x.id===id);if(index<0)return;
+  const removed=data.transactions[index];data.transactions.splice(index,1);saveData();render();
+  toast('记录已删除',{actionLabel:'撤销',duration:3600,onAction:()=>{if(data.transactions.some(t=>t.id===removed.id))return;data.transactions.splice(Math.min(index,data.transactions.length),0,removed);saveData();render();toast('已恢复记录');}});
+}
+
+function bindTransactionSwipes(){
+  document.querySelectorAll('.tx-swipe').forEach(wrap=>{
+    const row=wrap.querySelector('.tx-row');if(!row)return;
+    let startX=0,startY=0,dx=0,tracking=false,horizontal=false;
+    const setX=x=>{row.style.transition='none';row.style.transform=`translateX(${x}px)`;};
+    row.addEventListener('pointerdown',e=>{startX=e.clientX;startY=e.clientY;dx=0;tracking=true;horizontal=false;row.setPointerCapture?.(e.pointerId);});
+    row.addEventListener('pointermove',e=>{
+      if(!tracking)return;const mx=e.clientX-startX,my=e.clientY-startY;
+      if(!horizontal&&Math.abs(mx)>8&&Math.abs(mx)>Math.abs(my)*1.2)horizontal=true;
+      if(!horizontal)return;dx=Math.max(-88,Math.min(0,mx));setX(dx);e.preventDefault();
+    });
+    const finish=()=>{if(!tracking)return;tracking=false;row.style.transition='transform .18s ease-out';const open=horizontal&&dx<-42;row.style.transform=open?'translateX(-78px)':'';if(horizontal&&Math.abs(dx)>10)row.dataset.suppressClick='1';setTimeout(()=>{row.style.transition='';},190);};
+    row.addEventListener('pointerup',finish);row.addEventListener('pointercancel',finish);
+  });
 }
 
 function openCategoryManager(initialType='expense'){
   let type=initialType;
   const draw=()=>{
-    openModal(`${modalHead('分类管理','完成')}<div class="segmented"><button id="catExpense" class="expense ${type==='expense'?'active':''}">支出分类</button><button id="catIncome" class="income ${type==='income'?'active':''}">收入分类</button></div><section class="card" style="margin-top:14px" id="categoryManageList"></section><button class="secondary-button" id="addCategory" style="margin-top:12px;color:var(--green)">＋ 添加自定义分类</button>`);
-    document.getElementById('modalSave').onclick=closeModal;
+    openModal(`${modalHead('分类管理','完成')}<div class="segmented"><button id="catExpense" class="expense ${type==='expense'?'active':''}">支出分类</button><button id="catIncome" class="income ${type==='income'?'active':''}">收入分类</button></div><div class="helper reorder-tip">按住右侧 ≡ 可拖动调整顺序，记账页会同步变化。</div><section class="card" style="margin-top:10px" id="categoryManageList"></section><button class="secondary-button" id="addCategory" style="margin-top:12px;color:var(--green)">＋ 添加自定义分类</button>`);
+    document.getElementById('modalSave').onclick=()=>closeModal({runDismiss:false});
     document.getElementById('catExpense').onclick=()=>{type='expense';draw();};
     document.getElementById('catIncome').onclick=()=>{type='income';draw();};
     const list=data.categories.filter(c=>c.type===type).sort((a,b)=>a.order-b.order);
-    document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row"><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)} ${c.custom?'':'<span class="pill">默认</span>'}</span><button class="pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button>${c.custom?`<button class="pill" data-edit-cat="${c.id}">编辑</button><button class="pill negative" data-remove-cat="${c.id}">删除</button>`:''}</div>`).join('');
+    document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序">≡</button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)} ${c.custom?'':'<span class="pill static-pill">默认</span>'}</span><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button>${c.custom?`<button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button>`:''}</div>`).join('');
     document.querySelectorAll('[data-toggle-cat]').forEach(b=>b.onclick=()=>{const c=categoryById(b.dataset.toggleCat);c.hidden=!c.hidden;saveData();draw();});
-    document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),()=>openCategoryManager(type)));
+    document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),{cancelLabel:'返回',onBack:()=>openCategoryManager(type),onDone:()=>openCategoryManager(type)}));
     document.querySelectorAll('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCategory(b.dataset.removeCat,type));
-    document.getElementById('addCategory').onclick=()=>openCategoryEditor(type,null,()=>openCategoryManager(type));
+    document.getElementById('addCategory').onclick=()=>openCategoryEditor(type,null,{cancelLabel:'返回',onBack:()=>openCategoryManager(type),onDone:()=>openCategoryManager(type)});
+    bindCategoryReorder(type);
   }; draw();
 }
 
-function openCategoryEditor(type,existing=null,onDone=null){
+function bindCategoryReorder(type){
+  const container=document.getElementById('categoryManageList');if(!container)return;
+  container.querySelectorAll('.drag-handle').forEach(handle=>{
+    handle.addEventListener('pointerdown',e=>{
+      const row=handle.closest('[data-category-row]');if(!row)return;e.preventDefault();
+      row.classList.add('dragging');handle.setPointerCapture?.(e.pointerId);
+      const move=ev=>{const others=[...container.querySelectorAll('[data-category-row]')].filter(x=>x!==row);const before=others.find(x=>ev.clientY<x.getBoundingClientRect().top+x.getBoundingClientRect().height/2);container.insertBefore(row,before||null);};
+      const finish=()=>{row.classList.remove('dragging');handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',finish);handle.removeEventListener('pointercancel',finish);[...container.querySelectorAll('[data-category-row]')].forEach((r,i)=>{const c=categoryById(r.dataset.categoryRow);if(c)c.order=i;});saveData();};
+      handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',finish);handle.addEventListener('pointercancel',finish);
+    });
+  });
+}
+
+function openCategoryEditor(type,existing=null,options={}){
   let selectedIcon=existing?.icon||(type==='expense'?'coffee':'coins'); let selectedColor=existing?.color||(type==='expense'?'#EFA06D':'#4CB487');
   const iconOptions=['food','car','bag','game','house','book','health','travel','gift','coffee','briefcase','laptop','award','coins','trend','refund','more'];
   const colors=['#F29B69','#E8B45F','#72B77A','#65BFA3','#6FA8DC','#7797DB','#AA82E3','#E77BA6','#E78378','#9AA09A','#5F9FE5','#4CB487'];
-  openModal(`${modalHead(existing?'编辑分类':'添加分类')}<section class="card input-card"><label>分类名称</label><input id="catName" class="large-input" maxlength="8" placeholder="例如 咖啡" value="${escapeHTML(existing?.name||'')}"></section><div class="section-head" style="margin-top:14px"><h2>图标</h2></div><section class="card"><div class="icon-palette" id="iconPalette"></div></section><div class="section-head"><h2>颜色</h2></div><section class="card"><div class="color-palette" id="colorPalette"></div></section>`);
+  openModal(`${modalHead(existing?'编辑分类':'添加分类','保存',options.cancelLabel||'取消')}<section class="card input-card"><label>分类名称</label><input id="catName" class="large-input" maxlength="8" placeholder="例如 咖啡" value="${escapeHTML(existing?.name||'')}"></section><div class="section-head" style="margin-top:14px"><h2>图标</h2></div><section class="card"><div class="icon-palette" id="iconPalette"></div></section><div class="section-head"><h2>颜色</h2></div><section class="card"><div class="color-palette" id="colorPalette"></div></section>`,{onDismiss:options.onBack||null});
   const draw=()=>{
     document.getElementById('iconPalette').innerHTML=iconOptions.map(i=>`<button class="icon-choice ${i===selectedIcon?'selected':''}" data-icon-choice="${i}">${icon(i)}</button>`).join('');
     document.getElementById('colorPalette').innerHTML=colors.map(c=>`<button class="color-swatch ${c===selectedColor?'selected':''}" data-color="${c}" style="background:${c}"></button>`).join('');
@@ -456,8 +558,9 @@ function openCategoryEditor(type,existing=null,onDone=null){
   }; draw();
   document.getElementById('modalSave').onclick=()=>{
     const name=document.getElementById('catName').value.trim(); if(!name){toast('请输入分类名称');return;}
-    if(existing){existing.name=name;existing.icon=selectedIcon;existing.color=selectedColor;} else {const order=Math.max(-1,...data.categories.filter(c=>c.type===type).map(c=>c.order))+1;data.categories.push({id:uid('cat'),name,type,icon:selectedIcon,color:selectedColor,custom:true,hidden:false,order});}
-    saveData();closeModal();onDone?.();toast(existing?'分类已修改':'分类已添加');
+    let saved=existing;
+    if(existing){existing.name=name;existing.icon=selectedIcon;existing.color=selectedColor;} else {const order=Math.max(-1,...data.categories.filter(c=>c.type===type).map(c=>c.order))+1;saved={id:uid('cat'),name,type,icon:selectedIcon,color:selectedColor,custom:true,hidden:false,order};data.categories.push(saved);}
+    saveData();closeModal({runDismiss:false});options.onDone?.(saved);toast(existing?'分类已修改':'分类已添加');
   };
 }
 
@@ -466,7 +569,6 @@ function removeCategory(id,type){
   if(!confirm(`删除自定义分类“${c.name}”？历史账单会继续保留原来的分类名称和图标。`)) return;
   data.categories=data.categories.filter(x=>x.id!==id);saveData();openCategoryManager(type);toast('分类已删除，历史账单已保留');
 }
-
 function downloadBlob(filename,content,type){ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
 function exportJSON(){ const backup={app:'Airplane',exportedAt:new Date().toISOString(),data}; downloadBlob(`Airplane-backup-${localISO()}.json`,JSON.stringify(backup,null,2),'application/json');toast('完整备份已导出'); }
 function exportCSV(){
@@ -474,16 +576,38 @@ function exportCSV(){
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\r\n');downloadBlob(`Airplane-records-${localISO()}.csv`,csv,'text/csv;charset=utf-8');toast('CSV 已导出');
 }
 function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; data=freshData();saveData();ui.selectedMonth=monthKey(new Date());render();toast('本机数据已清空'); }
-function toast(msg){ document.querySelector('.toast')?.remove(); const d=document.createElement('div');d.className='toast';d.textContent=msg;document.body.appendChild(d);setTimeout(()=>d.remove(),2200); }
+function toast(msg,options={}){
+  document.querySelector('.toast')?.remove();
+  if(activeUndo){clearTimeout(activeUndo);activeUndo=null;}
+  const d=document.createElement('div');d.className='toast';
+  d.innerHTML=`<span>${escapeHTML(msg)}</span>${options.actionLabel?`<button class="toast-action" type="button">${escapeHTML(options.actionLabel)}</button>`:''}`;
+  document.body.appendChild(d);
+  const remove=()=>{d.remove();activeUndo=null;};
+  if(options.actionLabel){d.querySelector('.toast-action').onclick=()=>{remove();options.onAction?.();};}
+  activeUndo=setTimeout(remove,options.duration||2200);
+}
 
 // Global navigation
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;render();window.scrollTo({top:0,behavior:'smooth'});});
 document.getElementById('addButton').onclick=()=>openTransactionModal();
 document.getElementById('monthButton').onclick=openMonthModal;
+document.getElementById('prevMonthButton')?.addEventListener('click',()=>shiftMonth(-1));
+document.getElementById('nextMonthButton')?.addEventListener('click',()=>shiftMonth(1));
 document.getElementById('quickBudgetButton').onclick=openBudgetModal;
 document.getElementById('importInput').addEventListener('change', async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
   try{const parsed=JSON.parse(await file.text());const incoming=normalizeData(parsed.data||parsed);if(!confirm('恢复此备份会替换当前设备上的 Airplane 数据。继续吗？'))return;data=incoming;saveData();render();toast('备份已恢复');}catch(err){toast('无法识别这个 Airplane 备份');}
+});
+
+function updateVisualViewport(){
+  const h=window.visualViewport?.height||window.innerHeight;
+  document.documentElement.style.setProperty('--visual-height',`${h}px`);
+}
+updateVisualViewport();
+window.visualViewport?.addEventListener('resize',updateVisualViewport);
+window.visualViewport?.addEventListener('scroll',updateVisualViewport);
+document.addEventListener('focusin',e=>{
+  if(e.target.matches('input,textarea')&&e.target.closest('.modal')) setTimeout(()=>e.target.scrollIntoView({block:'center',behavior:'smooth'}),220);
 });
 
 async function registerAirplaneServiceWorker(){

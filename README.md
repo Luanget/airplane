@@ -36,3 +36,11 @@ python3 -m http.server 8080
 ## Update safety
 
 App updates keep the permanent `airplane-pwa-v1` data key, migrate schemas additively, and maintain an on-device recovery copy. Deploy new files to the same HTTPS origin/path; do not change the hosting domain if you expect existing browser data to follow automatically.
+
+
+## 0.6 交互完善
+- 默认/自定义分类支持拖动排序；记账页同步顺序。
+- 记账 Sheet 支持下拉关闭，并保留 30 分钟未完成草稿。
+- 明细点整行编辑、左滑删除并支持撤销。
+- 记住最近使用的收入/支出分类。
+- 月份支持左右快捷切换；扩大触控区域并改善键盘遮挡。
