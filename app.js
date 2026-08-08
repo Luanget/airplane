@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.2';
+const APP_VERSION = '0.7.3';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -402,10 +402,28 @@ function hydrateIcons(){
 
 let modalDismissHandler=null;
 let activeUndo=null;
+let modalBodyLocked=false;
+let modalScrollY=0;
+
+function lockPageForModal(){
+  if(modalBodyLocked) return;
+  modalBodyLocked=true;
+  modalScrollY=window.scrollY||0;
+  document.body.classList.add('modal-open');
+  document.body.style.top=`-${modalScrollY}px`;
+}
+function unlockPageForModal(){
+  if(!modalBodyLocked) return;
+  modalBodyLocked=false;
+  document.body.classList.remove('modal-open');
+  document.body.style.top='';
+  window.scrollTo(0,modalScrollY);
+}
 
 function openModal(content, options={}){
   const root=document.getElementById('modalRoot');
   modalDismissHandler=options.onDismiss||null;
+  lockPageForModal();
   root.innerHTML=`<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true"><div class="modal-grabber" aria-label="下拉关闭"></div>${content}</div></div>`;
   const backdrop=root.querySelector('.modal-backdrop');
   const modal=root.querySelector('.modal');
@@ -418,6 +436,7 @@ function closeModal({runDismiss=true,reason='dismiss'}={}){
   const cb=modalDismissHandler;
   modalDismissHandler=null;
   root.innerHTML='';
+  unlockPageForModal();
   if(runDismiss&&cb) cb(reason);
 }
 function modalHead(title,saveLabel='保存',cancelLabel='取消'){ return `<div class="modal-head"><button class="cancel" data-close>${cancelLabel}</button><h2>${title}</h2><button class="save" id="modalSave">${saveLabel}</button></div>`; }
@@ -426,28 +445,61 @@ function bindSheetSwipe(modal,backdrop){
   const grabber=modal.querySelector('.modal-grabber');
   if(!grabber) return;
   let startY=0,lastY=0,startAt=0,dragging=false;
-  const pointerY=e=>Number.isFinite(e.screenY)?e.screenY:e.clientY;
-  const reset=()=>{modal.style.transition='transform .18s ease-out';backdrop.style.transition='background .18s ease-out';modal.style.transform='';backdrop.style.background='';setTimeout(()=>{modal.style.transition='';backdrop.style.transition='';},190);};
-  grabber.addEventListener('pointerdown',e=>{
-    // iOS changes the visual viewport while dismissing the keyboard.  Blur the
-    // editor first and use screen coordinates so that resize does not break the
-    // same downward swipe that is closing the sheet.
+  const yOf=p=>Number.isFinite(p?.screenY)?p.screenY:p?.clientY||0;
+  const reset=()=>{
+    modal.style.transition='transform .18s ease-out';
+    backdrop.style.transition='background .18s ease-out';
+    modal.style.transform='';backdrop.style.background='';
+    setTimeout(()=>{modal.style.transition='';backdrop.style.transition='';},190);
+  };
+  const begin=point=>{
     const active=document.activeElement;
     if(active&&modal.contains(active)&&active.matches('input,textarea,select')) active.blur();
-    dragging=true;startY=lastY=pointerY(e);startAt=performance.now();
-    grabber.setPointerCapture?.(e.pointerId);modal.style.transition='none';backdrop.style.transition='none';e.preventDefault();
-  });
-  grabber.addEventListener('pointermove',e=>{
-    if(!dragging)return;lastY=pointerY(e);const dy=Math.max(0,lastY-startY);
+    dragging=true;startY=lastY=yOf(point);startAt=performance.now();
+    modal.style.transition='none';backdrop.style.transition='none';
+  };
+  const move=point=>{
+    if(!dragging)return;
+    lastY=yOf(point);const dy=Math.max(0,lastY-startY);
     modal.style.transform=`translateY(${dy}px)`;
     backdrop.style.background=`rgba(15,18,15,${Math.max(.08,.38-dy/700)})`;
-    e.preventDefault();
-  });
-  const finish=()=>{
-    if(!dragging)return;dragging=false;const dy=Math.max(0,lastY-startY);const velocity=dy/Math.max(1,performance.now()-startAt);
-    if(dy>Math.min(110,modal.clientHeight*.16)||velocity>.68){modal.style.transition='transform .16s ease-in';modal.style.transform='translateY(110%)';setTimeout(()=>closeModal({reason:'swipe'}),140);}else reset();
   };
-  grabber.addEventListener('pointerup',finish);grabber.addEventListener('pointercancel',finish);
+  const finish=()=>{
+    if(!dragging)return;
+    dragging=false;
+    const dy=Math.max(0,lastY-startY);
+    const velocity=dy/Math.max(1,performance.now()-startAt);
+    if(dy>Math.min(96,modal.clientHeight*.14)||velocity>.58){
+      modal.style.transition='transform .16s ease-in';
+      modal.style.transform='translateY(110%)';
+      setTimeout(()=>closeModal({reason:'swipe'}),140);
+    }else reset();
+  };
+
+  // iPhone/Home Screen PWA: use Touch Events directly. Pointer capture can be
+  // cancelled while the software keyboard is being dismissed.
+  grabber.addEventListener('touchstart',e=>{
+    if(e.touches.length!==1)return;
+    begin(e.touches[0]);e.preventDefault();
+  },{passive:false});
+  grabber.addEventListener('touchmove',e=>{
+    if(!dragging||e.touches.length!==1)return;
+    move(e.touches[0]);e.preventDefault();
+  },{passive:false});
+  grabber.addEventListener('touchend',e=>{finish();e.preventDefault();},{passive:false});
+  grabber.addEventListener('touchcancel',finish,{passive:true});
+
+  // Mouse/pen fallback for desktop testing. Touch is handled above only once.
+  grabber.addEventListener('pointerdown',e=>{
+    if(e.pointerType==='touch')return;
+    begin(e);grabber.setPointerCapture?.(e.pointerId);e.preventDefault();
+  });
+  grabber.addEventListener('pointermove',e=>{
+    if(e.pointerType==='touch'||!dragging)return;
+    move(e);e.preventDefault();
+  });
+  grabber.addEventListener('pointerup',e=>{if(e.pointerType!=='touch')finish();});
+  grabber.addEventListener('pointercancel',e=>{if(e.pointerType!=='touch')finish();});
 }
 
 function openMonthModal(){
@@ -685,17 +737,6 @@ document.getElementById('settingsButton').onclick=openSettingsModal;
 document.getElementById('importInput').addEventListener('change', async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
   try{const parsed=JSON.parse(await file.text());const incoming=normalizeData(parsed.data||parsed);if(!confirm('恢复此备份会替换当前设备上的 Airplane 数据。继续吗？'))return;data=incoming;saveData();render();toast('备份已恢复');}catch(err){toast('无法识别这个 Airplane 备份');}
-});
-
-function updateVisualViewport(){
-  const h=window.visualViewport?.height||window.innerHeight;
-  document.documentElement.style.setProperty('--visual-height',`${h}px`);
-}
-updateVisualViewport();
-window.visualViewport?.addEventListener('resize',updateVisualViewport);
-window.visualViewport?.addEventListener('scroll',updateVisualViewport);
-document.addEventListener('focusin',e=>{
-  if(e.target.matches('input,textarea')&&e.target.closest('.modal')) setTimeout(()=>e.target.scrollIntoView({block:'center',behavior:'smooth'}),220);
 });
 
 let swReloading=false;

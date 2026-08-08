@@ -164,7 +164,7 @@ main { padding: 6px 16px 28px; }
 .amount-box { margin:16px 0; text-align:center; padding:18px; border-radius:22px; background:var(--surface); border:1px solid var(--line); }
 .amount-line { display:flex; align-items:baseline; justify-content:center; gap:6px; }
 .amount-line span { color:var(--muted); font-size:22px; }
-.amount-line input { width:min(260px,74vw); border:0; outline:0; background:transparent; text-align:center; font-size:44px; font-weight:760; letter-spacing:-1px; font-variant-numeric:tabular-nums; }
+.amount-line input { width:min(260px,calc(100vw - 112px)); min-width:0; border:0; outline:0; background:transparent; text-align:center; font-size:44px; font-weight:760; letter-spacing:-1px; font-variant-numeric:tabular-nums; -webkit-user-select:text; user-select:text; }
 .category-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
 .category-choice { min-width:0; padding:8px 3px; border-radius:16px; border:1px solid transparent; }
 .category-choice.selected { background:var(--surface); border-color:var(--choice-color); box-shadow:var(--shadow); }
@@ -195,6 +195,14 @@ main { padding: 6px 16px 28px; }
   margin:0;
   padding:0;
   text-align:center;
+}
+.form-row input[type="date"]::-webkit-datetime-edit,
+.form-row input[type="time"]::-webkit-datetime-edit {
+  display:flex;
+  width:100%;
+  justify-content:center;
+  align-items:center;
+  padding:0;
 }
 
 .input-card { display:grid; gap:10px; }
@@ -238,7 +246,9 @@ main { padding: 6px 16px 28px; }
 .tx-row-interactive { cursor:pointer; -webkit-tap-highlight-color:transparent; }
 .tx-row-interactive:active { background:var(--surface-2); }
 
-.modal { max-height:min(94dvh, calc(var(--visual-height, 100dvh) - 8px)); overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+.modal { max-height:calc(100dvh - max(8px, env(safe-area-inset-top, 0px))); overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+body.modal-open { position:fixed; left:0; right:0; width:100%; overflow:hidden; }
+.modal-backdrop { overflow:hidden; }
 .modal-grabber { position:relative; width:64px; height:24px; margin:-4px auto 2px; background:transparent; touch-action:none; cursor:grab; }
 .modal-grabber::after { content:""; position:absolute; width:42px; height:5px; border-radius:999px; background:var(--line); left:50%; top:9px; transform:translateX(-50%); }
 .modal-grabber:active { cursor:grabbing; }

@@ -52,3 +52,11 @@ App updates keep the permanent `airplane-pwa-v1` data key, migrate schemas addit
 - Normalize iOS month/date/time centering.
 - Stop auto-focusing form fields when sheets open.
 - Make sheet swipe-to-dismiss stable while the iOS keyboard is visible.
+
+
+## 0.7.3
+
+- 修复 iPhone 上点击金额输入后记账 sheet 因 visualViewport/scrollIntoView 联动而移出视口的问题。
+- Sheet 打开期间锁定底层页面滚动，输入键盘出现时不再重算 sheet 高度。
+- 下拉关闭改为 iOS Touch Events 优先，键盘打开时也可稳定下拉关闭。
+- 继续改善日期/时间控件的居中显示。
