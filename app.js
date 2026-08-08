@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.3';
+const APP_VERSION = '0.7.4';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -176,11 +176,14 @@ function txRow(t, swipe=false){
 
 function budgetMetrics(m){
   const budget=budgetFor(m), totals=monthTotals(m), dim=daysInMonth(m), now=new Date();
-  const current=isCurrentMonth(m);
-  const elapsed = current ? now.getDate() : dim;
+  const currentMonth=monthKey(now);
+  const current=m===currentMonth;
+  const future=m>currentMonth;
+  const past=m<currentMonth;
+  const elapsed = future ? 0 : (current ? now.getDate() : dim);
   const baseDaily = budget>0 ? budget/dim : 0;
   const plannedToDate = baseDaily*elapsed;
-  const delta = totals.expense-plannedToDate;
+  const delta = future ? 0 : totals.expense-plannedToDate;
   const remainingBudget = budget-totals.expense;
   const today = localISO(now);
   const todayExpense = current ? data.transactions.filter(t=>t.type==='expense'&&t.date===today).reduce((s,t)=>s+Number(t.amount),0) : 0;
@@ -188,10 +191,10 @@ function budgetMetrics(m){
   const remainingDays = current ? Math.max(dim-now.getDate()+1,1) : dim;
   const dailyLimit = current ? (budget>0 ? Math.max(budget-expenseBeforeToday,0)/remainingDays : 0) : baseDaily;
   const todayDelta = todayExpense-dailyLimit;
-  const timeProgress = elapsed/dim;
+  const timeProgress = future ? 0 : elapsed/dim;
   const budgetProgress = budget>0 ? totals.expense/budget : 0;
-  const projection = elapsed>0 ? totals.expense/elapsed*dim : 0;
-  return {budget,...totals,dim,elapsed,baseDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayDelta,timeProgress,budgetProgress,projection};
+  const projection = (!future&&elapsed>0) ? totals.expense/elapsed*dim : 0;
+  return {budget,...totals,dim,elapsed,baseDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayDelta,timeProgress,budgetProgress,projection,current,future,past};
 }
 
 function refreshStorageProtectionUI(){
@@ -273,8 +276,9 @@ function renderHome(){
       ${ledger}
     </div>`;
   }
-  const planText = m.delta>0 ? `多支出 ${amount(m.delta)}` : `节省 ${amount(Math.abs(m.delta))}`;
-  const planClass = m.delta>0 ? 'negative' : 'positive';
+  const planText = m.future ? '月份尚未开始' : (m.delta>0 ? `多支出 ${amount(m.delta)}` : `节省 ${amount(Math.abs(m.delta))}`);
+  const planClass = m.future ? 'muted' : (m.delta>0 ? 'negative' : 'positive');
+  const planLabel = m.current ? '当前较计划' : (m.future ? '计划状态' : '最终较计划');
   const useRatio = current ? (m.dailyLimit>0 ? m.todayExpense/m.dailyLimit : (m.todayExpense>0?1:0)) : m.budgetProgress;
   const remainingToday=Math.max(m.dailyLimit-m.todayExpense,0);
   const overToday=Math.max(m.todayExpense-m.dailyLimit,0);
@@ -297,7 +301,7 @@ function renderHome(){
       <div class="budget-top"><div><div class="eyebrow">本月预算</div><div class="budget-amount">${amount(m.expense)} <span class="of">/ ${amount(m.budget)}</span></div></div><button class="text-button" data-action="budget">编辑</button></div>
       <div class="progress-row"><div class="progress-meta"><span>预算使用 ${pct(m.budgetProgress)}</span><span>时间进度 ${pct(m.timeProgress)}</span></div><div class="progress ${m.budgetProgress>m.timeProgress?'danger':''}"><span style="width:${Math.min(m.budgetProgress*100,100)}%"></span></div></div>
       <div class="plan-grid">
-        <div class="plan-tile"><div class="metric-label">本月较计划</div><strong class="${planClass}">${planText}</strong></div>
+        <div class="plan-tile"><div class="metric-label">${planLabel}</div><strong class="${planClass}">${planText}</strong></div>
         <div class="plan-tile"><div class="metric-label">剩余预算</div><strong class="${m.remainingBudget<0?'negative':''}">${amount(m.remainingBudget)}</strong></div>
       </div>
     </section>
@@ -438,6 +442,7 @@ function closeModal({runDismiss=true,reason='dismiss'}={}){
   root.innerHTML='';
   unlockPageForModal();
   if(runDismiss&&cb) cb(reason);
+  requestAnimationFrame(flushPendingAppReload);
 }
 function modalHead(title,saveLabel='保存',cancelLabel='取消'){ return `<div class="modal-head"><button class="cancel" data-close>${cancelLabel}</button><h2>${title}</h2><button class="save" id="modalSave">${saveLabel}</button></div>`; }
 
@@ -740,7 +745,29 @@ document.getElementById('importInput').addEventListener('change', async e=>{
 });
 
 let swReloading=false;
+let pendingAppReload=false;
 let airplaneRegistration=null;
+function flushPendingAppReload(){
+  if(!pendingAppReload||swReloading)return;
+  const modalOpen=modalBodyLocked||!!document.querySelector('#modalRoot .modal');
+  const editingField=document.activeElement?.matches?.('input,textarea,select');
+  if(modalOpen||editingField)return;
+  pendingAppReload=false;
+  swReloading=true;
+  window.location.reload();
+}
+function handleUpdatedServiceWorker(){
+  if(swReloading)return;
+  const modalOpen=modalBodyLocked||!!document.querySelector('#modalRoot .modal');
+  const editingField=document.activeElement?.matches?.('input,textarea,select');
+  if(modalOpen||editingField){
+    pendingAppReload=true;
+    toast('新版已就绪，完成当前操作后自动更新',{duration:2800});
+    return;
+  }
+  pendingAppReload=true;
+  flushPendingAppReload();
+}
 async function checkForAppUpdate(showToast=false){
   if(!('serviceWorker' in navigator)){if(showToast)toast('当前环境不支持自动更新');return;}
   try{
@@ -753,11 +780,7 @@ async function checkForAppUpdate(showToast=false){
 async function registerAirplaneServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   try{
-    navigator.serviceWorker.addEventListener('controllerchange',()=>{
-      if(swReloading)return;
-      swReloading=true;
-      window.location.reload();
-    });
+    navigator.serviceWorker.addEventListener('controllerchange',handleUpdatedServiceWorker);
     airplaneRegistration=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
     await airplaneRegistration.update();
     document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkForAppUpdate(false);});
