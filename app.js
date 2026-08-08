@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.7.1';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -140,7 +140,7 @@ function tint(hex, alpha=.16){
   const h=hex.replace('#',''); const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
-function txForMonth(m){ return data.transactions.filter(t=>t.date.startsWith(m)); }
+function txForMonth(m){ return data.transactions.filter(t=>t && typeof t.date==='string' && t.date.startsWith(m)); }
 function monthTotals(m){
   return txForMonth(m).reduce((a,t)=>{a[t.type]+=Number(t.amount)||0; return a;},{expense:0,income:0});
 }
@@ -158,6 +158,20 @@ function weekday(iso){ return ['周日','周一','周二','周三','周四','周
 function txSnapshotCategory(t){
   const c=categoryById(t.categoryId);
   return {name:t.categoryName||c?.name||'其他', icon:t.categoryIcon||c?.icon||'more', color:t.categoryColor||c?.color||'#9AA09A'};
+}
+
+function txRow(t, swipe=false){
+  const c=txSnapshotCategory(t);
+  const sign=t.type==='expense'?'-':'+';
+  const cls=t.type==='expense'?'':'positive';
+  const fallbackDate=(typeof t.date==='string'&&t.date)?dateDisplay(t.date):'未标日期';
+  const row=`<div class="tx-row tx-row-interactive" data-open-tx="${escapeHTML(t.id||'')}" role="button" tabindex="0">
+    <div class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</div>
+    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}</div><div class="tx-sub">${escapeHTML(t.note||fallbackDate)}</div></div>
+    <div><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(t.time||'')}</div></div>
+  </div>`;
+  if(!swipe) return row;
+  return `<div class="tx-swipe" data-swipe-tx="${escapeHTML(t.id||'')}"><button class="tx-delete-action" data-delete-tx="${escapeHTML(t.id||'')}" type="button">删除</button>${row}</div>`;
 }
 
 function budgetMetrics(m){
@@ -225,7 +239,13 @@ function render(){
   document.getElementById('monthButton').innerHTML = `${monthLabel(ui.selectedMonth)} ${icon('chevron')}`;
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===ui.tab));
   const app=document.getElementById('app');
-  app.innerHTML = ui.tab==='stats' ? renderStats() : renderHome();
+  try{
+    app.innerHTML = ui.tab==='stats' ? renderStats() : renderHome();
+  }catch(err){
+    console.error('Airplane view render failed',err);
+    app.innerHTML=`<section class="card recover-card"><div class="empty-icon">${icon('plane')}</div><h3>页面暂时没有正常显示</h3><p>你的本地账本没有被删除。请关闭 Airplane 后重新打开；若仍然出现，可继续使用设置中的完整备份。</p><button class="secondary-button" id="retryRender" type="button">重新加载页面</button></section>`;
+    document.getElementById('retryRender')?.addEventListener('click',()=>window.location.reload());
+  }
   hydrateIcons();
   bindViewEvents();
 }
@@ -560,25 +580,49 @@ function openCategoryManager(initialType='expense',options={}){
 
 function bindCategoryReorder(type){
   const container=document.getElementById('categoryManageList');if(!container)return;
-  const saveOrder=()=>{[...container.querySelectorAll('[data-category-row]')].forEach((r,i)=>{const c=categoryById(r.dataset.categoryRow);if(c)c.order=i;});saveData();};
+  const rows=()=>[...container.querySelectorAll('[data-category-row]')];
+  const saveOrder=()=>{rows().forEach((r,i)=>{const c=categoryById(r.dataset.categoryRow);if(c)c.order=i;});saveData();};
+  const capture=()=>new Map(rows().map(r=>[r,r.getBoundingClientRect()]));
+  const animateReflow=(before,dragged)=>{
+    rows().forEach(r=>{
+      if(r===dragged)return;
+      const old=before.get(r), now=r.getBoundingClientRect();
+      if(!old)return;
+      const dx=old.left-now.left, dy=old.top-now.top;
+      if(Math.abs(dx)<.5&&Math.abs(dy)<.5)return;
+      if(typeof r.animate==='function'){
+        r.getAnimations?.().forEach(a=>{if(a.id==='airplane-category-reflow')a.cancel();});
+        const a=r.animate([
+          {transform:`translate(${dx}px, ${dy}px)`},
+          {transform:'translate(0, 0)'}
+        ],{duration:190,easing:'cubic-bezier(.22,.8,.28,1)'});
+        a.id='airplane-category-reflow';
+      }
+    });
+  };
   const moveRow=(row,clientY)=>{
-    const rows=[...container.querySelectorAll('[data-category-row]')].filter(x=>x!==row);
-    const before=rows.find(x=>clientY < x.getBoundingClientRect().top + x.getBoundingClientRect().height/2);
-    container.insertBefore(row,before||null);
+    const others=rows().filter(x=>x!==row);
+    const beforeRow=others.find(x=>clientY < x.getBoundingClientRect().top + x.getBoundingClientRect().height/2);
+    const currentNext=row.nextElementSibling;
+    if((beforeRow&&currentNext===beforeRow)||(!beforeRow&&!currentNext))return;
+    const before=capture();
+    container.insertBefore(row,beforeRow||null);
+    animateReflow(before,row);
     const modal=container.closest('.modal');
     if(modal){const rect=modal.getBoundingClientRect();if(clientY>rect.bottom-80)modal.scrollTop+=10;else if(clientY<rect.top+90)modal.scrollTop-=10;}
   };
   container.querySelectorAll('.drag-handle').forEach(handle=>{
     const row=handle.closest('[data-category-row]');if(!row)return;
-    let active=false;
-    const begin=()=>{active=true;row.classList.add('dragging');document.body.classList.add('reordering');};
-    const end=()=>{if(!active)return;active=false;row.classList.remove('dragging');document.body.classList.remove('reordering');saveOrder();};
-    handle.addEventListener('touchstart',e=>{if(e.touches.length!==1)return;begin();e.preventDefault();},{passive:false});
-    handle.addEventListener('touchmove',e=>{if(!active||!e.touches[0])return;moveRow(row,e.touches[0].clientY);e.preventDefault();},{passive:false});
+    let active=false,startY=0,lastY=0;
+    const begin=y=>{active=true;startY=lastY=y;row.classList.add('dragging');document.body.classList.add('reordering');};
+    const update=y=>{if(!active)return;lastY=y;row.style.setProperty('--drag-offset',`${Math.max(-10,Math.min(10,(y-startY)*.08))}px`);moveRow(row,y);};
+    const end=()=>{if(!active)return;active=false;row.classList.remove('dragging');row.style.removeProperty('--drag-offset');document.body.classList.remove('reordering');saveOrder();};
+    handle.addEventListener('touchstart',e=>{if(e.touches.length!==1)return;begin(e.touches[0].clientY);e.preventDefault();},{passive:false});
+    handle.addEventListener('touchmove',e=>{if(!active||!e.touches[0])return;update(e.touches[0].clientY);e.preventDefault();},{passive:false});
     handle.addEventListener('touchend',end,{passive:true});
     handle.addEventListener('touchcancel',end,{passive:true});
-    handle.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')return;begin();handle.setPointerCapture?.(e.pointerId);e.preventDefault();});
-    handle.addEventListener('pointermove',e=>{if(!active||e.pointerType==='touch')return;moveRow(row,e.clientY);e.preventDefault();});
+    handle.addEventListener('pointerdown',e=>{if(e.pointerType==='touch')return;begin(e.clientY);handle.setPointerCapture?.(e.pointerId);e.preventDefault();});
+    handle.addEventListener('pointermove',e=>{if(!active||e.pointerType==='touch')return;update(e.clientY);e.preventDefault();});
     handle.addEventListener('pointerup',end);handle.addEventListener('pointercancel',end);
   });
 }
