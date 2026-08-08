@@ -10,6 +10,7 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14"/>',
   chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21h-4v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V3h4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1H21v4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
+  shield: '<path d="M12 3 20 6v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6l8-3Z"/><path d="m8.5 12 2.3 2.3 4.8-5"/>',
   wallet: '<path d="M4 7h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3h12v4"/><path d="M16 12h5v4h-5a2 2 0 1 1 0-4Z"/>',
   food: '<path d="M7 3v8M4 3v5a3 3 0 0 0 6 0V3M7 11v10M16 3c3 2 4 5 4 9h-4V3Zm0 9v9"/>',
   car: '<path d="m5 11 2-5h10l2 5"/><path d="M4 11h16v7H4z"/><circle cx="7" cy="18" r="1.5"/><circle cx="17" cy="18" r="1.5"/>',
@@ -53,6 +54,7 @@ function freshData(){
 
 let data = loadData();
 let ui = {tab:'home', selectedMonth:monthKey(new Date()), recordFilter:'all'};
+let storageProtection = {supported:!!(navigator.storage?.persist && navigator.storage?.persisted), checked:false, persisted:false};
 
 function loadData(){
   try {
@@ -122,6 +124,39 @@ function budgetMetrics(m){
   const budgetProgress = budget>0 ? totals.expense/budget : 0;
   const projection = elapsed>0 ? totals.expense/elapsed*dim : 0;
   return {budget,...totals,dim,elapsed,baseDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayDelta,timeProgress,budgetProgress,projection};
+}
+
+function storageProtectionStatus(){
+  if(!storageProtection.supported) return {label:'当前环境不支持', cls:'muted'};
+  if(!storageProtection.checked) return {label:'正在检查…', cls:'muted'};
+  return storageProtection.persisted
+    ? {label:'已启用持久化存储', cls:'positive'}
+    : {label:'未启用，系统仍可能回收本地数据', cls:'negative'};
+}
+
+async function ensurePersistentStorage(showToast=false){
+  if(!storageProtection.supported){
+    storageProtection.checked=true;
+    if(ui.tab==='settings') render();
+    if(showToast) toast('当前浏览器不支持持久化存储申请');
+    return false;
+  }
+  try{
+    let persisted=await navigator.storage.persisted();
+    if(!persisted) persisted=await navigator.storage.persist();
+    storageProtection.persisted=!!persisted;
+    storageProtection.checked=true;
+    if(ui.tab==='settings') render();
+    if(showToast) toast(persisted?'本地数据保护已启用':'系统暂未授予持久化存储');
+    return !!persisted;
+  }catch(err){
+    console.warn('Persistent storage request failed', err);
+    storageProtection.persisted=false;
+    storageProtection.checked=true;
+    if(ui.tab==='settings') render();
+    if(showToast) toast('持久化存储检查失败');
+    return false;
+  }
 }
 
 function render(){
@@ -230,6 +265,7 @@ function renderStats(){
 
 function renderSettings(){
   const b=budgetFor(ui.selectedMonth);
+  const protection=storageProtectionStatus();
   return `<div class="stack"><div class="section-head"><h2>设置</h2></div>
     <section class="card settings-section">
       <button class="setting-row" data-action="balance"><span class="mini-icon">${icon('wallet')}</span><span class="setting-copy"><span class="setting-title">当前余额</span><span class="setting-sub">${hasInitialBalance()?amount(currentBalance()):'未设置初始余额'}</span></span><span class="chevron">${icon('chevron')}</span></button>
@@ -243,7 +279,10 @@ function renderSettings(){
       <button class="setting-row" data-action="import"><span class="mini-icon">${icon('upload')}</span><span class="setting-copy"><span class="setting-title">恢复备份</span><span class="setting-sub">从 Airplane JSON 备份恢复</span></span><span class="chevron">${icon('chevron')}</span></button>
     </section>
     <div class="section-head"><h2>安装与隐私</h2></div>
-    <section class="card"><div class="helper"><strong style="color:var(--text)">iPhone 安装：</strong>Safari 打开 Airplane → 分享 → 添加到主屏幕。添加后可独立全屏运行，并支持离线打开。<br><br>账单默认只保存在当前设备的浏览器存储中，不上传到服务器。清除 Safari 网站数据或换手机前，请先做“完整备份”。</div></section>
+    <section class="card settings-section">
+      <button class="setting-row" data-action="storage-persist"><span class="mini-icon">${icon('shield')}</span><span class="setting-copy"><span class="setting-title">本地数据保护</span><span class="setting-sub ${protection.cls}">${protection.label}</span></span><span class="chevron">${icon('chevron')}</span></button>
+    </section>
+    <section class="card"><div class="helper"><strong style="color:var(--text)">iPhone 安装：</strong>Safari 打开 Airplane → 分享 → 添加到主屏幕。添加后可独立全屏运行，并支持离线打开。<br><br>Airplane 会自动申请持久化存储，用于降低 iOS 因普通存储压力回收程序缓存和本地账本数据的风险。账单仍只保存在当前设备，不上传到服务器；人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。</div></section>
     <button class="danger-button" data-action="reset">清空本机全部数据</button>
   </div>`;
 }
@@ -259,6 +298,7 @@ function bindViewEvents(){
   document.querySelector('[data-action="export-json"]')?.addEventListener('click',exportJSON);
   document.querySelector('[data-action="export-csv"]')?.addEventListener('click',exportCSV);
   document.querySelector('[data-action="import"]')?.addEventListener('click',()=>document.getElementById('importInput').click());
+  document.querySelector('[data-action="storage-persist"]')?.addEventListener('click',()=>ensurePersistentStorage(true));
   document.querySelector('[data-action="reset"]')?.addEventListener('click',resetAll);
 }
 
@@ -398,3 +438,4 @@ document.getElementById('importInput').addEventListener('change', async e=>{
 
 if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn)); }
 render();
+ensurePersistentStorage();
