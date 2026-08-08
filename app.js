@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.1';
+const APP_VERSION = '0.7.2';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -426,19 +426,26 @@ function bindSheetSwipe(modal,backdrop){
   const grabber=modal.querySelector('.modal-grabber');
   if(!grabber) return;
   let startY=0,lastY=0,startAt=0,dragging=false;
+  const pointerY=e=>Number.isFinite(e.screenY)?e.screenY:e.clientY;
   const reset=()=>{modal.style.transition='transform .18s ease-out';backdrop.style.transition='background .18s ease-out';modal.style.transform='';backdrop.style.background='';setTimeout(()=>{modal.style.transition='';backdrop.style.transition='';},190);};
   grabber.addEventListener('pointerdown',e=>{
-    dragging=true;startY=lastY=e.clientY;startAt=performance.now();
+    // iOS changes the visual viewport while dismissing the keyboard.  Blur the
+    // editor first and use screen coordinates so that resize does not break the
+    // same downward swipe that is closing the sheet.
+    const active=document.activeElement;
+    if(active&&modal.contains(active)&&active.matches('input,textarea,select')) active.blur();
+    dragging=true;startY=lastY=pointerY(e);startAt=performance.now();
     grabber.setPointerCapture?.(e.pointerId);modal.style.transition='none';backdrop.style.transition='none';e.preventDefault();
   });
   grabber.addEventListener('pointermove',e=>{
-    if(!dragging)return;lastY=e.clientY;const dy=Math.max(0,e.clientY-startY);
+    if(!dragging)return;lastY=pointerY(e);const dy=Math.max(0,lastY-startY);
     modal.style.transform=`translateY(${dy}px)`;
     backdrop.style.background=`rgba(15,18,15,${Math.max(.08,.38-dy/700)})`;
+    e.preventDefault();
   });
-  const finish=e=>{
+  const finish=()=>{
     if(!dragging)return;dragging=false;const dy=Math.max(0,lastY-startY);const velocity=dy/Math.max(1,performance.now()-startAt);
-    if(dy>Math.min(120,modal.clientHeight*.18)||velocity>.75){modal.style.transition='transform .16s ease-in';modal.style.transform='translateY(110%)';setTimeout(()=>closeModal({reason:'swipe'}),140);}else reset();
+    if(dy>Math.min(110,modal.clientHeight*.16)||velocity>.68){modal.style.transition='transform .16s ease-in';modal.style.transform='translateY(110%)';setTimeout(()=>closeModal({reason:'swipe'}),140);}else reset();
   };
   grabber.addEventListener('pointerup',finish);grabber.addEventListener('pointercancel',finish);
 }
@@ -462,7 +469,7 @@ function shiftMonth(delta){
 function openBudgetModal(){
   const existing=budgetFor(ui.selectedMonth);
   openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}支出预算</label><input id="budgetInput" class="large-input" inputmode="decimal" placeholder="例如 2000" value="${existing||''}"><div class="helper">每个月可以单独设置和修改。当前月会按“剩余预算 ÷ 包含今天在内的剩余天数”动态计算“今日不宜超过”；收入不会自动提高预算。</div></section>`);
-  const input=document.getElementById('budgetInput'); input.focus();
+  const input=document.getElementById('budgetInput');
   document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)||v<0){toast('请输入有效预算');return;} data.budgets[ui.selectedMonth]=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('月预算已保存');};
 }
 
@@ -471,12 +478,12 @@ function openBalanceModal(){
   const current=currentBalance();
   if(!initialized){
     openModal(`${modalHead('设置初始余额')}<section class="card input-card"><label>开始使用 Airplane 时已有的总余额</label><input id="balanceInput" class="large-input" inputmode="decimal" placeholder="例如 10000"><div class="helper">初始余额只用于建立起点。之后收入会增加余额、支出会减少余额；两者都不会改变你手动设置的月预算。</div></section>`);
-    const input=document.getElementById('balanceInput'); input.focus();
+    const input=document.getElementById('balanceInput');
     document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)){toast('请输入有效余额');return;} data.prefs.initialBalance=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('初始余额已保存');};
     return;
   }
   openModal(`${modalHead('调整当前余额')}<section class="card input-card"><label>Airplane 当前余额</label><div class="budget-amount">${amount(current)}</div><label style="margin-top:8px">调整为</label><input id="balanceInput" class="large-input" inputmode="decimal" value="${current.toFixed(2)}"><div class="helper">适合补记遗漏造成的余额偏差。余额调整不计入收入、支出，也不会占用月预算。</div></section>`);
-  const input=document.getElementById('balanceInput'); input.focus(); input.select();
+  const input=document.getElementById('balanceInput');
   document.getElementById('modalSave').onclick=()=>{const target=Number(input.value.replace(',','.')); if(!Number.isFinite(target)){toast('请输入有效余额');return;} const delta=Math.round((target-current)*100)/100; if(Math.abs(delta)>=0.01)data.balanceAdjustments.push({id:uid('bal'),delta,targetBalance:Math.round(target*100)/100,createdAt:new Date().toISOString()});saveData();closeModal({runDismiss:false});render();toast(Math.abs(delta)>=0.01?'当前余额已调整':'余额没有变化');};
 }
 
@@ -533,7 +540,6 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   document.getElementById('txSubmit').onclick=submit;
   document.getElementById('modalSave').onclick=submit;
   document.getElementById('txDelete')?.addEventListener('click',()=>{closeModal({runDismiss:false});deleteTransaction(existing.id);});
-  setTimeout(()=>document.getElementById('txAmount')?.focus(),80);
 }
 
 function deleteTransaction(id){

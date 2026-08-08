@@ -46,3 +46,9 @@ App updates keep the permanent `airplane-pwa-v1` data key, migrate schemas addit
 - “记一笔”中的“添加分类”升级为“整理分类”，可新增、编辑、隐藏、删除和触摸拖动排序。
 - 继续保留草稿、左滑删除/撤销、持久化存储和离线使用。
 - Service Worker 更新后自动接管并刷新一次；设置页也提供手动检查更新。
+
+
+## 0.7.2
+- Normalize iOS month/date/time centering.
+- Stop auto-focusing form fields when sheets open.
+- Make sheet swipe-to-dismiss stable while the iOS keyboard is visible.
