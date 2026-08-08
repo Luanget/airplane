@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f6f7f4" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Airplane" />
+  <meta name="format-detection" content="telephone=no" />
+  <title>Airplane</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="brand-row"><span class="brand-mark" data-icon="plane"></span><h1>Airplane</h1></div>
+        <button class="month-button" id="monthButton" aria-label="选择月份"></button>
+      </div>
+      <button class="icon-button" id="quickBudgetButton" aria-label="设置月预算" data-icon="calendar"></button>
+    </header>
+
+    <main id="app" aria-live="polite"></main>
+
+    <nav class="tabbar" aria-label="主导航">
+      <button data-tab="home" class="tab active"><span data-icon="home"></span><small>首页</small></button>
+      <button data-tab="records" class="tab"><span data-icon="list"></span><small>明细</small></button>
+      <button id="addButton" class="add-button" aria-label="记一笔"><span data-icon="plus"></span></button>
+      <button data-tab="stats" class="tab"><span data-icon="chart"></span><small>统计</small></button>
+      <button data-tab="settings" class="tab"><span data-icon="settings"></span><small>设置</small></button>
+    </nav>
+  </div>
+
+  <div id="modalRoot"></div>
+  <input id="importInput" type="file" accept="application/json,.json" hidden />
+  <script src="./app.js" defer></script>
+</body>
+</html>
