@@ -32,3 +32,7 @@ python3 -m http.server 8080
 ## 本地数据保护
 
 启动时会自动请求浏览器持久化存储（Persistent Storage），设置页可查看状态。它用于降低 iOS 因普通存储压力自动回收 PWA 程序缓存和本地账本数据的风险；人为清除网站数据、删除主屏幕 App 或换机仍需要通过 JSON 备份恢复。
+
+## Update safety
+
+App updates keep the permanent `airplane-pwa-v1` data key, migrate schemas additively, and maintain an on-device recovery copy. Deploy new files to the same HTTPS origin/path; do not change the hosting domain if you expect existing browser data to follow automatically.

@@ -1,6 +1,11 @@
 
+// STORAGE_KEY is intentionally permanent. Never rename it in a normal app update.
+// Keeping one stable key lets new program versions reuse the user's existing ledger.
 const STORAGE_KEY = 'airplane-pwa-v1';
-const VERSION = 2;
+const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
+const SCHEMA_VERSION = 3;
+const APP_VERSION = '0.5.0';
+const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
   plane: '<path d="M3 14.5 21 3l-6.2 18-4.1-6.2L3 14.5Z"/><path d="m10.7 14.8 4.1-4.1"/>',
@@ -52,24 +57,69 @@ function freshData(){
   return {version:VERSION, transactions:[], categories:structuredClone(DEFAULT_CATEGORIES), budgets:{}, balanceAdjustments:[], prefs:{initialBalance:null}};
 }
 
+function normalizeData(parsed){
+  // Schema migrations are additive: never replace transactions, budgets, categories,
+  // balances, preferences or future unknown fields just because the app was updated.
+  if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid Airplane data');
+  if(!Array.isArray(parsed.transactions)) parsed.transactions=[];
+  if(!Array.isArray(parsed.categories) || !parsed.categories.length) parsed.categories=structuredClone(DEFAULT_CATEGORIES);
+  if(!parsed.budgets || typeof parsed.budgets !== 'object' || Array.isArray(parsed.budgets)) parsed.budgets={};
+  if(!Array.isArray(parsed.balanceAdjustments)) parsed.balanceAdjustments=[];
+  if(!parsed.prefs || typeof parsed.prefs !== 'object' || Array.isArray(parsed.prefs)) parsed.prefs={};
+  if(!('initialBalance' in parsed.prefs)) parsed.prefs.initialBalance=null;
+  parsed.version=SCHEMA_VERSION;
+  return parsed;
+}
+
+function parseStoredData(raw){
+  if(!raw) return null;
+  return normalizeData(JSON.parse(raw));
+}
+
+function writeStorageCopies(value){
+  const raw=JSON.stringify(value);
+  localStorage.setItem(STORAGE_KEY,raw);
+  // A second on-device copy protects against a future buggy migration accidentally
+  // damaging the primary key. It is not a substitute for exported JSON backups.
+  localStorage.setItem(RECOVERY_KEY,raw);
+}
+
+function loadData(){
+  const primaryRaw=localStorage.getItem(STORAGE_KEY);
+  try {
+    const parsed=parseStoredData(primaryRaw);
+    if(parsed){
+      writeStorageCopies(parsed);
+      return parsed;
+    }
+  } catch(e){
+    console.warn('Primary Airplane data is invalid; trying local recovery copy',e);
+  }
+
+  const recoveryRaw=localStorage.getItem(RECOVERY_KEY);
+  try {
+    const recovered=parseStoredData(recoveryRaw);
+    if(recovered){
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(recovered));
+      console.warn('Airplane restored data from the on-device recovery copy');
+      return recovered;
+    }
+  } catch(e){
+    console.warn('Airplane recovery copy is also invalid',e);
+  }
+
+  // Only a genuinely new origin/device, with neither a primary nor recovery copy,
+  // starts with empty data. A program update by itself never reaches this path.
+  const created=freshData();
+  writeStorageCopies(created);
+  return created;
+}
+
+function saveData(){ writeStorageCopies(data); }
+
 let data = loadData();
 let ui = {tab:'home', selectedMonth:monthKey(new Date()), recordFilter:'all'};
 let storageProtection = {supported:!!(navigator.storage?.persist && navigator.storage?.persisted), checked:false, persisted:false};
-
-function loadData(){
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if(!raw) return freshData();
-    const parsed = JSON.parse(raw);
-    if(!parsed.categories?.length) parsed.categories = structuredClone(DEFAULT_CATEGORIES);
-    parsed.transactions ||= []; parsed.budgets ||= {}; parsed.balanceAdjustments ||= []; parsed.prefs ||= {}; if(!('initialBalance' in parsed.prefs)) parsed.prefs.initialBalance=null; parsed.version ||= VERSION;
-    return parsed;
-  } catch(e){
-    console.warn('Airplane data reset after invalid local storage', e);
-    return freshData();
-  }
-}
-function saveData(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
 function uid(prefix='id'){ return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`; }
 function pad(n){ return String(n).padStart(2,'0'); }
 function localISO(d=new Date()){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
@@ -282,7 +332,7 @@ function renderSettings(){
     <section class="card settings-section">
       <button class="setting-row" data-action="storage-persist"><span class="mini-icon">${icon('shield')}</span><span class="setting-copy"><span class="setting-title">本地数据保护</span><span class="setting-sub ${protection.cls}">${protection.label}</span></span><span class="chevron">${icon('chevron')}</span></button>
     </section>
-    <section class="card"><div class="helper"><strong style="color:var(--text)">iPhone 安装：</strong>Safari 打开 Airplane → 分享 → 添加到主屏幕。添加后可独立全屏运行，并支持离线打开。<br><br>Airplane 会自动申请持久化存储，用于降低 iOS 因普通存储压力回收程序缓存和本地账本数据的风险。账单仍只保存在当前设备，不上传到服务器；人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。</div></section>
+    <section class="card"><div class="helper"><strong style="color:var(--text)">iPhone 安装：</strong>Safari 打开 Airplane → 分享 → 添加到主屏幕。安装后请长期从主屏幕 Airplane 使用；Safari 网页与主屏幕 App 在 iOS 上属于不同的本地数据空间，不会自动同步。<br><br>主屏幕 Airplane 在联网启动时会检查程序更新；更新只替换程序缓存，不会重建余额、预算、分类或账单。Airplane 也会自动申请持久化存储。人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。<br><br>当前程序版本：${APP_VERSION}</div></section>
     <button class="danger-button" data-action="reset">清空本机全部数据</button>
   </div>`;
 }
@@ -433,9 +483,22 @@ document.getElementById('monthButton').onclick=openMonthModal;
 document.getElementById('quickBudgetButton').onclick=openBudgetModal;
 document.getElementById('importInput').addEventListener('change', async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
-  try{const parsed=JSON.parse(await file.text());const incoming=parsed.data||parsed;if(!Array.isArray(incoming.transactions)||!Array.isArray(incoming.categories)||typeof incoming.budgets!=='object')throw new Error('invalid');if(!confirm('恢复此备份会替换当前设备上的 Airplane 数据。继续吗？'))return;data=incoming;data.balanceAdjustments ||= [];data.prefs ||= {};if(!('initialBalance' in data.prefs))data.prefs.initialBalance=null;data.version=VERSION;saveData();render();toast('备份已恢复');}catch(err){toast('无法识别这个 Airplane 备份');}
+  try{const parsed=JSON.parse(await file.text());const incoming=normalizeData(parsed.data||parsed);if(!confirm('恢复此备份会替换当前设备上的 Airplane 数据。继续吗？'))return;data=incoming;saveData();render();toast('备份已恢复');}catch(err){toast('无法识别这个 Airplane 备份');}
 });
 
-if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn)); }
+async function registerAirplaneServiceWorker(){
+  if(!('serviceWorker' in navigator)) return;
+  try{
+    // updateViaCache:'none' keeps the Service Worker update check independent of HTTP cache.
+    const registration=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
+    // Installed Home Screen Web Apps keep their own local ledger. We update only the
+    // program shell; localStorage/IndexedDB are intentionally untouched.
+    await registration.update();
+  }catch(err){
+    console.warn('Airplane Service Worker registration/update failed',err);
+  }
+}
+
+window.addEventListener('load',registerAirplaneServiceWorker);
 render();
 ensurePersistentStorage();
