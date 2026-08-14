@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.4';
+const APP_VERSION = '0.7.5';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -559,6 +559,75 @@ function loadTransactionDraft(){
 function saveTransactionDraft(d){ localStorage.setItem(DRAFT_KEY,JSON.stringify({...d,savedAt:Date.now()})); }
 function clearTransactionDraft(){ localStorage.removeItem(DRAFT_KEY); }
 
+function normalizeAmountExpression(raw=''){
+  return String(raw)
+    .trim()
+    .replace(/[，,]/g,'.')
+    .replace(/[×xX]/g,'*')
+    .replace(/÷/g,'/')
+    .replace(/[−–—]/g,'-')
+    .replace(/\s+/g,'');
+}
+
+// Small local expression parser for the amount field. Deliberately avoids eval().
+// Supports +, -, ×/*, ÷// and parentheses while keeping the final ledger amount numeric.
+function parseAmountExpression(raw=''){
+  const expr=normalizeAmountExpression(raw);
+  if(!expr || !/^[0-9+\-*/().]+$/.test(expr)) return {ok:false,value:NaN};
+  let i=0;
+  const skip=()=>{};
+  const parseNumber=()=>{
+    const start=i;
+    while(i<expr.length && /[0-9.]/.test(expr[i])) i++;
+    const token=expr.slice(start,i);
+    if(!token || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(token)) throw new Error('number');
+    const value=Number(token);
+    if(!Number.isFinite(value)) throw new Error('number');
+    return value;
+  };
+  const parseFactor=()=>{
+    skip();
+    if(expr[i]==='+'){ i++; return parseFactor(); }
+    if(expr[i]==='-'){ i++; return -parseFactor(); }
+    if(expr[i]==='('){
+      i++;
+      const value=parseExpression();
+      if(expr[i]!==')') throw new Error('paren');
+      i++;
+      return value;
+    }
+    return parseNumber();
+  };
+  const parseTerm=()=>{
+    let value=parseFactor();
+    while(i<expr.length && (expr[i]==='*' || expr[i]==='/')){
+      const op=expr[i++];
+      const rhs=parseFactor();
+      if(op==='/' && Math.abs(rhs)<1e-12) throw new Error('zero');
+      value=op==='*' ? value*rhs : value/rhs;
+      if(!Number.isFinite(value)) throw new Error('finite');
+    }
+    return value;
+  };
+  const parseExpression=()=>{
+    let value=parseTerm();
+    while(i<expr.length && (expr[i]==='+' || expr[i]==='-')){
+      const op=expr[i++];
+      const rhs=parseTerm();
+      value=op==='+' ? value+rhs : value-rhs;
+      if(!Number.isFinite(value)) throw new Error('finite');
+    }
+    return value;
+  };
+  try{
+    const value=parseExpression();
+    if(i!==expr.length || !Number.isFinite(value)) return {ok:false,value:NaN};
+    return {ok:true,value};
+  }catch{
+    return {ok:false,value:NaN};
+  }
+}
+
 function openTransactionModal(existing=null,suppliedDraft=null){
   const restored=suppliedDraft||(!existing?loadTransactionDraft():null);
   let type=restored?.type||existing?.type||'expense';
@@ -568,7 +637,28 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   let dirty=!!restored;
   const captureDraft=()=>({type,selectedCategoryId:selected,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔')}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div><button id="txSubmit" class="primary-button" style="margin-top:14px">${existing?'保存修改':'完成'}</button>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔')}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div><button id="txSubmit" class="primary-button" style="margin-top:14px">${existing?'保存修改':'完成'}</button>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  const amountInput=document.getElementById('txAmount');
+  const amountPreview=document.getElementById('amountCalcPreview');
+  const updateAmountPreview=()=>{
+    const raw=amountInput?.value||'';
+    const normalized=normalizeAmountExpression(raw);
+    const hasCalculation=/[+*/]/.test(normalized) || /\d-/.test(normalized);
+    const parsed=parseAmountExpression(raw);
+    if(!hasCalculation){
+      amountPreview.textContent='';
+      amountPreview.classList.remove('visible','invalid');
+      return;
+    }
+    if(parsed.ok && parsed.value>0){
+      amountPreview.textContent=`= ${amount(parsed.value)}`;
+      amountPreview.classList.add('visible');
+      amountPreview.classList.remove('invalid');
+    }else{
+      amountPreview.textContent='继续输入算式';
+      amountPreview.classList.add('visible','invalid');
+    }
+  };
   const markDirty=()=>{dirty=true;persistDraft();};
   const renderChooser=()=>{
     document.getElementById('expenseTab').className=`expense ${type==='expense'?'active':''}`;
@@ -580,15 +670,28 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   };
   document.getElementById('expenseTab').onclick=()=>{type='expense';selected=preferredCategoryId(type);markDirty();renderChooser();};
   document.getElementById('incomeTab').onclick=()=>{type='income';selected=preferredCategoryId(type);markDirty();renderChooser();};
-  ['txAmount','txDate','txTime','txNote'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',markDirty);el?.addEventListener('change',markDirty);});
+  ['txAmount','txDate','txTime','txNote'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});el?.addEventListener('change',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});});
+  document.querySelectorAll('[data-amount-op]').forEach(button=>{
+    button.addEventListener('pointerdown',e=>e.preventDefault());
+    button.addEventListener('click',()=>{
+      const input=amountInput;if(!input)return;
+      const op=button.dataset.amountOp||'';
+      const start=input.selectionStart??input.value.length;
+      const end=input.selectionEnd??start;
+      input.setRangeText(op,start,end,'end');
+      dirty=true;persistDraft();updateAmountPreview();
+      try{input.focus({preventScroll:true});}catch{input.focus();}
+    });
+  });
+  updateAmountPreview();
   document.getElementById('quickAddCategory').onclick=()=>{
     const draft={...captureDraft(),savedAt:Date.now()};dirty=true;saveTransactionDraft(draft);
     openCategoryManager(type,{fromTransaction:true,draft,existing,onReturn:(returnType)=>openTransactionModal(existing,{...draft,type:returnType,selectedCategoryId:(returnType===type?selected:preferredCategoryId(returnType))})});
   };
   renderChooser();
   const submit=()=>{
-    const value=Number(document.getElementById('txAmount').value.replace(',','.')); const c=categoryById(selected);
-    if(!value||value<=0){toast('请输入金额');return;} if(!c){toast('请选择分类');return;}
+    const parsedAmount=parseAmountExpression(document.getElementById('txAmount').value); const value=parsedAmount.value; const c=categoryById(selected);
+    if(!parsedAmount.ok||!value||value<=0){toast('请输入有效金额或算式');return;} if(!c){toast('请选择分类');return;}
     const record={id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:document.getElementById('txDate').value||localISO(),time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
     if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;} else data.transactions.push(record);
     if(type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
