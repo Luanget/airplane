@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.11';
+const APP_VERSION = '0.7.12';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -940,8 +940,8 @@ let airplaneRegistration=null;
 let updateToastShown=false;
 let pendingUpdateWorker=null;
 const UPDATE_CHECK_KEY='airplane-last-update-check-v1';
-const UPDATE_ACTIVE_INTERVAL_MS=15*60*1000;
-const UPDATE_RESUME_INTERVAL_MS=5*60*1000;
+const UPDATE_ACTIVE_INTERVAL_MS=5*60*1000;
+const UPDATE_RESUME_INTERVAL_MS=2*60*1000;
 let updateIntervalTimer=null;
 const observedRegistrations=new WeakSet();
 
@@ -979,7 +979,7 @@ function showUpdateAvailable(worker=null){
   if(worker)pendingUpdateWorker=worker;
   if(updateToastShown)return;
   updateToastShown=true;
-  toast('发现 Airplane 新版本',{actionLabel:'更新',duration:12000,onAction:activateWaitingServiceWorker});
+  toast('发现 Airplane 新版本',{actionLabel:'更新',duration:30000,onAction:activateWaitingServiceWorker});
 }
 
 function observeServiceWorkerRegistration(registration){
@@ -1026,9 +1026,12 @@ function backgroundUpdateIfDue(minInterval=UPDATE_ACTIVE_INTERVAL_MS){
   checkForAppUpdate(false);
 }
 function scheduleBackgroundUpdateCheck(){
-  // Launch always renders from the local shell first. The first network check is
-  // deferred, so update discovery never sits on the startup critical path.
-  setTimeout(()=>backgroundUpdateIfDue(UPDATE_RESUME_INTERVAL_MS),6000);
+  // Startup is never blocked by the network: render from the local shell first,
+  // then always perform one fresh update check shortly after launch. Do not
+  // reuse the previous session's timestamp to suppress this first check.
+  setTimeout(()=>{
+    if(document.visibilityState==='visible'&&navigator.onLine!==false)checkForAppUpdate(false);
+  },2500);
   if(updateIntervalTimer)clearInterval(updateIntervalTimer);
   updateIntervalTimer=setInterval(()=>backgroundUpdateIfDue(UPDATE_ACTIVE_INTERVAL_MS),UPDATE_ACTIVE_INTERVAL_MS);
 }
@@ -1036,7 +1039,9 @@ function bindForegroundUpdateChecks(){
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible')setTimeout(()=>backgroundUpdateIfDue(UPDATE_RESUME_INTERVAL_MS),700);
   });
-  window.addEventListener('online',()=>setTimeout(()=>backgroundUpdateIfDue(UPDATE_RESUME_INTERVAL_MS),700));
+  // Reconnecting is a useful opportunity to discover a version that could not
+  // be checked while offline, without affecting normal launch performance.
+  window.addEventListener('online',()=>setTimeout(()=>backgroundUpdateIfDue(0),700));
 }
 
 async function registerAirplaneServiceWorker(){
