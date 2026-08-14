@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.8';
+const APP_VERSION = '0.7.9';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -459,7 +459,6 @@ function closeModal({runDismiss=true,reason='dismiss'}={}){
   root.innerHTML='';
   unlockPageForModal();
   if(runDismiss&&cb) cb(reason);
-  requestAnimationFrame(flushPendingAppReload);
 }
 function modalHead(title,saveLabel='保存',cancelLabel='取消'){ const right=saveLabel===null?'<span></span>':`<button class="save" id="modalSave">${saveLabel}</button>`; return `<div class="modal-head"><button class="cancel" data-close>${cancelLabel}</button><h2>${title}</h2>${right}</div>`; }
 
@@ -797,7 +796,7 @@ function bindTransactionSwipes(){
 function openCategoryManager(initialType='expense',options={}){
   let type=initialType;
   const returnToTransaction=()=>{closeModal({runDismiss:false});options.onReturn?.(type);};
-  const draw=()=>{
+  const draw=(focusId=null)=>{
     openModal(`${modalHead('整理分类','完成',options.fromTransaction?'返回':'取消')}<div class="segmented"><button id="catExpense" class="expense ${type==='expense'?'active':''}">支出分类</button><button id="catIncome" class="income ${type==='income'?'active':''}">收入分类</button></div><div class="category-manage-toolbar"><div class="helper reorder-tip">按住左侧拖动柄，上下移动即可调整记账页顺序。</div><button class="text-button" id="addCategory" type="button">＋ 新增</button></div><section class="card category-manager-card" id="categoryManageList"></section>`,{onDismiss:options.fromTransaction?()=>options.onReturn?.(type):null});
     document.getElementById('modalSave').onclick=()=>options.fromTransaction?returnToTransaction():closeModal({runDismiss:false});
     document.querySelector('.modal-head .cancel').onclick=()=>options.fromTransaction?returnToTransaction():closeModal({runDismiss:false});
@@ -806,10 +805,16 @@ function openCategoryManager(initialType='expense',options={}){
     const list=data.categories.filter(c=>c.type===type).sort((a,b)=>a.order-b.order);
     document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序"><span></span><span></span><span></span></button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)}</span><span class="category-row-actions"><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button><button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button></span></div>`).join('');
     document.querySelectorAll('[data-toggle-cat]').forEach(b=>b.onclick=()=>{const c=categoryById(b.dataset.toggleCat);if(!c)return;if(!c.hidden&&data.categories.filter(x=>x.type===type&&!x.hidden).length<=1){toast('至少保留一个可用分类');return;}c.hidden=!c.hidden;saveData();draw();});
-    document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),{cancelLabel:'返回',onBack:draw,onDone:draw}));
-    document.querySelectorAll('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCategory(b.dataset.removeCat,type,draw));
-    document.getElementById('addCategory').onclick=()=>openCategoryEditor(type,null,{cancelLabel:'返回',onBack:draw,onDone:draw});
+    document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),{cancelLabel:'返回',onBack:()=>draw(),onDone:saved=>draw(saved?.id)}));
+    document.querySelectorAll('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCategory(b.dataset.removeCat,type,()=>draw()));
+    document.getElementById('addCategory').onclick=()=>openCategoryEditor(type,null,{cancelLabel:'返回',onBack:()=>draw(),onDone:saved=>draw(saved?.id)});
     bindCategoryReorder(type);
+    if(focusId){
+      requestAnimationFrame(()=>{
+        const row=document.querySelector(`[data-category-row="${focusId}"]`);
+        row?.scrollIntoView?.({block:'nearest',behavior:'smooth'});
+      });
+    }
   };
   draw();
 }
