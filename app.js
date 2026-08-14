@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.5';
+const APP_VERSION = '0.7.6';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -37,6 +37,21 @@ const ICONS = {
   refund: '<path d="M4 9h11a5 5 0 0 1 0 10H9"/><path d="m8 5-4 4 4 4"/>',
   coffee: '<path d="M5 8h12v7a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5V8Z"/><path d="M17 10h2a3 3 0 0 1 0 6h-2M8 3v2M12 3v2"/>',
   phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+  water: '<path d="M12 3S6 9.5 6 14a6 6 0 0 0 12 0c0-4.5-6-11-6-11Z"/><path d="M9 15a3 3 0 0 0 3 3"/>',
+  bolt: '<path d="M13 2 5 14h6l-1 8 9-13h-6V2Z"/>',
+  flame: '<path d="M13 3s1 3-1 5c-1.1 1.8-4 2.8-4 6a4 4 0 0 0 8 0c0-1.5-.6-2.8-1.5-4 2.8 1.6 4.5 4 4.5 6.8A7 7 0 0 1 5 17c0-4.7 3.4-8.4 8-14Z"/>',
+  washing: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 8h16"/><circle cx="12" cy="14" r="4"/><path d="M8 5.5h.01M11 5.5h2"/>',
+  building: '<path d="M5 21V4h14v17M3 21h18"/><path d="M8 8h2M14 8h2M8 12h2M14 12h2M8 16h2M14 16h2"/>',
+  wifi: '<path d="M4 9a12 12 0 0 1 16 0M7 12a8 8 0 0 1 10 0M10 15a4 4 0 0 1 4 0"/><circle cx="12" cy="19" r="1"/>',
+  package: '<path d="m4 7 8-4 8 4v10l-8 4-8-4V7Z"/><path d="m4 7 8 4 8-4M12 11v10M8 5l8 4"/>',
+  wrench: '<path d="M14.5 6.5a4 4 0 0 0-5 5L3 18l3 3 6.5-6.5a4 4 0 0 0 5-5l-2.5 2.5-3-3 2.5-2.5Z"/>',
+  parking: '<circle cx="12" cy="12" r="9"/><path d="M10 17V7h3a3 3 0 0 1 0 6h-3M10 13h3"/>',
+  paw: '<circle cx="12" cy="15" r="4"/><circle cx="7" cy="9" r="2"/><circle cx="11" cy="6" r="2"/><circle cx="16" cy="8" r="2"/><circle cx="18" cy="12" r="1.7"/>',
+  bus: '<rect x="5" y="3" width="14" height="16" rx="3"/><path d="M5 10h14M8 19v2M16 19v2M8 14h.01M16 14h.01"/>',
+  train: '<rect x="6" y="3" width="12" height="15" rx="3"/><path d="M6 10h12M9 14h.01M15 14h.01M9 18l-3 3M15 18l3 3M8 21h8"/>',
+  clothes: '<path d="m8 4-5 3 3 5 2-1v10h8V11l2 1 3-5-5-3a4 4 0 0 1-8 0Z"/>',
+  scissors: '<circle cx="6" cy="7" r="3"/><circle cx="6" cy="17" r="3"/><path d="m8.5 8.5 11 8.5M8.5 15.5 19.5 7"/>',
+  subscription: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 9h18M7 14h4"/>',
   download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 19h16"/>',
   upload: '<path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 19h16"/>',
   file: '<path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/>',
@@ -53,7 +68,7 @@ const DEFAULT_CATEGORIES = [
   ['人情','expense','gift','#E78378'],['其他','expense','more','#9AA09A'],
   ['工资','income','briefcase','#4CB487'],['兼职','income','laptop','#5C9FD6'],['奖学金','income','award','#C8A34C'],['奖金','income','coins','#E7A24A'],
   ['理财','income','trend','#7797DB'],['红包/转账','income','gift','#E47B8C'],['退款','income','refund','#6CB8A3'],['其他','income','more','#9AA09A']
-].map((c,i)=>({id:`default-${i+1}`,name:c[0],type:c[1],icon:c[2],color:c[3],custom:false,hidden:false,order:i}));
+].map((c,i)=>({id:`default-${i+1}`,name:c[0],type:c[1],icon:c[2],color:c[3],custom:true,hidden:false,order:i}));
 
 function freshData(){
   return {version:VERSION, transactions:[], categories:structuredClone(DEFAULT_CATEGORIES), budgets:{}, balanceAdjustments:[], prefs:{initialBalance:null}};
@@ -71,6 +86,8 @@ function normalizeData(parsed){
   if(!('initialBalance' in parsed.prefs)) parsed.prefs.initialBalance=null;
   if(!('lastExpenseCategoryId' in parsed.prefs)) parsed.prefs.lastExpenseCategoryId=null;
   if(!('lastIncomeCategoryId' in parsed.prefs)) parsed.prefs.lastIncomeCategoryId=null;
+  // Categories are user-owned after 0.7.6: former built-ins and newly added items behave identically.
+  parsed.categories.forEach(c=>{if(c&&typeof c==='object')c.custom=true;});
   parsed.version=SCHEMA_VERSION;
   return parsed;
 }
@@ -364,7 +381,7 @@ function settingsContent(){
     <div class="section-head"><h2>安装与保护</h2></div>
     <section class="card settings-section">
       <button class="setting-row" data-action="storage-persist"><span class="mini-icon">${icon('shield')}</span><span class="setting-copy"><span class="setting-title">本地数据保护</span><span class="setting-sub ${protection.cls}">${protection.label}</span></span><span class="chevron">${icon('chevron')}</span></button>
-      <button class="setting-row" data-action="check-update"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">程序更新</span><span class="setting-sub">当前 ${APP_VERSION} · 联网自动检查，也可点此立即检查</span></span><span class="chevron">${icon('chevron')}</span></button>
+      <button class="setting-row" data-action="check-update"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">程序更新</span><span class="setting-sub">当前 ${APP_VERSION} · 启动优先本地，可在这里手动检查</span></span><span class="chevron">${icon('chevron')}</span></button>
     </section>
     <section class="card"><div class="helper">主屏幕 Airplane 与 Safari 网页在 iOS 上属于不同的本地数据空间。长期使用请固定从主屏幕 Airplane 进入；程序更新只替换程序文件，不会重建余额、预算、分类或账单。人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。</div></section>
     <button class="danger-button" data-action="reset">清空本机全部数据</button>
@@ -734,8 +751,8 @@ function openCategoryManager(initialType='expense',options={}){
     document.getElementById('catExpense').onclick=()=>{type='expense';draw();};
     document.getElementById('catIncome').onclick=()=>{type='income';draw();};
     const list=data.categories.filter(c=>c.type===type).sort((a,b)=>a.order-b.order);
-    document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序"><span></span><span></span><span></span></button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)} ${c.custom?'':'<span class="pill static-pill">默认</span>'}</span><span class="category-row-actions"><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button>${c.custom?`<button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button>`:''}</span></div>`).join('');
-    document.querySelectorAll('[data-toggle-cat]').forEach(b=>b.onclick=()=>{const c=categoryById(b.dataset.toggleCat);c.hidden=!c.hidden;saveData();draw();});
+    document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序"><span></span><span></span><span></span></button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)}</span><span class="category-row-actions"><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button><button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button></span></div>`).join('');
+    document.querySelectorAll('[data-toggle-cat]').forEach(b=>b.onclick=()=>{const c=categoryById(b.dataset.toggleCat);if(!c)return;if(!c.hidden&&data.categories.filter(x=>x.type===type&&!x.hidden).length<=1){toast('至少保留一个可用分类');return;}c.hidden=!c.hidden;saveData();draw();});
     document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),{cancelLabel:'返回',onBack:draw,onDone:draw}));
     document.querySelectorAll('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCategory(b.dataset.removeCat,type,draw));
     document.getElementById('addCategory').onclick=()=>openCategoryEditor(type,null,{cancelLabel:'返回',onBack:draw,onDone:draw});
@@ -795,7 +812,7 @@ function bindCategoryReorder(type){
 
 function openCategoryEditor(type,existing=null,options={}){
   let selectedIcon=existing?.icon||(type==='expense'?'coffee':'coins'); let selectedColor=existing?.color||(type==='expense'?'#EFA06D':'#4CB487');
-  const iconOptions=['food','car','bag','game','house','book','health','travel','gift','coffee','briefcase','laptop','award','coins','trend','refund','more'];
+  const iconOptions=['food','coffee','car','bus','train','parking','bag','clothes','game','house','building','water','bolt','flame','washing','phone','wifi','subscription','package','wrench','scissors','paw','book','health','travel','gift','briefcase','laptop','award','coins','trend','refund','more'];
   const colors=['#F29B69','#E8B45F','#72B77A','#65BFA3','#6FA8DC','#7797DB','#AA82E3','#E77BA6','#E78378','#9AA09A','#5F9FE5','#4CB487'];
   openModal(`${modalHead(existing?'编辑分类':'添加分类','保存',options.cancelLabel||'取消')}<section class="card input-card"><label>分类名称</label><input id="catName" class="large-input" maxlength="8" placeholder="例如 咖啡" value="${escapeHTML(existing?.name||'')}"></section><div class="section-head" style="margin-top:14px"><h2>图标</h2></div><section class="card"><div class="icon-palette" id="iconPalette"></div></section><div class="section-head"><h2>颜色</h2></div><section class="card"><div class="color-palette" id="colorPalette"></div></section>`,{onDismiss:options.onBack||null});
   const draw=()=>{
@@ -813,9 +830,13 @@ function openCategoryEditor(type,existing=null,options={}){
 }
 
 function removeCategory(id,type,onDone){
-  const c=categoryById(id); if(!c?.custom) return;
-  if(!confirm(`删除自定义分类“${c.name}”？历史账单会继续保留原来的分类名称和图标。`)) return;
-  data.categories=data.categories.filter(x=>x.id!==id);saveData();onDone?.();toast('分类已删除，历史账单已保留');
+  const c=categoryById(id); if(!c)return;
+  if(data.categories.filter(x=>x.type===type).length<=1){toast('至少保留一个分类');return;}
+  if(!confirm(`删除分类“${c.name}”？历史账单会继续保留原来的分类名称和图标。`)) return;
+  data.categories=data.categories.filter(x=>x.id!==id);
+  if(data.prefs.lastExpenseCategoryId===id)data.prefs.lastExpenseCategoryId=null;
+  if(data.prefs.lastIncomeCategoryId===id)data.prefs.lastIncomeCategoryId=null;
+  saveData();onDone?.();toast('分类已删除，历史账单已保留');
 }
 function downloadBlob(filename,content,type){ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
 function exportJSON(){ const backup={app:'Airplane',exportedAt:new Date().toISOString(),data}; downloadBlob(`Airplane-backup-${localISO()}.json`,JSON.stringify(backup,null,2),'application/json');toast('完整备份已导出'); }
@@ -848,47 +869,83 @@ document.getElementById('importInput').addEventListener('change', async e=>{
 });
 
 let swReloading=false;
-let pendingAppReload=false;
 let airplaneRegistration=null;
-function flushPendingAppReload(){
-  if(!pendingAppReload||swReloading)return;
-  const modalOpen=modalBodyLocked||!!document.querySelector('#modalRoot .modal');
-  const editingField=document.activeElement?.matches?.('input,textarea,select');
-  if(modalOpen||editingField)return;
-  pendingAppReload=false;
+let updateToastShown=false;
+const UPDATE_CHECK_KEY='airplane-last-update-check-v1';
+const UPDATE_CHECK_INTERVAL_MS=12*60*60*1000;
+
+function activateWaitingServiceWorker(){
+  const waiting=airplaneRegistration?.waiting;
+  if(!waiting){toast('新版尚未准备完成');return;}
   swReloading=true;
-  window.location.reload();
+  toast('正在更新 Airplane…',{duration:1800});
+  waiting.postMessage({type:'SKIP_WAITING'});
 }
-function handleUpdatedServiceWorker(){
-  if(swReloading)return;
-  const modalOpen=modalBodyLocked||!!document.querySelector('#modalRoot .modal');
-  const editingField=document.activeElement?.matches?.('input,textarea,select');
-  if(modalOpen||editingField){
-    pendingAppReload=true;
-    toast('新版已就绪，完成当前操作后自动更新',{duration:2800});
-    return;
-  }
-  pendingAppReload=true;
-  flushPendingAppReload();
+
+function showUpdateAvailable(){
+  if(updateToastShown)return;
+  updateToastShown=true;
+  toast('发现 Airplane 新版本',{actionLabel:'更新',duration:12000,onAction:activateWaitingServiceWorker});
 }
+
+function observeServiceWorkerRegistration(registration){
+  if(!registration)return;
+  if(registration.waiting){showUpdateAvailable();return;}
+  registration.addEventListener('updatefound',()=>{
+    const worker=registration.installing;
+    if(!worker)return;
+    worker.addEventListener('statechange',()=>{
+      if(worker.state==='installed'&&navigator.serviceWorker.controller)showUpdateAvailable();
+    });
+  });
+}
+
 async function checkForAppUpdate(showToast=false){
-  if(!('serviceWorker' in navigator)){if(showToast)toast('当前环境不支持自动更新');return;}
+  if(!('serviceWorker' in navigator)){if(showToast)toast('当前环境不支持程序更新');return;}
   try{
     const registration=airplaneRegistration||await navigator.serviceWorker.getRegistration('./');
     if(!registration){if(showToast)toast('更新服务尚未就绪');return;}
+    airplaneRegistration=registration;
+    observeServiceWorkerRegistration(registration);
+    updateToastShown=false;
     await registration.update();
-    if(showToast)toast(registration.waiting||registration.installing?'发现新版，正在切换':'已检查，当前已是最新版本');
-  }catch(err){console.warn('Airplane update check failed',err);if(showToast)toast('暂时无法连接更新服务器，继续使用本地版本');}
+    localStorage.setItem(UPDATE_CHECK_KEY,String(Date.now()));
+    if(registration.waiting){showUpdateAvailable();return;}
+    if(showToast){
+      if(registration.installing){toast('发现新版，正在后台准备…',{duration:2600});}
+      else toast('已检查，当前已是最新版本');
+    }
+  }catch(err){
+    console.warn('Airplane update check failed',err);
+    if(showToast)toast('暂时无法连接更新服务器，继续使用本地版本');
+  }
 }
+
+function scheduleBackgroundUpdateCheck(){
+  const last=Number(localStorage.getItem(UPDATE_CHECK_KEY)||0);
+  if(Date.now()-last<UPDATE_CHECK_INTERVAL_MS)return;
+  // Never put update traffic on the critical launch path. The installed shell
+  // renders first; a low-priority check happens only after the app is usable.
+  setTimeout(()=>{
+    if(document.visibilityState==='visible'&&navigator.onLine!==false)checkForAppUpdate(false);
+  },6000);
+}
+
 async function registerAirplaneServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   try{
-    navigator.serviceWorker.addEventListener('controllerchange',handleUpdatedServiceWorker);
-    airplaneRegistration=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
-    await airplaneRegistration.update();
-    document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkForAppUpdate(false);});
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(!swReloading)return;
+      window.location.reload();
+    });
+    airplaneRegistration=await navigator.serviceWorker.getRegistration('./');
+    if(!airplaneRegistration){
+      airplaneRegistration=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
+    }
+    observeServiceWorkerRegistration(airplaneRegistration);
+    scheduleBackgroundUpdateCheck();
   }catch(err){
-    console.warn('Airplane Service Worker registration/update failed',err);
+    console.warn('Airplane Service Worker setup failed',err);
   }
 }
 

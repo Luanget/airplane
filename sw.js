@@ -1,4 +1,4 @@
-const CACHE = "airplane-shell-v12";
+const CACHE = "airplane-shell-v13";
 const SHELL = [
   "./",
   "./index.html",
@@ -15,6 +15,8 @@ self.addEventListener("install", event => {
   event.waitUntil(
     caches.open(CACHE)
       .then(cache => cache.addAll(SHELL))
+      // One-time bridge from pre-0.7.6 workers, whose updater cannot activate a waiting worker.
+      // Future releases can remain waiting and be activated only after the user taps Update.
       .then(() => self.skipWaiting())
   );
 });
@@ -30,35 +32,13 @@ self.addEventListener("activate", event => {
   );
 });
 
-async function networkFirst(request, fallback){
+async function cacheFirst(request, fallback){
   const cache=await caches.open(CACHE);
-  const cachedFallback = async () =>
-    (await caches.match(request)) ||
-    (fallback ? await caches.match(fallback) : undefined) ||
-    Response.error();
-
+  const cached=(await cache.match(request)) || (fallback ? await cache.match(fallback) : undefined);
+  if(cached)return cached;
   try{
     const response=await fetch(request,{cache:"no-store"});
-    // A suspended/expired host may still answer with 401/403/404 instead of
-    // behaving like an offline network. Never replace a working installed app
-    // with such an error page: keep using the last known-good local shell.
-    if(!response || !response.ok) return await cachedFallback();
-    await cache.put(request,response.clone());
-    return response;
-  }catch(err){
-    return await cachedFallback();
-  }
-}
-
-async function cacheFirst(request){
-  const cached=await caches.match(request);
-  if(cached) return cached;
-  try{
-    const response=await fetch(request);
-    if(response && response.ok){
-      const cache=await caches.open(CACHE);
-      cache.put(request,response.clone());
-    }
+    if(response&&response.ok)await cache.put(request,response.clone());
     return response;
   }catch(err){
     return Response.error();
@@ -68,21 +48,17 @@ async function cacheFirst(request){
 self.addEventListener("fetch", event => {
   const request=event.request;
   if(request.method !== "GET") return;
-
   const url=new URL(request.url);
   if(url.origin !== self.location.origin) return;
 
-  // Navigations and executable app files prefer the network while online, so a
-  // Home Screen installation receives new program versions without touching its
-  // own local ledger. Offline, the last known-good shell is used.
+  // Installed Airplane always starts from the local shell. Program-version
+  // discovery is handled separately by Service Worker update checks, so launch
+  // never waits for the hosting server.
   const isNavigation=request.mode === "navigate";
-  const isLiveAsset=/\/(?:index\.html|app\.js|styles\.css|manifest\.webmanifest)$/.test(url.pathname);
+  if(isNavigation) event.respondWith(cacheFirst(request,"./index.html"));
+  else event.respondWith(cacheFirst(request));
+});
 
-  if(isNavigation){
-    event.respondWith(networkFirst(request,"./index.html"));
-  }else if(isLiveAsset){
-    event.respondWith(networkFirst(request));
-  }else{
-    event.respondWith(cacheFirst(request));
-  }
+self.addEventListener("message", event => {
+  if(event.data?.type === "SKIP_WAITING") self.skipWaiting();
 });
