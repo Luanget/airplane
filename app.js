@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.10';
+const APP_VERSION = '0.7.11';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -484,10 +484,9 @@ function bindSheetSwipe(modal,backdrop){
   };
   const begin=(point,target,force=false)=>{
     if(target?.closest?.('.drag-handle'))return false;
-    // Do not arm sheet dismissal from interactive controls. On iOS a tiny finger
-    // drift can otherwise turn a tap into a downward gesture and cancel the click.
-    // Blank/card areas still support whole-sheet pull-down dismissal.
-    if(!force && target?.closest?.('button,input,textarea,select,a,label,[role="button"]'))return false;
+    // Arm the gesture from the whole sheet, including controls. Nothing is
+    // prevented on touchstart, so a normal tap still behaves like a tap. Only
+    // after a clearly downward movement do we take over and dismiss the sheet.
     const p=pointXY(point);startX=p.x;startY=lastY=p.y;tracking=true;dragging=false;forceHandle=force;
     if(force)beginDrag();
     return true;
@@ -495,11 +494,20 @@ function bindSheetSwipe(modal,backdrop){
   const move=point=>{
     if(!tracking)return false;
     const p=pointXY(point);lastY=p.y;
+
+    if(!dragging && !forceHandle && modal.scrollTop>1){
+      // Let native scrolling consume the gesture until the sheet reaches its
+      // top edge. Rebase the origin continuously so dismissal can hand off
+      // smoothly if the user keeps pulling downward after reaching the top.
+      startX=p.x;startY=lastY=p.y;
+      return false;
+    }
+
     const dy=lastY-startY,dx=p.x-startX;
     if(!dragging){
-      // Normal upward movement keeps scrolling the sheet. A downward gesture from
-      // the top of the sheet becomes an iOS-style interactive dismissal.
-      if(dy<14 || dy<Math.abs(dx)*1.2)return false;
+      // A small movement remains a normal tap/scroll. Once the gesture is
+      // clearly downward and mostly vertical, the sheet itself follows it.
+      if(dy<10 || dy<Math.abs(dx)*1.15)return false;
       if(!beginDrag())return false;
     }
     const down=Math.max(0,dy);
