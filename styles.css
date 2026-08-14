@@ -447,3 +447,19 @@ body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
   color:var(--muted);
 }
 .update-banner-close svg { width:18px; height:18px; }
+
+/* 0.7.14: month swipes, richer statistics and balance-adjustment history. */
+.month-swipe-view { touch-action:pan-y; will-change:transform; }
+.bar { border:0; padding:0; cursor:pointer; touch-action:manipulation; transition:filter .12s ease, transform .12s ease; }
+.bar.selected { filter:brightness(.82); transform:scaleX(1.08); }
+.bar-detail { min-height:20px; margin-top:10px; color:var(--muted); font-size:11px; text-align:center; font-variant-numeric:tabular-nums; }
+.balance-history-list { padding:0; overflow:hidden; }
+.balance-history-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 14px; border-bottom:1px solid var(--line); }
+.balance-history-row:last-child { border-bottom:0; }
+.balance-history-row > div { min-width:0; display:flex; flex-direction:column; gap:4px; }
+.balance-history-row strong { font-size:15px; font-variant-numeric:tabular-nums; }
+.balance-history-row small { color:var(--muted); font-size:11px; }
+.history-delete { width:42px; height:42px; flex:0 0 42px; display:grid; place-items:center; color:var(--red); border-radius:12px; touch-action:manipulation; }
+.history-delete:active { background:color-mix(in srgb,var(--red) 10%,transparent); }
+.history-delete svg { width:19px; height:19px; }
+.balance-history-help { margin:10px 4px 0; }
