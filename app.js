@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.7';
+const APP_VERSION = '0.7.8';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -485,6 +485,10 @@ function bindSheetSwipe(modal,backdrop){
   };
   const begin=(point,target,force=false)=>{
     if(target?.closest?.('.drag-handle'))return false;
+    // Do not arm sheet dismissal from interactive controls. On iOS a tiny finger
+    // drift can otherwise turn a tap into a downward gesture and cancel the click.
+    // Blank/card areas still support whole-sheet pull-down dismissal.
+    if(!force && target?.closest?.('button,input,textarea,select,a,label,[role="button"]'))return false;
     const p=pointXY(point);startX=p.x;startY=lastY=p.y;tracking=true;dragging=false;forceHandle=force;
     if(force)beginDrag();
     return true;
@@ -496,7 +500,7 @@ function bindSheetSwipe(modal,backdrop){
     if(!dragging){
       // Normal upward movement keeps scrolling the sheet. A downward gesture from
       // the top of the sheet becomes an iOS-style interactive dismissal.
-      if(dy<8 || dy<Math.abs(dx)*1.15)return false;
+      if(dy<14 || dy<Math.abs(dx)*1.2)return false;
       if(!beginDrag())return false;
     }
     const down=Math.max(0,dy);
@@ -704,7 +708,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   let dirty=!!restored;
   const captureDraft=()=>({type,selectedCategoryId:selected,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div></div><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
   const updateAmountPreview=()=>{
@@ -922,7 +926,10 @@ let airplaneRegistration=null;
 let updateToastShown=false;
 let pendingUpdateWorker=null;
 const UPDATE_CHECK_KEY='airplane-last-update-check-v1';
-const UPDATE_CHECK_INTERVAL_MS=12*60*60*1000;
+const UPDATE_ACTIVE_INTERVAL_MS=15*60*1000;
+const UPDATE_RESUME_INTERVAL_MS=5*60*1000;
+let updateIntervalTimer=null;
+const observedRegistrations=new WeakSet();
 
 function activateWaitingServiceWorker(){
   const worker=airplaneRegistration?.waiting||pendingUpdateWorker;
@@ -956,7 +963,9 @@ function showUpdateAvailable(worker=null){
 
 function observeServiceWorkerRegistration(registration){
   if(!registration)return;
-  if(registration.waiting){showUpdateAvailable(registration.waiting);return;}
+  if(registration.waiting)showUpdateAvailable(registration.waiting);
+  if(observedRegistrations.has(registration))return;
+  observedRegistrations.add(registration);
   registration.addEventListener('updatefound',()=>{
     const worker=registration.installing;
     if(!worker)return;
@@ -987,14 +996,26 @@ async function checkForAppUpdate(showToast=false){
   }
 }
 
+function lastUpdateCheckAt(){
+  return Number(localStorage.getItem(UPDATE_CHECK_KEY)||0);
+}
+function backgroundUpdateIfDue(minInterval=UPDATE_ACTIVE_INTERVAL_MS){
+  if(document.visibilityState!=='visible'||navigator.onLine===false)return;
+  if(Date.now()-lastUpdateCheckAt()<minInterval)return;
+  checkForAppUpdate(false);
+}
 function scheduleBackgroundUpdateCheck(){
-  const last=Number(localStorage.getItem(UPDATE_CHECK_KEY)||0);
-  if(Date.now()-last<UPDATE_CHECK_INTERVAL_MS)return;
-  // Never put update traffic on the critical launch path. The installed shell
-  // renders first; a low-priority check happens only after the app is usable.
-  setTimeout(()=>{
-    if(document.visibilityState==='visible'&&navigator.onLine!==false)checkForAppUpdate(false);
-  },6000);
+  // Launch always renders from the local shell first. The first network check is
+  // deferred, so update discovery never sits on the startup critical path.
+  setTimeout(()=>backgroundUpdateIfDue(UPDATE_RESUME_INTERVAL_MS),6000);
+  if(updateIntervalTimer)clearInterval(updateIntervalTimer);
+  updateIntervalTimer=setInterval(()=>backgroundUpdateIfDue(UPDATE_ACTIVE_INTERVAL_MS),UPDATE_ACTIVE_INTERVAL_MS);
+}
+function bindForegroundUpdateChecks(){
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible')setTimeout(()=>backgroundUpdateIfDue(UPDATE_RESUME_INTERVAL_MS),700);
+  });
+  window.addEventListener('online',()=>setTimeout(()=>backgroundUpdateIfDue(UPDATE_RESUME_INTERVAL_MS),700));
 }
 
 async function registerAirplaneServiceWorker(){
@@ -1016,6 +1037,6 @@ async function registerAirplaneServiceWorker(){
   }
 }
 
-window.addEventListener('load',registerAirplaneServiceWorker);
+window.addEventListener('load',()=>{registerAirplaneServiceWorker();bindForegroundUpdateChecks();});
 render();
 ensurePersistentStorage();

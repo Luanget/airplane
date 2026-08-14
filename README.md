@@ -1,10 +1,10 @@
-# Airplane PWA 0.7.7
+# Airplane PWA 0.7.8
 
 - 预算、初始余额、余额调整与记账金额统一支持 + − × ÷ 表达式和快捷运算按钮。
 - 记账页移除右上角保存，把主“完成/保存修改”按钮前移到分类与日期之后；时间和备注放到按钮下方作为可选信息。
 - iPhone 底部 Sheet 支持从卡片任意位置向下拖动关闭；只有内容滚动到顶部且手势明确向下时才接管，正常滚动和点击不受影响。
 - 修复“点击更新后提示新版尚未准备完成”的竞态：直接跟踪已安装的新 Service Worker，旧桥接版本已自动生效时也不会误报失败。
-- 0.7.7 起 Service Worker 不再 install 时自动 skipWaiting；发现新版后等待用户点击更新，设置里也可手动检查。
+- 0.7.8 起 Service Worker 不再 install 时自动 skipWaiting；发现新版后等待用户点击更新，设置里也可手动检查。
 - 启动仍然本地缓存优先，后台检查不会阻塞首页打开。
 - 数据键保持 `airplane-pwa-v1`，已有数据无感继承。
-- Service Worker cache: `airplane-shell-v14`.
+- Service Worker cache: `airplane-shell-v15`.
