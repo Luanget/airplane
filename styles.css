@@ -390,3 +390,13 @@ body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
 .recover-card .empty-icon { width:58px;height:58px;margin:0 auto 12px;border-radius:18px;display:grid;place-items:center;background:var(--surface-2);color:var(--green); }
 .recover-card h3 { margin:0 0 7px;font-size:17px; }
 .recover-card p { margin:0 0 16px;color:var(--muted);font-size:13px;line-height:1.6; }
+
+
+/* 0.7.7: quick money expressions and faster transaction completion. */
+.compact-preview { margin-top:7px; }
+.compact-operators { grid-template-columns:repeat(4,40px); gap:8px; margin-top:2px; justify-content:start; }
+.compact-operators button { width:40px; height:34px; font-size:16px; }
+.transaction-date-card { margin-top:12px; }
+.transaction-submit { width:100%; margin-top:12px; }
+.optional-details-label { margin:15px 4px 6px; color:var(--muted); font-size:11px; font-weight:650; letter-spacing:.02em; }
+.transaction-optional-card { margin-top:0; }

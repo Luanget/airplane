@@ -1,4 +1,4 @@
-const CACHE = "airplane-shell-v13";
+const CACHE = "airplane-shell-v14";
 const SHELL = [
   "./",
   "./index.html",
@@ -15,9 +15,6 @@ self.addEventListener("install", event => {
   event.waitUntil(
     caches.open(CACHE)
       .then(cache => cache.addAll(SHELL))
-      // One-time bridge from pre-0.7.6 workers, whose updater cannot activate a waiting worker.
-      // Future releases can remain waiting and be activated only after the user taps Update.
-      .then(() => self.skipWaiting())
   );
 });
 

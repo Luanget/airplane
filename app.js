@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.6';
+const APP_VERSION = '0.7.7';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -461,67 +461,85 @@ function closeModal({runDismiss=true,reason='dismiss'}={}){
   if(runDismiss&&cb) cb(reason);
   requestAnimationFrame(flushPendingAppReload);
 }
-function modalHead(title,saveLabel='保存',cancelLabel='取消'){ return `<div class="modal-head"><button class="cancel" data-close>${cancelLabel}</button><h2>${title}</h2><button class="save" id="modalSave">${saveLabel}</button></div>`; }
+function modalHead(title,saveLabel='保存',cancelLabel='取消'){ const right=saveLabel===null?'<span></span>':`<button class="save" id="modalSave">${saveLabel}</button>`; return `<div class="modal-head"><button class="cancel" data-close>${cancelLabel}</button><h2>${title}</h2>${right}</div>`; }
 
 function bindSheetSwipe(modal,backdrop){
   const grabber=modal.querySelector('.modal-grabber');
-  if(!grabber) return;
-  let startY=0,lastY=0,startAt=0,dragging=false;
-  const yOf=p=>Number.isFinite(p?.screenY)?p.screenY:p?.clientY||0;
+  let startX=0,startY=0,lastY=0,startAt=0,tracking=false,dragging=false,forceHandle=false;
+  const pointXY=p=>({x:Number.isFinite(p?.screenX)?p.screenX:p?.clientX||0,y:Number.isFinite(p?.screenY)?p.screenY:p?.clientY||0});
   const reset=()=>{
+    tracking=false;dragging=false;forceHandle=false;
     modal.style.transition='transform .18s ease-out';
     backdrop.style.transition='background .18s ease-out';
     modal.style.transform='';backdrop.style.background='';
     setTimeout(()=>{modal.style.transition='';backdrop.style.transition='';},190);
   };
-  const begin=point=>{
+  const beginDrag=()=>{
+    if(dragging)return true;
+    if(!forceHandle && modal.scrollTop>1)return false;
     const active=document.activeElement;
     if(active&&modal.contains(active)&&active.matches('input,textarea,select')) active.blur();
-    dragging=true;startY=lastY=yOf(point);startAt=performance.now();
+    dragging=true;startAt=performance.now();
     modal.style.transition='none';backdrop.style.transition='none';
+    return true;
+  };
+  const begin=(point,target,force=false)=>{
+    if(target?.closest?.('.drag-handle'))return false;
+    const p=pointXY(point);startX=p.x;startY=lastY=p.y;tracking=true;dragging=false;forceHandle=force;
+    if(force)beginDrag();
+    return true;
   };
   const move=point=>{
-    if(!dragging)return;
-    lastY=yOf(point);const dy=Math.max(0,lastY-startY);
-    modal.style.transform=`translateY(${dy}px)`;
-    backdrop.style.background=`rgba(15,18,15,${Math.max(.08,.38-dy/700)})`;
+    if(!tracking)return false;
+    const p=pointXY(point);lastY=p.y;
+    const dy=lastY-startY,dx=p.x-startX;
+    if(!dragging){
+      // Normal upward movement keeps scrolling the sheet. A downward gesture from
+      // the top of the sheet becomes an iOS-style interactive dismissal.
+      if(dy<8 || dy<Math.abs(dx)*1.15)return false;
+      if(!beginDrag())return false;
+    }
+    const down=Math.max(0,dy);
+    modal.style.transform=`translateY(${down}px)`;
+    backdrop.style.background=`rgba(15,18,15,${Math.max(.08,.38-down/700)})`;
+    return true;
   };
   const finish=()=>{
-    if(!dragging)return;
-    dragging=false;
+    if(!tracking)return;
+    if(!dragging){tracking=false;forceHandle=false;return;}
+    tracking=false;dragging=false;
     const dy=Math.max(0,lastY-startY);
     const velocity=dy/Math.max(1,performance.now()-startAt);
-    if(dy>Math.min(96,modal.clientHeight*.14)||velocity>.58){
+    if(dy>Math.min(92,modal.clientHeight*.13)||velocity>.56){
       modal.style.transition='transform .16s ease-in';
       modal.style.transform='translateY(110%)';
       setTimeout(()=>closeModal({reason:'swipe'}),140);
     }else reset();
   };
 
-  // iPhone/Home Screen PWA: use Touch Events directly. Pointer capture can be
-  // cancelled while the software keyboard is being dismissed.
-  grabber.addEventListener('touchstart',e=>{
+  // The whole sheet can be pulled down, not only the grabber. We do not call
+  // preventDefault until the gesture is clearly downward and the sheet is at
+  // scrollTop 0, so normal scrolling and taps remain natural.
+  modal.addEventListener('touchstart',e=>{
     if(e.touches.length!==1)return;
-    begin(e.touches[0]);e.preventDefault();
+    const force=!!e.target.closest?.('.modal-grabber');
+    if(begin(e.touches[0],e.target,force)&&force)e.preventDefault();
   },{passive:false});
-  grabber.addEventListener('touchmove',e=>{
-    if(!dragging||e.touches.length!==1)return;
-    move(e.touches[0]);e.preventDefault();
+  modal.addEventListener('touchmove',e=>{
+    if(e.touches.length!==1||!tracking)return;
+    if(move(e.touches[0]))e.preventDefault();
   },{passive:false});
-  grabber.addEventListener('touchend',e=>{finish();e.preventDefault();},{passive:false});
-  grabber.addEventListener('touchcancel',finish,{passive:true});
+  modal.addEventListener('touchend',finish,{passive:true});
+  modal.addEventListener('touchcancel',()=>{if(dragging)reset();else{tracking=false;forceHandle=false;}},{passive:true});
 
-  // Mouse/pen fallback for desktop testing. Touch is handled above only once.
-  grabber.addEventListener('pointerdown',e=>{
+  // Desktop/pen testing keeps the explicit grabber affordance.
+  grabber?.addEventListener('pointerdown',e=>{
     if(e.pointerType==='touch')return;
-    begin(e);grabber.setPointerCapture?.(e.pointerId);e.preventDefault();
+    if(begin(e,e.target,true)){grabber.setPointerCapture?.(e.pointerId);e.preventDefault();}
   });
-  grabber.addEventListener('pointermove',e=>{
-    if(e.pointerType==='touch'||!dragging)return;
-    move(e);e.preventDefault();
-  });
-  grabber.addEventListener('pointerup',e=>{if(e.pointerType!=='touch')finish();});
-  grabber.addEventListener('pointercancel',e=>{if(e.pointerType!=='touch')finish();});
+  grabber?.addEventListener('pointermove',e=>{if(e.pointerType!=='touch'&&tracking){move(e);e.preventDefault();}});
+  grabber?.addEventListener('pointerup',e=>{if(e.pointerType!=='touch')finish();});
+  grabber?.addEventListener('pointercancel',e=>{if(e.pointerType!=='touch')reset();});
 }
 
 function openMonthModal(){
@@ -542,23 +560,23 @@ function shiftMonth(delta){
 
 function openBudgetModal(){
   const existing=budgetFor(ui.selectedMonth);
-  openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}支出预算</label><input id="budgetInput" class="large-input" inputmode="decimal" placeholder="例如 2000" value="${existing||''}"><div class="helper">每个月可以单独设置和修改。当前月会按“剩余预算 ÷ 包含今天在内的剩余天数”动态计算“今日不宜超过”；收入不会自动提高预算。</div></section>`);
-  const input=document.getElementById('budgetInput');
-  document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)||v<0){toast('请输入有效预算');return;} data.budgets[ui.selectedMonth]=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('月预算已保存');};
+  openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}支出预算</label>${moneyInputMarkup('budgetInput',existing||'','例如 2000','budget-op')}<div class="helper">支持 + − × ÷。每个月可以单独设置和修改。当前月会按“剩余预算 ÷ 包含今天在内的剩余天数”动态计算“今日不宜超过”；收入不会自动提高预算。</div></section>`);
+  const readValue=bindMoneyExpressionInput('budgetInput','budget-op');
+  document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok||v<0){toast('请输入有效预算或算式');return;}data.budgets[ui.selectedMonth]=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('月预算已保存');};
 }
 
 function openBalanceModal(){
   const initialized=hasInitialBalance();
   const current=currentBalance();
   if(!initialized){
-    openModal(`${modalHead('设置初始余额')}<section class="card input-card"><label>开始使用 Airplane 时已有的总余额</label><input id="balanceInput" class="large-input" inputmode="decimal" placeholder="例如 10000"><div class="helper">初始余额只用于建立起点。之后收入会增加余额、支出会减少余额；两者都不会改变你手动设置的月预算。</div></section>`);
-    const input=document.getElementById('balanceInput');
-    document.getElementById('modalSave').onclick=()=>{const v=Number(input.value.replace(',','.')); if(!Number.isFinite(v)){toast('请输入有效余额');return;} data.prefs.initialBalance=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('初始余额已保存');};
+    openModal(`${modalHead('设置初始余额')}<section class="card input-card"><label>开始使用 Airplane 时已有的总余额</label>${moneyInputMarkup('balanceInput','','例如 10000','balance-op')}<div class="helper">支持 + − × ÷。初始余额只用于建立起点。之后收入会增加余额、支出会减少余额；两者都不会改变你手动设置的月预算。</div></section>`);
+    const readValue=bindMoneyExpressionInput('balanceInput','balance-op');
+    document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok){toast('请输入有效余额或算式');return;}data.prefs.initialBalance=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('初始余额已保存');};
     return;
   }
-  openModal(`${modalHead('调整当前余额')}<section class="card input-card"><label>Airplane 当前余额</label><div class="budget-amount">${amount(current)}</div><label style="margin-top:8px">调整为</label><input id="balanceInput" class="large-input" inputmode="decimal" value="${current.toFixed(2)}"><div class="helper">适合补记遗漏造成的余额偏差。余额调整不计入收入、支出，也不会占用月预算。</div></section>`);
-  const input=document.getElementById('balanceInput');
-  document.getElementById('modalSave').onclick=()=>{const target=Number(input.value.replace(',','.')); if(!Number.isFinite(target)){toast('请输入有效余额');return;} const delta=Math.round((target-current)*100)/100; if(Math.abs(delta)>=0.01)data.balanceAdjustments.push({id:uid('bal'),delta,targetBalance:Math.round(target*100)/100,createdAt:new Date().toISOString()});saveData();closeModal({runDismiss:false});render();toast(Math.abs(delta)>=0.01?'当前余额已调整':'余额没有变化');};
+  openModal(`${modalHead('调整当前余额')}<section class="card input-card"><label>Airplane 当前余额</label><div class="budget-amount">${amount(current)}</div><label style="margin-top:8px">调整为</label>${moneyInputMarkup('balanceInput',current.toFixed(2),'例如 10000','balance-op')}<div class="helper">支持 + − × ÷。适合补记遗漏造成的余额偏差。余额调整不计入收入、支出，也不会占用月预算。</div></section>`);
+  const readValue=bindMoneyExpressionInput('balanceInput','balance-op');
+  document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),target=parsed.value;if(!parsed.ok){toast('请输入有效余额或算式');return;}const delta=Math.round((target-current)*100)/100;if(Math.abs(delta)>=0.01)data.balanceAdjustments.push({id:uid('bal'),delta,targetBalance:Math.round(target*100)/100,createdAt:new Date().toISOString()});saveData();closeModal({runDismiss:false});render();toast(Math.abs(delta)>=0.01?'当前余额已调整':'余额没有变化');};
 }
 
 function preferredCategoryId(type){
@@ -645,6 +663,38 @@ function parseAmountExpression(raw=''){
   }
 }
 
+function moneyOperatorsMarkup(group='money-op'){
+  return `<div class="amount-operators compact-operators" aria-label="快捷计算"><button type="button" data-${group}="+">＋</button><button type="button" data-${group}="−">−</button><button type="button" data-${group}="×">×</button><button type="button" data-${group}="÷">÷</button></div>`;
+}
+function moneyInputMarkup(id,value='',placeholder='例如 2000',group='money-op'){
+  return `<input id="${id}" class="large-input" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="${placeholder}" value="${escapeHTML(String(value??''))}"><div id="${id}Preview" class="amount-calc-preview compact-preview" aria-live="polite"></div>${moneyOperatorsMarkup(group)}`;
+}
+function bindMoneyExpressionInput(inputId,group='money-op'){
+  const input=document.getElementById(inputId),preview=document.getElementById(`${inputId}Preview`);
+  if(!input)return ()=>({ok:false,value:NaN});
+  const update=()=>{
+    const raw=input.value||'',normalized=normalizeAmountExpression(raw);
+    const hasCalculation=/[+*/]/.test(normalized)||/\d-/.test(normalized);
+    const parsed=parseAmountExpression(raw);
+    if(!hasCalculation){preview.textContent='';preview.classList.remove('visible','invalid');return parsed;}
+    if(parsed.ok){preview.textContent=`= ${amount(parsed.value)}`;preview.classList.add('visible');preview.classList.remove('invalid');}
+    else{preview.textContent='继续输入算式';preview.classList.add('visible','invalid');}
+    return parsed;
+  };
+  input.addEventListener('input',update);input.addEventListener('change',update);
+  document.querySelectorAll(`[data-${group}]`).forEach(button=>{
+    button.addEventListener('pointerdown',e=>e.preventDefault());
+    button.addEventListener('click',()=>{
+      const op=button.getAttribute(`data-${group}`)||'';
+      const start=input.selectionStart??input.value.length,end=input.selectionEnd??start;
+      input.setRangeText(op,start,end,'end');update();
+      try{input.focus({preventScroll:true});}catch{input.focus();}
+    });
+  });
+  update();
+  return ()=>parseAmountExpression(input.value);
+}
+
 function openTransactionModal(existing=null,suppliedDraft=null){
   const restored=suppliedDraft||(!existing?loadTransactionDraft():null);
   let type=restored?.type||existing?.type||'expense';
@@ -654,7 +704,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   let dirty=!!restored;
   const captureDraft=()=>({type,selectedCategoryId:selected,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔')}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div><button id="txSubmit" class="primary-button" style="margin-top:14px">${existing?'保存修改':'完成'}</button>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div></div><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
   const updateAmountPreview=()=>{
@@ -715,7 +765,6 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     clearTransactionDraft();saveData();closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
   };
   document.getElementById('txSubmit').onclick=submit;
-  document.getElementById('modalSave').onclick=submit;
   document.getElementById('txDelete')?.addEventListener('click',()=>{closeModal({runDismiss:false});deleteTransaction(existing.id);});
 }
 
@@ -871,18 +920,35 @@ document.getElementById('importInput').addEventListener('change', async e=>{
 let swReloading=false;
 let airplaneRegistration=null;
 let updateToastShown=false;
+let pendingUpdateWorker=null;
 const UPDATE_CHECK_KEY='airplane-last-update-check-v1';
 const UPDATE_CHECK_INTERVAL_MS=12*60*60*1000;
 
 function activateWaitingServiceWorker(){
-  const waiting=airplaneRegistration?.waiting;
-  if(!waiting){toast('新版尚未准备完成');return;}
-  swReloading=true;
-  toast('正在更新 Airplane…',{duration:1800});
-  waiting.postMessage({type:'SKIP_WAITING'});
+  const worker=airplaneRegistration?.waiting||pendingUpdateWorker;
+  if(!worker){
+    // A previous bridge worker may already have activated itself. In that case
+    // the update succeeded; do not report a false failure.
+    toast('新版已经生效或正在完成切换',{duration:2200});
+    return;
+  }
+  const activate=()=>{
+    swReloading=true;
+    toast('正在更新 Airplane…',{duration:1800});
+    worker.postMessage({type:'SKIP_WAITING'});
+  };
+  if(worker.state==='installed'||worker.state==='activating'){activate();return;}
+  if(worker.state==='activated'){toast('Airplane 已是新版本');return;}
+  const onState=()=>{
+    if(worker.state==='installed'){worker.removeEventListener('statechange',onState);activate();}
+    else if(worker.state==='redundant'){worker.removeEventListener('statechange',onState);toast('新版准备失败，请稍后在设置中重试');}
+  };
+  worker.addEventListener('statechange',onState);
+  toast('新版正在准备，完成后会继续更新…',{duration:2200});
 }
 
-function showUpdateAvailable(){
+function showUpdateAvailable(worker=null){
+  if(worker)pendingUpdateWorker=worker;
   if(updateToastShown)return;
   updateToastShown=true;
   toast('发现 Airplane 新版本',{actionLabel:'更新',duration:12000,onAction:activateWaitingServiceWorker});
@@ -890,12 +956,12 @@ function showUpdateAvailable(){
 
 function observeServiceWorkerRegistration(registration){
   if(!registration)return;
-  if(registration.waiting){showUpdateAvailable();return;}
+  if(registration.waiting){showUpdateAvailable(registration.waiting);return;}
   registration.addEventListener('updatefound',()=>{
     const worker=registration.installing;
     if(!worker)return;
     worker.addEventListener('statechange',()=>{
-      if(worker.state==='installed'&&navigator.serviceWorker.controller)showUpdateAvailable();
+      if(worker.state==='installed'&&navigator.serviceWorker.controller)showUpdateAvailable(worker);
     });
   });
 }
@@ -910,7 +976,7 @@ async function checkForAppUpdate(showToast=false){
     updateToastShown=false;
     await registration.update();
     localStorage.setItem(UPDATE_CHECK_KEY,String(Date.now()));
-    if(registration.waiting){showUpdateAvailable();return;}
+    if(registration.waiting){showUpdateAvailable(registration.waiting);return;}
     if(showToast){
       if(registration.installing){toast('发现新版，正在后台准备…',{duration:2600});}
       else toast('已检查，当前已是最新版本');
@@ -935,6 +1001,7 @@ async function registerAirplaneServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   try{
     navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      pendingUpdateWorker=null;
       if(!swReloading)return;
       window.location.reload();
     });
