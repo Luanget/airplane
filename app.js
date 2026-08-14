@@ -4,9 +4,10 @@
 const STORAGE_KEY = 'airplane-pwa-v1';
 const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
+const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.12';
+const APP_VERSION = '0.7.13';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -350,12 +351,18 @@ function renderLedgerSection(){
 
 function renderStats(){
   const m=budgetMetrics(ui.selectedMonth), tx=txForMonth(ui.selectedMonth), expenses=tx.filter(t=>t.type==='expense');
-  const grouped={}; expenses.forEach(t=>{const c=txSnapshotCategory(t); const k=c.name; grouped[k]??={value:0,color:c.color}; grouped[k].value+=Number(t.amount);});
-  const parts=Object.entries(grouped).sort((a,b)=>b[1].value-a[1].value); let start=0;
-  const gradient = parts.length ? parts.map(([_,v])=>{const deg=m.expense? v.value/m.expense*360:0; const seg=`${v.color} ${start}deg ${start+deg}deg`; start+=deg; return seg;}).join(',') : '#e8ebe7 0 360deg';
+  const grouped={}; expenses.forEach(t=>{
+    const snapshot=txSnapshotCategory(t);
+    const current=t.categoryId?categoryById(t.categoryId):null;
+    const key=t.categoryId?`id:${t.categoryId}`:`legacy:${snapshot.name}`;
+    grouped[key]??={value:0,name:current?.name||snapshot.name,color:current?.color||snapshot.color};
+    grouped[key].value+=Number(t.amount);
+  });
+  const parts=Object.values(grouped).sort((a,b)=>b.value-a.value); let start=0;
+  const gradient = parts.length ? parts.map(v=>{const deg=m.expense? v.value/m.expense*360:0; const seg=`${v.color} ${start}deg ${start+deg}deg`; start+=deg; return seg;}).join(',') : '#e8ebe7 0 360deg';
   const dayValues=Array(daysInMonth(ui.selectedMonth)).fill(0); expenses.forEach(t=>{dayValues[Number(t.date.slice(-2))-1]+=Number(t.amount);});
   const max=Math.max(...dayValues,1); const nowDay=isCurrentMonth(ui.selectedMonth)?new Date().getDate():-1;
-  const legend=parts.slice(0,6).map(([name,v])=>`<div class="legend-row"><span class="legend-dot" style="background:${v.color}"></span><span>${escapeHTML(name)}</span><span class="legend-value">${m.expense?pct(v.value/m.expense):'0%'}</span></div>`).join('');
+  const legend=parts.slice(0,6).map(v=>`<div class="legend-row"><span class="legend-dot" style="background:${v.color}"></span><span>${escapeHTML(v.name)}</span><span class="legend-value">${m.expense?pct(v.value/m.expense):'0%'}</span></div>`).join('');
   return `<div class="stack"><div class="section-head"><h2>统计</h2><span class="muted" style="font-size:12px">${monthLabel(ui.selectedMonth)}</span></div>
     <div class="summary-grid"><div class="summary-card"><small>收入</small><strong class="positive">${amount(m.income)}</strong></div><div class="summary-card"><small>支出</small><strong class="negative">${amount(m.expense)}</strong></div><div class="summary-card"><small>结余</small><strong>${amount(m.income-m.expense)}</strong></div></div>
     <section class="card chart-card"><h3>支出分类</h3>${expenses.length?`<div class="donut-wrap"><div class="donut" style="background:conic-gradient(${gradient})"></div><div class="legend">${legend}</div></div>`:`<div class="empty"><p>有支出记录后显示分类占比。</p></div>`}</section>
@@ -376,7 +383,8 @@ function settingsContent(){
     <section class="card settings-section">
       <button class="setting-row" data-action="export-json"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">完整备份</span><span class="setting-sub">导出 JSON，可完整恢复预算、分类和账单</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="export-csv"><span class="mini-icon">${icon('file')}</span><span class="setting-copy"><span class="setting-title">导出明细 CSV</span><span class="setting-sub">方便在 Excel / Numbers 中查看</span></span><span class="chevron">${icon('chevron')}</span></button>
-      <button class="setting-row" data-action="import"><span class="mini-icon">${icon('upload')}</span><span class="setting-copy"><span class="setting-title">恢复备份</span><span class="setting-sub">从 Airplane JSON 备份恢复</span></span><span class="chevron">${icon('chevron')}</span></button>
+      <button class="setting-row" data-action="import"><span class="mini-icon">${icon('upload')}</span><span class="setting-copy"><span class="setting-title">恢复备份</span><span class="setting-sub">严格校验 Airplane JSON，恢复前自动留存当前快照</span></span><span class="chevron">${icon('chevron')}</span></button>
+      ${localStorage.getItem(PRE_RESTORE_KEY)?`<button class="setting-row" data-action="restore-pre-snapshot"><span class="mini-icon">${icon('refund')}</span><span class="setting-copy"><span class="setting-title">恢复前快照</span><span class="setting-sub">找回最近一次导入备份前的本机账本</span></span><span class="chevron">${icon('chevron')}</span></button>`:''}
     </section>
     <div class="section-head"><h2>安装与保护</h2></div>
     <section class="card settings-section">
@@ -400,6 +408,7 @@ function bindSettingsEvents(){
   document.querySelector('[data-action="export-json"]')?.addEventListener('click',exportJSON);
   document.querySelector('[data-action="export-csv"]')?.addEventListener('click',exportCSV);
   document.querySelector('[data-action="import"]')?.addEventListener('click',()=>document.getElementById('importInput').click());
+  document.querySelector('[data-action="restore-pre-snapshot"]')?.addEventListener('click',restorePreRestoreSnapshot);
   document.querySelector('[data-action="storage-persist"]')?.addEventListener('click',()=>ensurePersistentStorage(true));
   document.querySelector('[data-action="check-update"]')?.addEventListener('click',()=>checkForAppUpdate(true));
   document.querySelector('[data-action="reset"]')?.addEventListener('click',resetAll);
@@ -715,7 +724,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   let dirty=!!restored;
   const captureDraft=()=>({type,selectedCategoryId:selected,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
   const updateAmountPreview=()=>{
@@ -763,14 +772,19 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   });
   updateAmountPreview();
   document.getElementById('quickAddCategory').onclick=()=>{
-    const draft={...captureDraft(),savedAt:Date.now()};dirty=true;saveTransactionDraft(draft);
+    const draft={...captureDraft(),savedAt:Date.now()};dirty=true;
+    // Editing an existing record must never leak into the draft used by the next
+    // brand-new transaction. Keep edit state only in memory while organizing.
+    if(!existing)saveTransactionDraft(draft);
     openCategoryManager(type,{fromTransaction:true,draft,existing,onReturn:(returnType)=>openTransactionModal(existing,{...draft,type:returnType,selectedCategoryId:(returnType===type?selected:preferredCategoryId(returnType))})});
   };
   renderChooser();
   const submit=()=>{
     const parsedAmount=parseAmountExpression(document.getElementById('txAmount').value); const value=parsedAmount.value; const c=categoryById(selected);
     if(!parsedAmount.ok||!value||value<=0){toast('请输入有效金额或算式');return;} if(!c){toast('请选择分类');return;}
-    const record={id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:document.getElementById('txDate').value||localISO(),time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
+    const chosenDate=document.getElementById('txDate').value||localISO();
+    if(chosenDate>localISO()){toast('记账日期不能晚于今天');return;}
+    const record={id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
     if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;} else data.transactions.push(record);
     if(type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
     clearTransactionDraft();saveData();closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
@@ -897,7 +911,10 @@ function openCategoryEditor(type,existing=null,options={}){
 
 function removeCategory(id,type,onDone){
   const c=categoryById(id); if(!c)return;
-  if(data.categories.filter(x=>x.type===type).length<=1){toast('至少保留一个分类');return;}
+  const sameType=data.categories.filter(x=>x.type===type);
+  const visible=sameType.filter(x=>!x.hidden);
+  if(sameType.length<=1){toast('至少保留一个分类');return;}
+  if(!c.hidden&&visible.length<=1){toast('至少保留一个可用分类');return;}
   if(!confirm(`删除分类“${c.name}”？历史账单会继续保留原来的分类名称和图标。`)) return;
   data.categories=data.categories.filter(x=>x.id!==id);
   if(data.prefs.lastExpenseCategoryId===id)data.prefs.lastExpenseCategoryId=null;
@@ -905,7 +922,37 @@ function removeCategory(id,type,onDone){
   saveData();onDone?.();toast('分类已删除，历史账单已保留');
 }
 function downloadBlob(filename,content,type){ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
-function exportJSON(){ const backup={app:'Airplane',exportedAt:new Date().toISOString(),data}; downloadBlob(`Airplane-backup-${localISO()}.json`,JSON.stringify(backup,null,2),'application/json');toast('完整备份已导出'); }
+function makeBackup(payload=data,extra={}){return {app:'Airplane',format:'airplane-backup',schemaVersion:SCHEMA_VERSION,exportedAt:new Date().toISOString(),...extra,data:payload};}
+function exportJSON(){ downloadBlob(`Airplane-backup-${localISO()}.json`,JSON.stringify(makeBackup(),null,2),'application/json');toast('完整备份已导出'); }
+function validatedBackupData(parsed){
+  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('not an object');
+  let payload=null;
+  // Current backups carry an explicit Airplane marker. A recognizable legacy
+  // raw ledger is also accepted, but arbitrary JSON such as {} is rejected.
+  if(parsed.app==='Airplane'&&parsed.data&&typeof parsed.data==='object'&&!Array.isArray(parsed.data))payload=parsed.data;
+  else if(Array.isArray(parsed.transactions)&&Array.isArray(parsed.categories)&&parsed.budgets&&typeof parsed.budgets==='object'&&!Array.isArray(parsed.budgets))payload=parsed;
+  else throw new Error('not an Airplane backup');
+  if(!Array.isArray(payload.transactions)||!Array.isArray(payload.categories)||payload.categories.length<1)throw new Error('missing ledger arrays');
+  if(!payload.budgets||typeof payload.budgets!=='object'||Array.isArray(payload.budgets))throw new Error('invalid budgets');
+  if(!payload.categories.every(c=>c&&typeof c==='object'&&typeof c.id==='string'&&c.id&&typeof c.name==='string'&&c.name&&['income','expense'].includes(c.type)))throw new Error('invalid categories');
+  if(!payload.transactions.every(t=>t&&typeof t==='object'&&['income','expense'].includes(t.type)&&Number.isFinite(Number(t.amount))&&Number(t.amount)>0&&typeof t.date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(t.date)))throw new Error('invalid transactions');
+  if(!Object.values(payload.budgets).every(v=>Number.isFinite(Number(v))&&Number(v)>=0))throw new Error('invalid budget values');
+  return normalizeData(structuredClone(payload));
+}
+function savePreRestoreSnapshot(){
+  localStorage.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(structuredClone(data),{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
+}
+function restorePreRestoreSnapshot(){
+  try{
+    const raw=localStorage.getItem(PRE_RESTORE_KEY);if(!raw){toast('当前没有可恢复的快照');return;}
+    const incoming=validatedBackupData(JSON.parse(raw));
+    if(!confirm('恢复“恢复前快照”会替换当前账本。当前账本也会先保存为新的恢复前快照。继续吗？'))return;
+    const current=structuredClone(data);
+    data=incoming;
+    localStorage.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(current,{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
+    saveData();closeModal({runDismiss:false});render();toast('已恢复上一次导入前的账本');
+  }catch(err){console.warn('Airplane pre-restore snapshot is invalid',err);toast('恢复前快照已损坏，无法恢复');}
+}
 function exportCSV(){
   const rows=[['日期','时间','类型','金额','分类','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.note||''])];
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\r\n');downloadBlob(`Airplane-records-${localISO()}.csv`,csv,'text/csv;charset=utf-8');toast('CSV 已导出');
@@ -931,13 +978,19 @@ document.getElementById('nextMonthButton')?.addEventListener('click',()=>shiftMo
 document.getElementById('settingsButton').onclick=openSettingsModal;
 document.getElementById('importInput').addEventListener('change', async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
-  try{const parsed=JSON.parse(await file.text());const incoming=normalizeData(parsed.data||parsed);if(!confirm('恢复此备份会替换当前设备上的 Airplane 数据。继续吗？'))return;data=incoming;saveData();render();toast('备份已恢复');}catch(err){toast('无法识别这个 Airplane 备份');}
+  try{
+    const parsed=JSON.parse(await file.text());
+    const incoming=validatedBackupData(parsed);
+    if(!confirm('已确认这是有效的 Airplane 备份。恢复会替换当前设备上的账本，并自动保留一份“恢复前快照”。继续吗？'))return;
+    savePreRestoreSnapshot();
+    data=incoming;saveData();render();toast('备份已恢复，原账本已保留为恢复前快照');
+  }catch(err){console.warn('Airplane backup import rejected',err);toast('无法识别这个 Airplane 备份');}
 });
 
 let swReloading=false;
 let updateReloadFallbackTimer=null;
 let airplaneRegistration=null;
-let updateToastShown=false;
+let updateBannerShown=false;
 let pendingUpdateWorker=null;
 const UPDATE_CHECK_KEY='airplane-last-update-check-v1';
 const UPDATE_ACTIVE_INTERVAL_MS=5*60*1000;
@@ -975,11 +1028,20 @@ function activateWaitingServiceWorker(){
   toast('新版正在准备，完成后会继续更新…',{duration:2200});
 }
 
+function hideUpdateBanner(){
+  document.querySelector('.update-banner')?.remove();
+  updateBannerShown=false;
+}
 function showUpdateAvailable(worker=null){
   if(worker)pendingUpdateWorker=worker;
-  if(updateToastShown)return;
-  updateToastShown=true;
-  toast('发现 Airplane 新版本',{actionLabel:'更新',duration:30000,onAction:activateWaitingServiceWorker});
+  if(updateBannerShown&&document.querySelector('.update-banner'))return;
+  updateBannerShown=true;
+  document.querySelector('.update-banner')?.remove();
+  const d=document.createElement('div');d.className='update-banner';
+  d.innerHTML=`<span><strong>Airplane 有新版本</strong><small>已在后台准备好</small></span><button class="update-banner-action" type="button">更新</button><button class="update-banner-close" type="button" aria-label="稍后更新">${icon('close')}</button>`;
+  document.body.appendChild(d);
+  d.querySelector('.update-banner-action').onclick=()=>{hideUpdateBanner();activateWaitingServiceWorker();};
+  d.querySelector('.update-banner-close').onclick=()=>hideUpdateBanner();
 }
 
 function observeServiceWorkerRegistration(registration){
@@ -1003,7 +1065,6 @@ async function checkForAppUpdate(showToast=false){
     if(!registration){if(showToast)toast('更新服务尚未就绪');return;}
     airplaneRegistration=registration;
     observeServiceWorkerRegistration(registration);
-    updateToastShown=false;
     await registration.update();
     localStorage.setItem(UPDATE_CHECK_KEY,String(Date.now()));
     if(registration.waiting){showUpdateAvailable(registration.waiting);return;}
@@ -1048,7 +1109,7 @@ async function registerAirplaneServiceWorker(){
   if(!('serviceWorker' in navigator)) return;
   try{
     navigator.serviceWorker.addEventListener('controllerchange',()=>{
-      pendingUpdateWorker=null;
+      pendingUpdateWorker=null;hideUpdateBanner();
       if(!swReloading)return;
       clearTimeout(updateReloadFallbackTimer);
       // Give the newly activated worker a brief moment to claim the client and
