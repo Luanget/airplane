@@ -1,4 +1,5 @@
-const CACHE = "airplane-shell-v16";
+const SW_VERSION = "17";
+const CACHE = `airplane-shell-v${SW_VERSION}`;
 const SHELL = [
   "./",
   "./index.html",
@@ -11,11 +12,33 @@ const SHELL = [
   "./icons/apple-touch-icon.png"
 ];
 
+function canonicalURL(path){
+  return new URL(path, self.registration.scope).href;
+}
+
+async function precacheFreshShell(){
+  const cache = await caches.open(CACHE);
+  await Promise.all(SHELL.map(async path => {
+    const canonical = canonicalURL(path);
+    const freshURL = new URL(canonical);
+    // A versioned query bypasses stale browser/CDN copies while the response is
+    // deliberately stored under the normal canonical URL used by the app.
+    freshURL.searchParams.set("__airplane_sw", SW_VERSION);
+    const response = await fetch(freshURL.href, {
+      cache: "no-store",
+      credentials: "same-origin"
+    });
+    if(!response || !response.ok){
+      throw new Error(`Failed to precache ${path}: ${response?.status || "network"}`);
+    }
+    await cache.put(canonical, response.clone());
+  }));
+}
+
 self.addEventListener("install", event => {
-  event.waitUntil(
-    caches.open(CACHE)
-      .then(cache => cache.addAll(SHELL))
-  );
+  // Do not skip waiting automatically. The new program is first fetched fresh
+  // into its own cache, then waits for the user to tap “更新”.
+  event.waitUntil(precacheFreshShell());
 });
 
 self.addEventListener("activate", event => {
@@ -31,7 +54,7 @@ self.addEventListener("activate", event => {
 
 async function cacheFirst(request, fallback){
   const cache=await caches.open(CACHE);
-  const cached=(await cache.match(request)) || (fallback ? await cache.match(fallback) : undefined);
+  const cached=(await cache.match(request)) || (fallback ? await cache.match(canonicalURL(fallback)) : undefined);
   if(cached)return cached;
   try{
     const response=await fetch(request,{cache:"no-store"});
@@ -48,9 +71,9 @@ self.addEventListener("fetch", event => {
   const url=new URL(request.url);
   if(url.origin !== self.location.origin) return;
 
-  // Installed Airplane always starts from the local shell. Program-version
-  // discovery is handled separately by Service Worker update checks, so launch
-  // never waits for the hosting server.
+  // Launch remains cache-first and immediate. Because every new worker built
+  // its cache from version-busted network requests, this cache is also the
+  // program version that the user explicitly installed.
   const isNavigation=request.mode === "navigate";
   if(isNavigation) event.respondWith(cacheFirst(request,"./index.html"));
   else event.respondWith(cacheFirst(request));

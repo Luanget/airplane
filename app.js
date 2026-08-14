@@ -6,7 +6,7 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.9';
+const APP_VERSION = '0.7.10';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -927,6 +927,7 @@ document.getElementById('importInput').addEventListener('change', async e=>{
 });
 
 let swReloading=false;
+let updateReloadFallbackTimer=null;
 let airplaneRegistration=null;
 let updateToastShown=false;
 let pendingUpdateWorker=null;
@@ -948,6 +949,13 @@ function activateWaitingServiceWorker(){
     swReloading=true;
     toast('正在更新 Airplane…',{duration:1800});
     worker.postMessage({type:'SKIP_WAITING'});
+    // iOS can occasionally miss/delay controllerchange even after the new
+    // worker reaches activated. Keep a bounded reload fallback so the fresh
+    // shell is actually loaded after the user explicitly chose to update.
+    clearTimeout(updateReloadFallbackTimer);
+    updateReloadFallbackTimer=setTimeout(()=>{
+      if(swReloading)window.location.reload();
+    },4500);
   };
   if(worker.state==='installed'||worker.state==='activating'){activate();return;}
   if(worker.state==='activated'){toast('Airplane 已是新版本');return;}
@@ -1029,7 +1037,10 @@ async function registerAirplaneServiceWorker(){
     navigator.serviceWorker.addEventListener('controllerchange',()=>{
       pendingUpdateWorker=null;
       if(!swReloading)return;
-      window.location.reload();
+      clearTimeout(updateReloadFallbackTimer);
+      // Give the newly activated worker a brief moment to claim the client and
+      // finish cache cleanup, then reload through its fresh shell cache.
+      setTimeout(()=>window.location.reload(),120);
     });
     airplaneRegistration=await navigator.serviceWorker.getRegistration('./');
     if(!airplaneRegistration){
