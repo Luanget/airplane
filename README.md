@@ -1,4 +1,4 @@
-# Airplane PWA 0.7.14
+# Airplane PWA 0.7.15
 
 ## 本版体验收尾
 
@@ -17,5 +17,11 @@
 
 - 数据主键：`airplane-pwa-v1`
 - 恢复副本：`airplane-pwa-recovery-v1`
-- Service Worker cache：`airplane-shell-v21`
+- Service Worker cache：`airplane-shell-v22`
 - 启动仍优先使用本地缓存；更新检查在后台进行，不阻塞打开。
+
+
+## 0.7.15 启动优化
+- 正常启动不再同步重写整份账本与恢复副本；只有真实迁移或保存数据时才写入。
+- 当前月交易与当前总余额增加内存缓存，减少首屏重复扫描账本。
+- 持久化存储检查和 Service Worker 注册维护移到首屏之后执行；更新检查仍保持后台自动发现。

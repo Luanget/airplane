@@ -7,7 +7,7 @@ const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.14';
+const APP_VERSION = '0.7.15';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -93,9 +93,24 @@ function normalizeData(parsed){
   return parsed;
 }
 
+function dataNeedsMigration(parsed){
+  if(!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return true;
+  if(parsed.version!==SCHEMA_VERSION) return true;
+  if(!Array.isArray(parsed.transactions)) return true;
+  if(!Array.isArray(parsed.categories) || !parsed.categories.length) return true;
+  if(!parsed.budgets || typeof parsed.budgets !== 'object' || Array.isArray(parsed.budgets)) return true;
+  if(!Array.isArray(parsed.balanceAdjustments)) return true;
+  if(!parsed.prefs || typeof parsed.prefs !== 'object' || Array.isArray(parsed.prefs)) return true;
+  if(!('initialBalance' in parsed.prefs) || !('lastExpenseCategoryId' in parsed.prefs) || !('lastIncomeCategoryId' in parsed.prefs)) return true;
+  if(parsed.categories.some(c=>c&&typeof c==='object'&&c.custom!==true)) return true;
+  return false;
+}
+
 function parseStoredData(raw){
   if(!raw) return null;
-  return normalizeData(JSON.parse(raw));
+  const parsed=JSON.parse(raw);
+  const needsMigration=dataNeedsMigration(parsed);
+  return {value:normalizeData(parsed),needsMigration};
 }
 
 function writeStorageCopies(value){
@@ -106,13 +121,35 @@ function writeStorageCopies(value){
   localStorage.setItem(RECOVERY_KEY,raw);
 }
 
+function runWhenIdle(task, timeout=1800){
+  if('requestIdleCallback' in window){
+    requestIdleCallback(()=>task(),{timeout});
+  }else{
+    setTimeout(task,700);
+  }
+}
+
+function ensureRecoveryCopyAfterLaunch(value){
+  if(localStorage.getItem(RECOVERY_KEY))return;
+  runWhenIdle(()=>{
+    try{
+      if(!localStorage.getItem(RECOVERY_KEY))localStorage.setItem(RECOVERY_KEY,JSON.stringify(value));
+    }catch(e){console.warn('Deferred recovery copy failed',e);}
+  });
+}
+
 function loadData(){
   const primaryRaw=localStorage.getItem(STORAGE_KEY);
   try {
     const parsed=parseStoredData(primaryRaw);
     if(parsed){
-      writeStorageCopies(parsed);
-      return parsed;
+      // The old startup path rewrote the entire ledger to BOTH localStorage keys on
+      // every launch. localStorage writes are synchronous on iOS and become visibly
+      // slower as the ledger grows. Only persist here when an actual migration is
+      // required; normal launches are read-only until the user changes data.
+      if(parsed.needsMigration) writeStorageCopies(parsed.value);
+      else ensureRecoveryCopyAfterLaunch(parsed.value);
+      return parsed.value;
     }
   } catch(e){
     console.warn('Primary Airplane data is invalid; trying local recovery copy',e);
@@ -122,9 +159,10 @@ function loadData(){
   try {
     const recovered=parseStoredData(recoveryRaw);
     if(recovered){
-      localStorage.setItem(STORAGE_KEY,JSON.stringify(recovered));
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(recovered.value));
+      if(recovered.needsMigration)localStorage.setItem(RECOVERY_KEY,JSON.stringify(recovered.value));
       console.warn('Airplane restored data from the on-device recovery copy');
-      return recovered;
+      return recovered.value;
     }
   } catch(e){
     console.warn('Airplane recovery copy is also invalid',e);
@@ -137,7 +175,8 @@ function loadData(){
   return created;
 }
 
-function saveData(){ writeStorageCopies(data); }
+let dataRevision=0;
+function saveData(){ dataRevision++; monthTxCache.clear(); balanceCache.revision=-1; writeStorageCopies(data); }
 
 let data = loadData();
 let ui = {tab:'home', selectedMonth:monthKey(new Date()), recordFilter:'all'};
@@ -166,7 +205,15 @@ function tint(hex, alpha=.16){
   const h=hex.replace('#',''); const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
   return `rgba(${r},${g},${b},${alpha})`;
 }
-function txForMonth(m){ return data.transactions.filter(t=>t && typeof t.date==='string' && t.date.startsWith(m)); }
+const monthTxCache=new Map();
+const balanceCache={revision:-1,day:'',value:0};
+function txForMonth(m){
+  const cached=monthTxCache.get(m);
+  if(cached&&cached.revision===dataRevision)return cached.value;
+  const value=data.transactions.filter(t=>t && typeof t.date==='string' && t.date.startsWith(m));
+  monthTxCache.set(m,{revision:dataRevision,value});
+  return value;
+}
 function monthTotals(m){
   return txForMonth(m).reduce((a,t)=>{a[t.type]+=Number(t.amount)||0; return a;},{expense:0,income:0});
 }
@@ -175,11 +222,14 @@ function initialBalance(){ return Number(data.prefs?.initialBalance ?? 0); }
 function balanceAdjustmentTotal(){ return (data.balanceAdjustments||[]).reduce((s,a)=>s+Number(a.delta||0),0); }
 function currentBalance(){
   const today=localISO();
+  if(balanceCache.revision===dataRevision&&balanceCache.day===today)return balanceCache.value;
   const txNet=data.transactions.reduce((s,t)=>{
     if(t?.date&&t.date>today)return s;
     return s+(t.type==='income'?Number(t.amount||0):-Number(t.amount||0));
   },0);
-  return initialBalance()+txNet+balanceAdjustmentTotal();
+  const value=initialBalance()+txNet+balanceAdjustmentTotal();
+  balanceCache.revision=dataRevision;balanceCache.day=today;balanceCache.value=value;
+  return value;
 }
 function hasInitialBalance(){ return data.prefs?.initialBalance !== null && data.prefs?.initialBalance !== undefined; }
 function categoryById(id){ return data.categories.find(c=>c.id===id); }
@@ -216,7 +266,7 @@ function budgetMetrics(m){
   const delta = future ? 0 : totals.expense-plannedToDate;
   const remainingBudget = budget-totals.expense;
   const today = localISO(now);
-  const todayExpense = current ? data.transactions.filter(t=>t.type==='expense'&&t.date===today).reduce((s,t)=>s+Number(t.amount),0) : 0;
+  const todayExpense = current ? txForMonth(m).filter(t=>t.type==='expense'&&t.date===today).reduce((s,t)=>s+Number(t.amount),0) : 0;
   const expenseBeforeToday = current ? Math.max(totals.expense-todayExpense,0) : totals.expense;
   const remainingDays = current ? Math.max(dim-now.getDate()+1,1) : dim;
   const dailyLimit = current ? (budget>0 ? Math.max(budget-expenseBeforeToday,0)/remainingDays : 0) : baseDaily;
@@ -1224,6 +1274,14 @@ async function registerAirplaneServiceWorker(){
   }
 }
 
-window.addEventListener('load',()=>{registerAirplaneServiceWorker();bindForegroundUpdateChecks();});
+window.addEventListener('load',()=>{
+  bindForegroundUpdateChecks();
+  // Keep the launch frame free of browser-management work. The already-active
+  // Service Worker serves the app from cache before this code runs; registration
+  // bookkeeping and update discovery can safely begin after the first paint.
+  setTimeout(registerAirplaneServiceWorker,700);
+});
 render();
-ensurePersistentStorage();
+// Persistence status is important but not required to show the ledger. Query it
+// after launch instead of competing with the first interactive frame on iOS.
+runWhenIdle(()=>ensurePersistentStorage(),1600);

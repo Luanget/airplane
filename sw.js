@@ -1,4 +1,4 @@
-const SW_VERSION = "21";
+const SW_VERSION = "22";
 const CACHE = `airplane-shell-v${SW_VERSION}`;
 const SHELL = [
   "./",
