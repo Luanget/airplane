@@ -7,7 +7,7 @@ const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.15';
+const APP_VERSION = '0.7.16';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -217,7 +217,16 @@ function txForMonth(m){
 function monthTotals(m){
   return txForMonth(m).reduce((a,t)=>{a[t.type]+=Number(t.amount)||0; return a;},{expense:0,income:0});
 }
-function budgetFor(m){ return Number(data.budgets[m]||0); }
+function baseBudgetFor(m){ return Number(data.budgets[m]||0); }
+function syncedBudgetForMonth(m){
+  return txForMonth(m).reduce((sum,t)=>sum+(t.type==='income'&&t.budgetSync?Number(t.amount||0):0),0);
+}
+function syncedBudgetForDate(date){
+  const m=String(date||'').slice(0,7);
+  if(!m)return 0;
+  return txForMonth(m).reduce((sum,t)=>sum+(t.type==='income'&&t.budgetSync&&t.date===date?Number(t.amount||0):0),0);
+}
+function budgetFor(m){ return baseBudgetFor(m)+syncedBudgetForMonth(m); }
 function initialBalance(){ return Number(data.prefs?.initialBalance ?? 0); }
 function balanceAdjustmentTotal(){ return (data.balanceAdjustments||[]).reduce((s,a)=>s+Number(a.delta||0),0); }
 function currentBalance(){
@@ -247,7 +256,7 @@ function txRow(t, swipe=false){
   const fallbackDate=(typeof t.date==='string'&&t.date)?dateDisplay(t.date):'未标日期';
   const row=`<div class="tx-row tx-row-interactive" data-open-tx="${escapeHTML(t.id||'')}" role="button" tabindex="0">
     <div class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</div>
-    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}</div><div class="tx-sub">${escapeHTML(t.note||fallbackDate)}</div></div>
+    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}${t.type==='income'&&t.budgetSync?'<span class="tx-budget-badge">预算+</span>':''}</div><div class="tx-sub">${escapeHTML(t.note||fallbackDate)}</div></div>
     <div><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(t.time||'')}</div></div>
   </div>`;
   if(!swipe) return row;
@@ -255,26 +264,39 @@ function txRow(t, swipe=false){
 }
 
 function budgetMetrics(m){
-  const budget=budgetFor(m), totals=monthTotals(m), dim=daysInMonth(m), now=new Date();
+  const baseBudget=baseBudgetFor(m), syncBudget=syncedBudgetForMonth(m), budget=baseBudget+syncBudget;
+  const totals=monthTotals(m), dim=daysInMonth(m), now=new Date();
   const currentMonth=monthKey(now);
   const current=m===currentMonth;
   const future=m>currentMonth;
   const past=m<currentMonth;
   const elapsed = future ? 0 : (current ? now.getDate() : dim);
-  const baseDaily = budget>0 ? budget/dim : 0;
-  const plannedToDate = baseDaily*elapsed;
+  // The manually set budget is the steady daily plan. Income explicitly marked
+  // “同步增加预算” is a dated boost: it joins the monthly budget, but on the
+  // income date it is added to that day's allowance in full instead of being
+  // divided across the remaining days.
+  const baseDaily = baseBudget>0 ? baseBudget/dim : 0;
+  const averageDaily = budget>0 ? budget/dim : 0;
+  const today = localISO(now);
+  const todayBoost = current ? syncedBudgetForDate(today) : 0;
+  const boostToDate = future ? 0 : txForMonth(m).reduce((sum,t)=>{
+    if(t.type!=='income'||!t.budgetSync)return sum;
+    if(current&&t.date>today)return sum;
+    return sum+Number(t.amount||0);
+  },0);
+  const plannedToDate = baseDaily*elapsed+boostToDate;
   const delta = future ? 0 : totals.expense-plannedToDate;
   const remainingBudget = budget-totals.expense;
-  const today = localISO(now);
   const todayExpense = current ? txForMonth(m).filter(t=>t.type==='expense'&&t.date===today).reduce((s,t)=>s+Number(t.amount),0) : 0;
   const expenseBeforeToday = current ? Math.max(totals.expense-todayExpense,0) : totals.expense;
   const remainingDays = current ? Math.max(dim-now.getDate()+1,1) : dim;
-  const dailyLimit = current ? (budget>0 ? Math.max(budget-expenseBeforeToday,0)/remainingDays : 0) : baseDaily;
+  const distributableBeforeToday=Math.max(budget-todayBoost-expenseBeforeToday,0);
+  const dailyLimit = current ? (distributableBeforeToday/remainingDays+todayBoost) : averageDaily;
   const todayDelta = todayExpense-dailyLimit;
   const timeProgress = future ? 0 : elapsed/dim;
   const budgetProgress = budget>0 ? totals.expense/budget : 0;
   const projection = (!future&&elapsed>0) ? totals.expense/elapsed*dim : 0;
-  return {budget,...totals,dim,elapsed,baseDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayDelta,timeProgress,budgetProgress,projection,current,future,past};
+  return {budget,baseBudget,syncBudget,todayBoost,...totals,dim,elapsed,baseDaily,averageDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayDelta,timeProgress,budgetProgress,projection,current,future,past};
 }
 
 function refreshStorageProtectionUI(){
@@ -337,7 +359,7 @@ function balanceCard(){
   const balance=currentBalance();
   return `<section class="card balance-card">
     <div class="budget-top"><div><div class="eyebrow">当前总余额</div><div class="balance-value ${balance<0?'negative':''}">${amount(balance)}</div></div><button class="text-button" data-action="balance">${hasInitialBalance()?'调整':'设置'}</button></div>
-    <div class="helper balance-note">收入会增加余额，支出会减少余额；月预算仍由你单独设置，不会因收入自动提高。</div>
+    <div class="helper balance-note">收入会增加余额，支出会减少余额；记录收入时可选择“同步增加预算”，默认仍不影响预算。</div>
   </section>`;
 }
 
@@ -378,7 +400,7 @@ function renderHome(){
     </section>
 
     <section class="card budget-card">
-      <div class="budget-top"><div><div class="eyebrow">月预算</div><div class="budget-amount">${amount(m.expense)} <span class="of">/ ${amount(m.budget)}</span></div></div><button class="text-button" data-action="budget">编辑</button></div>
+      <div class="budget-top"><div><div class="eyebrow">月预算</div><div class="budget-amount">${amount(m.expense)} <span class="of">/ ${amount(m.budget)}</span></div>${m.syncBudget>0?`<div class="helper budget-sync-note">基础 ${amount(m.baseBudget)} · 收入同步 +${amount(m.syncBudget)}</div>`:''}</div><button class="text-button" data-action="budget">编辑</button></div>
       <div class="progress-row"><div class="progress-meta"><span>预算使用 ${pct(m.budgetProgress)}</span><span>时间进度 ${pct(m.timeProgress)}</span></div><div class="progress ${m.budgetProgress>m.timeProgress?'danger':''}"><span style="width:${Math.min(m.budgetProgress*100,100)}%"></span></div></div>
       <div class="plan-grid">
         <div class="plan-tile"><div class="metric-label">${planLabel}</div><strong class="${planClass}">${planText}</strong></div>
@@ -700,10 +722,11 @@ function bindMonthSwipe(){
 }
 
 function openBudgetModal(){
+  const syncBudget=syncedBudgetForMonth(ui.selectedMonth);
   const existing=budgetFor(ui.selectedMonth);
-  openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}支出预算</label>${moneyInputMarkup('budgetInput',existing||'','例如 2000','budget-op')}<div class="helper">支持 + − × ÷。每个月可以单独设置和修改。当前月会按“剩余预算 ÷ 包含今天在内的剩余天数”动态计算“今日不宜超过”；收入不会自动提高预算。</div></section>`);
+  openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}总支出预算</label>${moneyInputMarkup('budgetInput',existing||'','例如 2000','budget-op')}<div class="helper">支持 + − × ÷。${syncBudget>0?`当前总预算中有 ${amount(syncBudget)} 来自“收入同步增加预算”；这里编辑的是总预算，保存时会自动保留这部分收入加成。`:'每个月可以单独设置和修改。收入只有在记账时主动开启“同步增加预算”才会提高预算。'} 当前月的普通预算会按剩余天数动态分配；当天同步增加的收入会完整加到当天额度，不在当天摊给后续日期。</div></section>`);
   const readValue=bindMoneyExpressionInput('budgetInput','budget-op');
-  document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok||v<=0){toast('预算需要大于 0');return;}data.budgets[ui.selectedMonth]=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('月预算已保存');};
+  document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok||v<=0){toast('预算需要大于 0');return;}if(v+0.005<syncBudget){toast(`总预算不能低于已同步增加的 ${amount(syncBudget)}`);return;}data.budgets[ui.selectedMonth]=Math.max(0,Math.round((v-syncBudget)*100)/100);saveData();closeModal({runDismiss:false});render();toast('月预算已保存');};
 }
 
 function openBalanceModal(){
@@ -862,13 +885,14 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   const restored=suppliedDraft||(!existing?loadTransactionDraft():null);
   let type=restored?.type||existing?.type||'expense';
   let selected=restored?.selectedCategoryId||existing?.categoryId||preferredCategoryId(type);
+  let budgetSync=!!(restored?.budgetSync??existing?.budgetSync??false);
   const currentTime=new Date().toTimeString().slice(0,5);
   const initial={amount:restored?.amount??(existing?Number(existing.amount).toFixed(2):''),date:restored?.date||existing?.date||defaultTransactionDateForSelectedMonth(),time:restored?.time||existing?.time||currentTime,note:restored?.note??existing?.note??''};
   let dirty=!!restored;
-  const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,amount:Number(existing.amount),date:existing.date||initial.date,time:existing.time||initial.time,note:existing.note??''}:null;
-  const captureDraft=()=>({type,selectedCategoryId:selected,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
+  const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,budgetSync:!!existing.budgetSync,amount:Number(existing.amount),date:existing.date||initial.date,time:existing.time||initial.time,note:existing.note??''}:null;
+  const captureDraft=()=>({type,selectedCategoryId:selected,budgetSync,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirm('放弃本次修改？');},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirm('放弃本次修改？');},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
   const updateAmountPreview=()=>{
@@ -898,9 +922,16 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     if(!cats.some(c=>c.id===selected)) selected=preferredCategoryId(type);
     document.getElementById('categoryChooser').innerHTML=cats.map(c=>`<button class="category-choice ${c.id===selected?'selected':''}" data-cat="${c.id}" style="--choice-color:${c.color}"><span class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><small>${escapeHTML(c.name)}</small></button>`).join('');
     document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{selected=b.dataset.cat;markDirty();renderChooser();});
+    const syncToggle=document.getElementById('budgetSyncToggle');
+    if(syncToggle){
+      syncToggle.hidden=type!=='income';
+      syncToggle.classList.toggle('active',type==='income'&&budgetSync);
+      syncToggle.setAttribute('aria-checked',type==='income'&&budgetSync?'true':'false');
+    }
   };
   document.getElementById('expenseTab').onclick=()=>{type='expense';selected=preferredCategoryId(type);markDirty();renderChooser();};
   document.getElementById('incomeTab').onclick=()=>{type='income';selected=preferredCategoryId(type);markDirty();renderChooser();};
+  document.getElementById('budgetSyncToggle').onclick=()=>{if(type!=='income')return;budgetSync=!budgetSync;markDirty();renderChooser();};
   ['txAmount','txDate','txTime','txNote'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});el?.addEventListener('change',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});});
   document.querySelectorAll('[data-amount-op]').forEach(button=>{
     button.addEventListener('pointerdown',e=>e.preventDefault());
@@ -928,7 +959,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     if(!parsedAmount.ok||!value||value<=0){toast('请输入有效金额或算式');return;} if(!c){toast('请选择分类');return;}
     const chosenDate=document.getElementById('txDate').value||localISO();
     if(chosenDate>localISO()){toast('记账日期不能晚于今天');return;}
-    const record={id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
+    const record={...(existing||{}),id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
     if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;} else data.transactions.push(record);
     if(type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
     clearTransactionDraft();saveData();ui.selectedMonth=record.date.slice(0,7);closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
@@ -1098,7 +1129,7 @@ function restorePreRestoreSnapshot(){
   }catch(err){console.warn('Airplane pre-restore snapshot is invalid',err);toast('恢复前快照已损坏，无法恢复');}
 }
 function exportCSV(){
-  const rows=[['日期','时间','类型','金额','分类','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.note||''])];
+  const rows=[['日期','时间','类型','金额','分类','同步增加预算','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.type==='income'&&t.budgetSync?'是':'否',t.note||''])];
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\r\n');downloadBlob(`Airplane-records-${localISO()}.csv`,csv,'text/csv;charset=utf-8');toast('CSV 已导出');
 }
 function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; clearTransactionDraft();data=freshData();saveData();ui.selectedMonth=monthKey(new Date());render();toast('本机数据已清空'); }

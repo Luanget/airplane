@@ -463,3 +463,16 @@ body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
 .history-delete:active { background:color-mix(in srgb,var(--red) 10%,transparent); }
 .history-delete svg { width:19px; height:19px; }
 .balance-history-help { margin:10px 4px 0; }
+
+/* 0.7.16: optional income-to-budget boost. */
+.budget-sync-toggle { width:100%; margin-top:14px; padding:13px 14px; display:flex; align-items:center; justify-content:space-between; gap:14px; text-align:left; border-radius:18px; background:var(--surface); border:1px solid var(--line); color:var(--text); }
+.budget-sync-toggle[hidden] { display:none; }
+.budget-sync-toggle > span:first-child { min-width:0; display:grid; gap:4px; }
+.budget-sync-toggle strong { font-size:13px; }
+.budget-sync-toggle small { color:var(--muted); font-size:11px; line-height:1.45; font-weight:500; }
+.toggle-switch { flex:0 0 auto; width:44px; height:26px; padding:3px; border-radius:999px; background:var(--line); transition:background .18s ease; }
+.toggle-switch i { display:block; width:20px; height:20px; border-radius:50%; background:white; box-shadow:0 1px 4px rgba(0,0,0,.16); transition:transform .18s ease; }
+.budget-sync-toggle.active .toggle-switch { background:var(--green); }
+.budget-sync-toggle.active .toggle-switch i { transform:translateX(18px); }
+.tx-budget-badge { display:inline-flex; margin-left:6px; padding:2px 6px; border-radius:999px; vertical-align:1px; background:var(--green-soft); color:var(--green); font-size:9px; font-weight:750; }
+.budget-sync-note { margin-top:4px; }
