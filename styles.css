@@ -475,7 +475,36 @@ body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
 .budget-sync-toggle.active .toggle-switch { background:var(--green); }
 .budget-sync-toggle.active .toggle-switch i { transform:translateX(18px); }
 .tx-budget-badge { display:inline-flex; margin-left:6px; padding:2px 6px; border-radius:999px; vertical-align:1px; background:var(--green-soft); color:var(--green); font-size:9px; font-weight:750; }
-.budget-sync-note { margin-top:4px; }
+.budget-overview { min-width:0; flex:1; }
+.budget-breakdown {
+  margin-top:12px;
+  padding:8px 12px;
+  border-radius:14px;
+  background:var(--surface-2);
+}
+.budget-breakdown-row {
+  min-height:30px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+  font-size:12px;
+  color:var(--muted);
+}
+.budget-breakdown-row strong {
+  color:var(--text);
+  font-size:13px;
+  font-weight:700;
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+.budget-breakdown-row strong.positive { color:var(--green); }
+.budget-breakdown-separated {
+  margin-top:5px;
+  padding-top:7px;
+  border-top:1px solid var(--line);
+}
+
 
 
 /* 0.7.17: budget-excluded expenses keep real cashflow separate from daily-budget control. */

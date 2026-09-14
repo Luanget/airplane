@@ -7,7 +7,7 @@ const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.7.17';
+const APP_VERSION = '0.7.18';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -422,7 +422,7 @@ function renderHome(){
     </section>
 
     <section class="card budget-card">
-      <div class="budget-top"><div><div class="eyebrow">月预算</div><div class="budget-amount">${amount(m.budgetExpense)} <span class="of">/ ${amount(m.budget)}</span></div>${m.syncBudget>0||m.excludedExpense>0?`<div class="helper budget-sync-note">${m.syncBudget>0?`基础 ${amount(m.baseBudget)} · 收入同步 +${amount(m.syncBudget)}`:''}${m.syncBudget>0&&m.excludedExpense>0?' · ':''}${m.excludedExpense>0?`总支出 ${amount(m.expense)} · 预算外 ${amount(m.excludedExpense)}`:''}</div>`:''}</div><button class="text-button" data-action="budget">编辑</button></div>
+      <div class="budget-top"><div class="budget-overview"><div class="eyebrow">月预算</div><div class="budget-amount">${amount(m.budgetExpense)} <span class="of">/ ${amount(m.budget)}</span></div>${m.syncBudget>0||m.excludedExpense>0?`<div class="budget-breakdown">${m.syncBudget>0?`<div class="budget-breakdown-row"><span>基础预算</span><strong>${amount(m.baseBudget)}</strong></div><div class="budget-breakdown-row"><span>收入增加</span><strong class="positive">+${amount(m.syncBudget)}</strong></div>`:''}${m.excludedExpense>0?`<div class="budget-breakdown-row${m.syncBudget>0?' budget-breakdown-separated':''}"><span>总支出</span><strong>${amount(m.expense)}</strong></div><div class="budget-breakdown-row"><span>预算外</span><strong>${amount(m.excludedExpense)}</strong></div>`:''}</div>`:''}</div><button class="text-button" data-action="budget">编辑</button></div>
       <div class="progress-row"><div class="progress-meta"><span>预算使用 ${pct(m.budgetProgress)}</span><span>时间进度 ${pct(m.timeProgress)}</span></div><div class="progress ${m.budgetProgress>m.timeProgress?'danger':''}"><span style="width:${Math.min(m.budgetProgress*100,100)}%"></span></div></div>
       <div class="plan-grid">
         <div class="plan-tile"><div class="metric-label">${planLabel}</div><strong class="${planClass}">${planText}</strong></div>
