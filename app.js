@@ -6,8 +6,8 @@ const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
-const SCHEMA_VERSION = 3;
-const APP_VERSION = '0.7.16';
+const SCHEMA_VERSION = 4;
+const APP_VERSION = '0.7.17';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -69,7 +69,7 @@ const DEFAULT_CATEGORIES = [
   ['人情','expense','gift','#E78378'],['其他','expense','more','#9AA09A'],
   ['工资','income','briefcase','#4CB487'],['兼职','income','laptop','#5C9FD6'],['奖学金','income','award','#C8A34C'],['奖金','income','coins','#E7A24A'],
   ['理财','income','trend','#7797DB'],['红包/转账','income','gift','#E47B8C'],['退款','income','refund','#6CB8A3'],['其他','income','more','#9AA09A']
-].map((c,i)=>({id:`default-${i+1}`,name:c[0],type:c[1],icon:c[2],color:c[3],custom:true,hidden:false,order:i}));
+].map((c,i)=>({id:`default-${i+1}`,name:c[0],type:c[1],icon:c[2],color:c[3],custom:true,hidden:false,order:i,budgetExcludedDefault:c[1]==='expense'?false:undefined}));
 
 function freshData(){
   return {version:VERSION, transactions:[], categories:structuredClone(DEFAULT_CATEGORIES), budgets:{}, balanceAdjustments:[], prefs:{initialBalance:null}};
@@ -88,7 +88,11 @@ function normalizeData(parsed){
   if(!('lastExpenseCategoryId' in parsed.prefs)) parsed.prefs.lastExpenseCategoryId=null;
   if(!('lastIncomeCategoryId' in parsed.prefs)) parsed.prefs.lastIncomeCategoryId=null;
   // Categories are user-owned after 0.7.6: former built-ins and newly added items behave identically.
-  parsed.categories.forEach(c=>{if(c&&typeof c==='object')c.custom=true;});
+  parsed.categories.forEach(c=>{
+    if(!c||typeof c!=='object')return;
+    c.custom=true;
+    if(c.type==='expense'&&typeof c.budgetExcludedDefault!=='boolean')c.budgetExcludedDefault=false;
+  });
   parsed.version=SCHEMA_VERSION;
   return parsed;
 }
@@ -103,6 +107,7 @@ function dataNeedsMigration(parsed){
   if(!parsed.prefs || typeof parsed.prefs !== 'object' || Array.isArray(parsed.prefs)) return true;
   if(!('initialBalance' in parsed.prefs) || !('lastExpenseCategoryId' in parsed.prefs) || !('lastIncomeCategoryId' in parsed.prefs)) return true;
   if(parsed.categories.some(c=>c&&typeof c==='object'&&c.custom!==true)) return true;
+  if(parsed.categories.some(c=>c&&typeof c==='object'&&c.type==='expense'&&typeof c.budgetExcludedDefault!=='boolean')) return true;
   return false;
 }
 
@@ -214,8 +219,20 @@ function txForMonth(m){
   monthTxCache.set(m,{revision:dataRevision,value});
   return value;
 }
+function countsTowardBudget(t){
+  return t?.type==='expense' && t.budgetExcluded!==true;
+}
 function monthTotals(m){
-  return txForMonth(m).reduce((a,t)=>{a[t.type]+=Number(t.amount)||0; return a;},{expense:0,income:0});
+  return txForMonth(m).reduce((a,t)=>{
+    const value=Number(t.amount)||0;
+    if(t.type==='income')a.income+=value;
+    else if(t.type==='expense'){
+      a.expense+=value;
+      if(countsTowardBudget(t))a.budgetExpense+=value;
+      else a.excludedExpense+=value;
+    }
+    return a;
+  },{expense:0,budgetExpense:0,excludedExpense:0,income:0});
 }
 function baseBudgetFor(m){ return Number(data.budgets[m]||0); }
 function syncedBudgetForMonth(m){
@@ -256,7 +273,7 @@ function txRow(t, swipe=false){
   const fallbackDate=(typeof t.date==='string'&&t.date)?dateDisplay(t.date):'未标日期';
   const row=`<div class="tx-row tx-row-interactive" data-open-tx="${escapeHTML(t.id||'')}" role="button" tabindex="0">
     <div class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</div>
-    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}${t.type==='income'&&t.budgetSync?'<span class="tx-budget-badge">预算+</span>':''}</div><div class="tx-sub">${escapeHTML(t.note||fallbackDate)}</div></div>
+    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}${t.type==='income'&&t.budgetSync?'<span class="tx-budget-badge">预算+</span>':''}${t.type==='expense'&&t.budgetExcluded===true?'<span class="tx-budget-badge excluded">预算外</span>':''}</div><div class="tx-sub">${escapeHTML(t.note||fallbackDate)}</div></div>
     <div><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(t.time||'')}</div></div>
   </div>`;
   if(!swipe) return row;
@@ -274,7 +291,8 @@ function budgetMetrics(m){
   // The manually set budget is the steady daily plan. Income explicitly marked
   // “同步增加预算” is a dated boost: it joins the monthly budget, but on the
   // income date it is added to that day's allowance in full instead of being
-  // divided across the remaining days.
+  // divided across the remaining days. Expenses marked “预算外” still reduce
+  // the real balance and total spending, but are excluded from every budget metric.
   const baseDaily = baseBudget>0 ? baseBudget/dim : 0;
   const averageDaily = budget>0 ? budget/dim : 0;
   const today = localISO(now);
@@ -285,18 +303,21 @@ function budgetMetrics(m){
     return sum+Number(t.amount||0);
   },0);
   const plannedToDate = baseDaily*elapsed+boostToDate;
-  const delta = future ? 0 : totals.expense-plannedToDate;
-  const remainingBudget = budget-totals.expense;
-  const todayExpense = current ? txForMonth(m).filter(t=>t.type==='expense'&&t.date===today).reduce((s,t)=>s+Number(t.amount),0) : 0;
-  const expenseBeforeToday = current ? Math.max(totals.expense-todayExpense,0) : totals.expense;
+  const delta = future ? 0 : totals.budgetExpense-plannedToDate;
+  const remainingBudget = budget-totals.budgetExpense;
+  const todayRows=current ? txForMonth(m).filter(t=>t.type==='expense'&&t.date===today) : [];
+  const todayTotalExpense=todayRows.reduce((sum,t)=>sum+Number(t.amount||0),0);
+  const todayExpense=todayRows.filter(countsTowardBudget).reduce((sum,t)=>sum+Number(t.amount||0),0);
+  const todayExcludedExpense=Math.max(todayTotalExpense-todayExpense,0);
+  const expenseBeforeToday = current ? Math.max(totals.budgetExpense-todayExpense,0) : totals.budgetExpense;
   const remainingDays = current ? Math.max(dim-now.getDate()+1,1) : dim;
   const distributableBeforeToday=Math.max(budget-todayBoost-expenseBeforeToday,0);
   const dailyLimit = current ? (distributableBeforeToday/remainingDays+todayBoost) : averageDaily;
   const todayDelta = todayExpense-dailyLimit;
   const timeProgress = future ? 0 : elapsed/dim;
-  const budgetProgress = budget>0 ? totals.expense/budget : 0;
-  const projection = (!future&&elapsed>0) ? totals.expense/elapsed*dim : 0;
-  return {budget,baseBudget,syncBudget,todayBoost,...totals,dim,elapsed,baseDaily,averageDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayDelta,timeProgress,budgetProgress,projection,current,future,past};
+  const budgetProgress = budget>0 ? totals.budgetExpense/budget : 0;
+  const projection = (!future&&elapsed>0) ? totals.budgetExpense/elapsed*dim : 0;
+  return {budget,baseBudget,syncBudget,todayBoost,...totals,dim,elapsed,baseDaily,averageDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayTotalExpense,todayExcludedExpense,todayDelta,timeProgress,budgetProgress,projection,current,future,past};
 }
 
 function refreshStorageProtectionUI(){
@@ -359,7 +380,7 @@ function balanceCard(){
   const balance=currentBalance();
   return `<section class="card balance-card">
     <div class="budget-top"><div><div class="eyebrow">当前总余额</div><div class="balance-value ${balance<0?'negative':''}">${amount(balance)}</div></div><button class="text-button" data-action="balance">${hasInitialBalance()?'调整':'设置'}</button></div>
-    <div class="helper balance-note">收入会增加余额，支出会减少余额；记录收入时可选择“同步增加预算”，默认仍不影响预算。</div>
+    <div class="helper balance-note">收入会增加余额，支出会减少余额；收入可选择“同步增加预算”，支出也可标记为“预算外”。</div>
   </section>`;
 }
 
@@ -393,14 +414,15 @@ function renderHome(){
       <div class="eyebrow">${current?'今日不宜超过':'当月日均预算'}</div>
       <div class="big-money"><small>¥</small>${m.dailyLimit.toFixed(2)}</div>
       <div class="metric-grid daily-metrics">
-        <div class="metric"><div class="metric-label">${current?'今日已支出':'当月已支出'}</div><div class="metric-value">${amount(current?m.todayExpense:m.expense)}</div></div>
+        <div class="metric"><div class="metric-label">${current?'今日预算支出':'当月预算支出'}</div><div class="metric-value">${amount(current?m.todayExpense:m.budgetExpense)}</div></div>
         <div class="metric"><div class="metric-label">${rightLabel}</div><div class="metric-value ${rightClass}">${amount(rightValue)}</div></div>
       </div>
+      ${current&&m.todayExcludedExpense>0?`<div class="helper" style="margin-top:9px">今日另有预算外支出 ${amount(m.todayExcludedExpense)}，已计入总支出但不占用日常额度。</div>`:''}
       <div class="progress-row"><div class="progress-meta"><span>${current?'今日额度使用':'预算使用'}</span><span>${pct(useRatio)}</span></div><div class="progress ${current&&overToday>0?'danger':''}"><span style="width:${Math.min(useRatio*100,100)}%"></span></div></div>
     </section>
 
     <section class="card budget-card">
-      <div class="budget-top"><div><div class="eyebrow">月预算</div><div class="budget-amount">${amount(m.expense)} <span class="of">/ ${amount(m.budget)}</span></div>${m.syncBudget>0?`<div class="helper budget-sync-note">基础 ${amount(m.baseBudget)} · 收入同步 +${amount(m.syncBudget)}</div>`:''}</div><button class="text-button" data-action="budget">编辑</button></div>
+      <div class="budget-top"><div><div class="eyebrow">月预算</div><div class="budget-amount">${amount(m.budgetExpense)} <span class="of">/ ${amount(m.budget)}</span></div>${m.syncBudget>0||m.excludedExpense>0?`<div class="helper budget-sync-note">${m.syncBudget>0?`基础 ${amount(m.baseBudget)} · 收入同步 +${amount(m.syncBudget)}`:''}${m.syncBudget>0&&m.excludedExpense>0?' · ':''}${m.excludedExpense>0?`总支出 ${amount(m.expense)} · 预算外 ${amount(m.excludedExpense)}`:''}</div>`:''}</div><button class="text-button" data-action="budget">编辑</button></div>
       <div class="progress-row"><div class="progress-meta"><span>预算使用 ${pct(m.budgetProgress)}</span><span>时间进度 ${pct(m.timeProgress)}</span></div><div class="progress ${m.budgetProgress>m.timeProgress?'danger':''}"><span style="width:${Math.min(m.budgetProgress*100,100)}%"></span></div></div>
       <div class="plan-grid">
         <div class="plan-tile"><div class="metric-label">${planLabel}</div><strong class="${planClass}">${planText}</strong></div>
@@ -454,16 +476,16 @@ function renderStats(){
   let budgetResult='';
   if(m.budget){
     if(m.current){
-      budgetResult=`<section class="card"><div class="eyebrow">按当前消费速度</div><div class="budget-amount">预计本月支出 ${amount(m.projection)}</div><div class="helper" style="margin-top:8px">预算 ${amount(m.budget)} · ${m.projection>m.budget?`按当前节奏可能超出 ${amount(m.projection-m.budget)}`:`按当前节奏预计剩余 ${amount(m.budget-m.projection)}`}</div></section>`;
+      budgetResult=`<section class="card"><div class="eyebrow">按当前消费速度</div><div class="budget-amount">预计日常预算支出 ${amount(m.projection)}</div><div class="helper" style="margin-top:8px">预算 ${amount(m.budget)} · ${m.projection>m.budget?`按当前节奏可能超出 ${amount(m.projection-m.budget)}`:`按当前节奏预计剩余 ${amount(m.budget-m.projection)}`}${m.excludedExpense>0?` · 另有预算外 ${amount(m.excludedExpense)}`:''}</div></section>`;
     }else if(m.past){
-      const diff=m.expense-m.budget;
-      budgetResult=`<section class="card"><div class="eyebrow">本月最终结果</div><div class="budget-amount">最终支出 ${amount(m.expense)}</div><div class="helper" style="margin-top:8px">预算 ${amount(m.budget)} · ${diff>0?`最终超出 ${amount(diff)}`:`最终节省 ${amount(Math.abs(diff))}`}</div></section>`;
+      const diff=m.budgetExpense-m.budget;
+      budgetResult=`<section class="card"><div class="eyebrow">本月最终结果</div><div class="budget-amount">最终日常预算支出 ${amount(m.budgetExpense)}</div><div class="helper" style="margin-top:8px">预算 ${amount(m.budget)} · ${diff>0?`最终超出 ${amount(diff)}`:`最终节省 ${amount(Math.abs(diff))}`}${m.excludedExpense>0?` · 另有预算外 ${amount(m.excludedExpense)}`:''}</div></section>`;
     }else{
       budgetResult=`<section class="card"><div class="eyebrow">计划状态</div><div class="budget-amount">月份尚未开始</div><div class="helper" style="margin-top:8px">已设置预算 ${amount(m.budget)}</div></section>`;
     }
   }
   return `<div class="stack month-swipe-view" data-month-swipe-view="stats"><div class="section-head"><h2>统计</h2><span class="muted" style="font-size:12px">${monthLabel(ui.selectedMonth)}</span></div>
-    <div class="summary-grid"><div class="summary-card"><small>收入</small><strong class="positive">${amount(m.income)}</strong></div><div class="summary-card"><small>支出</small><strong class="negative">${amount(m.expense)}</strong></div><div class="summary-card"><small>结余</small><strong>${amount(m.income-m.expense)}</strong></div></div>
+    <div class="summary-grid"><div class="summary-card"><small>收入</small><strong class="positive">${amount(m.income)}</strong></div><div class="summary-card"><small>总支出</small><strong class="negative">${amount(m.expense)}</strong></div><div class="summary-card"><small>日常预算支出</small><strong>${amount(m.budgetExpense)}</strong></div><div class="summary-card"><small>结余</small><strong>${amount(m.income-m.expense)}</strong></div></div>
     <section class="card chart-card"><h3>支出分类</h3>${expenses.length?`<div class="donut-wrap"><div class="donut" style="background:conic-gradient(${gradient})"></div><div class="legend">${legend}</div></div>`:`<div class="empty"><p>有支出记录后显示分类占比。</p></div>`}</section>
     <section class="card chart-card"><h3>每日支出趋势</h3><div class="bars">${dayValues.map((v,i)=>`<button class="bar ${i+1===nowDay?'today':''}" data-day-bar="${i+1}" data-day-value="${v}" style="height:${Math.max(v/max*100,v?3:0)}%" type="button" aria-label="${i+1}日支出 ${amount(v)}"></button>`).join('')}</div><div class="chart-axis"><span>1日</span><span>${Math.ceil(dayValues.length/2)}日</span><span>${dayValues.length}日</span></div><div class="bar-detail" id="barDetail">点按柱子查看当天金额</div></section>
     ${budgetResult}
@@ -886,13 +908,14 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   let type=restored?.type||existing?.type||'expense';
   let selected=restored?.selectedCategoryId||existing?.categoryId||preferredCategoryId(type);
   let budgetSync=!!(restored?.budgetSync??existing?.budgetSync??false);
+  let budgetExcluded=!!(restored?.budgetExcluded??existing?.budgetExcluded??(type==='expense'&&categoryById(selected)?.budgetExcludedDefault===true));
   const currentTime=new Date().toTimeString().slice(0,5);
   const initial={amount:restored?.amount??(existing?Number(existing.amount).toFixed(2):''),date:restored?.date||existing?.date||defaultTransactionDateForSelectedMonth(),time:restored?.time||existing?.time||currentTime,note:restored?.note??existing?.note??''};
   let dirty=!!restored;
-  const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,budgetSync:!!existing.budgetSync,amount:Number(existing.amount),date:existing.date||initial.date,time:existing.time||initial.time,note:existing.note??''}:null;
-  const captureDraft=()=>({type,selectedCategoryId:selected,budgetSync,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
+  const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,budgetSync:!!existing.budgetSync,budgetExcluded:existing.budgetExcluded===true,amount:Number(existing.amount),date:existing.date||initial.date,time:existing.time||initial.time,note:existing.note??''}:null;
+  const captureDraft=()=>({type,selectedCategoryId:selected,budgetSync,budgetExcluded,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirm('放弃本次修改？');},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="budgetIncludeToggle" class="budget-sync-toggle ${budgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${budgetExcluded?'false':'true'}"><span><strong>计入日常预算</strong><small>关闭后仍计入总支出并减少余额，但不占用月预算和每日额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||budgetExcluded!==editBaseline.budgetExcluded||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirm('放弃本次修改？');},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
   const updateAmountPreview=()=>{
@@ -921,17 +944,28 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     const cats=data.categories.filter(c=>c.type===type&&!c.hidden).sort((a,b)=>a.order-b.order);
     if(!cats.some(c=>c.id===selected)) selected=preferredCategoryId(type);
     document.getElementById('categoryChooser').innerHTML=cats.map(c=>`<button class="category-choice ${c.id===selected?'selected':''}" data-cat="${c.id}" style="--choice-color:${c.color}"><span class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><small>${escapeHTML(c.name)}</small></button>`).join('');
-    document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{selected=b.dataset.cat;markDirty();renderChooser();});
+    document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{
+      selected=b.dataset.cat;
+      if(type==='expense'&&!existing)budgetExcluded=categoryById(selected)?.budgetExcludedDefault===true;
+      markDirty();renderChooser();
+    });
     const syncToggle=document.getElementById('budgetSyncToggle');
     if(syncToggle){
       syncToggle.hidden=type!=='income';
       syncToggle.classList.toggle('active',type==='income'&&budgetSync);
       syncToggle.setAttribute('aria-checked',type==='income'&&budgetSync?'true':'false');
     }
+    const includeToggle=document.getElementById('budgetIncludeToggle');
+    if(includeToggle){
+      includeToggle.hidden=type!=='expense';
+      includeToggle.classList.toggle('active',type==='expense'&&!budgetExcluded);
+      includeToggle.setAttribute('aria-checked',type==='expense'&&!budgetExcluded?'true':'false');
+    }
   };
-  document.getElementById('expenseTab').onclick=()=>{type='expense';selected=preferredCategoryId(type);markDirty();renderChooser();};
+  document.getElementById('expenseTab').onclick=()=>{type='expense';selected=preferredCategoryId(type);budgetExcluded=categoryById(selected)?.budgetExcludedDefault===true;markDirty();renderChooser();};
   document.getElementById('incomeTab').onclick=()=>{type='income';selected=preferredCategoryId(type);markDirty();renderChooser();};
   document.getElementById('budgetSyncToggle').onclick=()=>{if(type!=='income')return;budgetSync=!budgetSync;markDirty();renderChooser();};
+  document.getElementById('budgetIncludeToggle').onclick=()=>{if(type!=='expense')return;budgetExcluded=!budgetExcluded;markDirty();renderChooser();};
   ['txAmount','txDate','txTime','txNote'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});el?.addEventListener('change',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});});
   document.querySelectorAll('[data-amount-op]').forEach(button=>{
     button.addEventListener('pointerdown',e=>e.preventDefault());
@@ -959,7 +993,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     if(!parsedAmount.ok||!value||value<=0){toast('请输入有效金额或算式');return;} if(!c){toast('请选择分类');return;}
     const chosenDate=document.getElementById('txDate').value||localISO();
     if(chosenDate>localISO()){toast('记账日期不能晚于今天');return;}
-    const record={...(existing||{}),id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
+    const record={...(existing||{}),id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,budgetExcluded:type==='expense'&&budgetExcluded,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
     if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;} else data.transactions.push(record);
     if(type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
     clearTransactionDraft();saveData();ui.selectedMonth=record.date.slice(0,7);closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
@@ -1000,7 +1034,7 @@ function openCategoryManager(initialType='expense',options={}){
     document.getElementById('catExpense').onclick=()=>{type='expense';draw();};
     document.getElementById('catIncome').onclick=()=>{type='income';draw();};
     const list=data.categories.filter(c=>c.type===type).sort((a,b)=>a.order-b.order);
-    document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序"><span></span><span></span><span></span></button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)}</span><span class="category-row-actions"><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button><button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button></span></div>`).join('');
+    document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序"><span></span><span></span><span></span></button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)}${type==='expense'&&c.budgetExcludedDefault===true?'<em class="category-budget-default-badge">默认预算外</em>':''}</span><span class="category-row-actions"><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button><button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button></span></div>`).join('');
     document.querySelectorAll('[data-toggle-cat]').forEach(b=>b.onclick=()=>{const c=categoryById(b.dataset.toggleCat);if(!c)return;if(!c.hidden&&data.categories.filter(x=>x.type===type&&!x.hidden).length<=1){toast('至少保留一个可用分类');return;}c.hidden=!c.hidden;saveData();draw();});
     document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),{cancelLabel:'返回',onBack:()=>draw(),onDone:saved=>draw(saved?.id)}));
     document.querySelectorAll('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCategory(b.dataset.removeCat,type,()=>draw()));
@@ -1067,19 +1101,26 @@ function bindCategoryReorder(type){
 
 function openCategoryEditor(type,existing=null,options={}){
   let selectedIcon=existing?.icon||(type==='expense'?'coffee':'coins'); let selectedColor=existing?.color||(type==='expense'?'#EFA06D':'#4CB487');
+  let defaultBudgetExcluded=type==='expense'&&existing?.budgetExcludedDefault===true;
   const iconOptions=['food','coffee','car','bus','train','parking','bag','clothes','game','house','building','water','bolt','flame','washing','phone','wifi','subscription','package','wrench','scissors','paw','book','health','travel','gift','briefcase','laptop','award','coins','trend','refund','more'];
   const colors=['#F29B69','#E8B45F','#72B77A','#65BFA3','#6FA8DC','#7797DB','#AA82E3','#E77BA6','#E78378','#9AA09A','#5F9FE5','#4CB487'];
-  openModal(`${modalHead(existing?'编辑分类':'添加分类','保存',options.cancelLabel||'取消')}<section class="card input-card"><label>分类名称</label><input id="catName" class="large-input" maxlength="8" placeholder="例如 咖啡" value="${escapeHTML(existing?.name||'')}"></section><div class="section-head" style="margin-top:14px"><h2>图标</h2></div><section class="card"><div class="icon-palette" id="iconPalette"></div></section><div class="section-head"><h2>颜色</h2></div><section class="card"><div class="color-palette" id="colorPalette"></div></section>`,{onDismiss:options.onBack||null});
+  openModal(`${modalHead(existing?'编辑分类':'添加分类','保存',options.cancelLabel||'取消')}<section class="card input-card"><label>分类名称</label><input id="catName" class="large-input" maxlength="8" placeholder="例如 咖啡" value="${escapeHTML(existing?.name||'')}"></section>${type==='expense'?`<button id="categoryBudgetDefaultToggle" class="budget-sync-toggle ${defaultBudgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${defaultBudgetExcluded?'false':'true'}"><span><strong>默认计入日常预算</strong><small>关闭后，新记这个分类时会默认标记为“预算外”；单笔仍可改回。</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button>`:''}<div class="section-head" style="margin-top:14px"><h2>图标</h2></div><section class="card"><div class="icon-palette" id="iconPalette"></div></section><div class="section-head"><h2>颜色</h2></div><section class="card"><div class="color-palette" id="colorPalette"></div></section>`,{onDismiss:options.onBack||null});
   const draw=()=>{
     document.getElementById('iconPalette').innerHTML=iconOptions.map(i=>`<button class="icon-choice ${i===selectedIcon?'selected':''}" data-icon-choice="${i}">${icon(i)}</button>`).join('');
     document.getElementById('colorPalette').innerHTML=colors.map(c=>`<button class="color-swatch ${c===selectedColor?'selected':''}" data-color="${c}" style="background:${c}"></button>`).join('');
     document.querySelectorAll('[data-icon-choice]').forEach(b=>b.onclick=()=>{selectedIcon=b.dataset.iconChoice;draw();});
     document.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>{selectedColor=b.dataset.color;draw();});
   }; draw();
+  document.getElementById('categoryBudgetDefaultToggle')?.addEventListener('click',()=>{
+    defaultBudgetExcluded=!defaultBudgetExcluded;
+    const toggle=document.getElementById('categoryBudgetDefaultToggle');
+    toggle?.classList.toggle('active',!defaultBudgetExcluded);
+    toggle?.setAttribute('aria-checked',defaultBudgetExcluded?'false':'true');
+  });
   document.getElementById('modalSave').onclick=()=>{
     const name=document.getElementById('catName').value.trim(); if(!name){toast('请输入分类名称');return;}
     let saved=existing;
-    if(existing){existing.name=name;existing.icon=selectedIcon;existing.color=selectedColor;} else {const order=Math.max(-1,...data.categories.filter(c=>c.type===type).map(c=>c.order))+1;saved={id:uid('cat'),name,type,icon:selectedIcon,color:selectedColor,custom:true,hidden:false,order};data.categories.push(saved);}
+    if(existing){existing.name=name;existing.icon=selectedIcon;existing.color=selectedColor;if(type==='expense')existing.budgetExcludedDefault=defaultBudgetExcluded;} else {const order=Math.max(-1,...data.categories.filter(c=>c.type===type).map(c=>c.order))+1;saved={id:uid('cat'),name,type,icon:selectedIcon,color:selectedColor,custom:true,hidden:false,order,budgetExcludedDefault:type==='expense'?defaultBudgetExcluded:undefined};data.categories.push(saved);}
     saveData();closeModal({runDismiss:false});options.onDone?.(saved);toast(existing?'分类已修改':'分类已添加');
   };
 }
@@ -1129,7 +1170,7 @@ function restorePreRestoreSnapshot(){
   }catch(err){console.warn('Airplane pre-restore snapshot is invalid',err);toast('恢复前快照已损坏，无法恢复');}
 }
 function exportCSV(){
-  const rows=[['日期','时间','类型','金额','分类','同步增加预算','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.type==='income'&&t.budgetSync?'是':'否',t.note||''])];
+  const rows=[['日期','时间','类型','金额','分类','计入日常预算','同步增加预算','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.type==='expense'?(t.budgetExcluded===true?'否':'是'):'',t.type==='income'&&t.budgetSync?'是':'否',t.note||''])];
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\r\n');downloadBlob(`Airplane-records-${localISO()}.csv`,csv,'text/csv;charset=utf-8');toast('CSV 已导出');
 }
 function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; clearTransactionDraft();data=freshData();saveData();ui.selectedMonth=monthKey(new Date());render();toast('本机数据已清空'); }

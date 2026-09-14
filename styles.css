@@ -109,7 +109,7 @@ main { padding: 6px 16px 28px; }
 .row-action { padding:6px 8px; border-radius:9px; background:var(--surface-2); color:var(--muted); font-size:11px; }
 .row-action.delete { color:var(--red); background:var(--red-soft); }
 
-.summary-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.summary-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
 .summary-card { padding:14px 10px; text-align:center; border-radius:18px; background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow); }
 .summary-card small { color:var(--muted); font-size:11px; }
 .summary-card strong { display:block; margin-top:7px; font-size:15px; font-variant-numeric:tabular-nums; }
@@ -476,3 +476,8 @@ body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
 .budget-sync-toggle.active .toggle-switch i { transform:translateX(18px); }
 .tx-budget-badge { display:inline-flex; margin-left:6px; padding:2px 6px; border-radius:999px; vertical-align:1px; background:var(--green-soft); color:var(--green); font-size:9px; font-weight:750; }
 .budget-sync-note { margin-top:4px; }
+
+
+/* 0.7.17: budget-excluded expenses keep real cashflow separate from daily-budget control. */
+.tx-budget-badge.excluded { background:rgba(232,180,95,.16); color:#a9711b; }
+.category-budget-default-badge { display:inline-flex; margin-left:6px; padding:2px 6px; border-radius:999px; background:rgba(232,180,95,.14); color:#9b6b1d; font-size:9px; font-style:normal; font-weight:750; vertical-align:1px; }
