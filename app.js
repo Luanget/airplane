@@ -7,7 +7,7 @@ const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.7.18';
+const APP_VERSION = '0.7.19';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -380,7 +380,7 @@ function balanceCard(){
   const balance=currentBalance();
   return `<section class="card balance-card">
     <div class="budget-top"><div><div class="eyebrow">当前总余额</div><div class="balance-value ${balance<0?'negative':''}">${amount(balance)}</div></div><button class="text-button" data-action="balance">${hasInitialBalance()?'调整':'设置'}</button></div>
-    <div class="helper balance-note">收入会增加余额，支出会减少余额；收入可选择“同步增加预算”，支出也可标记为“预算外”。</div>
+    <div class="helper balance-note">按全部收入与支出计算</div>
   </section>`;
 }
 
@@ -417,12 +417,12 @@ function renderHome(){
         <div class="metric"><div class="metric-label">${current?'今日预算支出':'当月预算支出'}</div><div class="metric-value">${amount(current?m.todayExpense:m.budgetExpense)}</div></div>
         <div class="metric"><div class="metric-label">${rightLabel}</div><div class="metric-value ${rightClass}">${amount(rightValue)}</div></div>
       </div>
-      ${current&&m.todayExcludedExpense>0?`<div class="helper" style="margin-top:9px">今日另有预算外支出 ${amount(m.todayExcludedExpense)}，已计入总支出但不占用日常额度。</div>`:''}
+      ${current&&m.todayExcludedExpense>0?`<div class="helper" style="margin-top:9px">今日预算外 ${amount(m.todayExcludedExpense)}</div>`:''}
       <div class="progress-row"><div class="progress-meta"><span>${current?'今日额度使用':'预算使用'}</span><span>${pct(useRatio)}</span></div><div class="progress ${current&&overToday>0?'danger':''}"><span style="width:${Math.min(useRatio*100,100)}%"></span></div></div>
     </section>
 
     <section class="card budget-card">
-      <div class="budget-top"><div class="budget-overview"><div class="eyebrow">月预算</div><div class="budget-amount">${amount(m.budgetExpense)} <span class="of">/ ${amount(m.budget)}</span></div>${m.syncBudget>0||m.excludedExpense>0?`<div class="budget-breakdown">${m.syncBudget>0?`<div class="budget-breakdown-row"><span>基础预算</span><strong>${amount(m.baseBudget)}</strong></div><div class="budget-breakdown-row"><span>收入增加</span><strong class="positive">+${amount(m.syncBudget)}</strong></div>`:''}${m.excludedExpense>0?`<div class="budget-breakdown-row${m.syncBudget>0?' budget-breakdown-separated':''}"><span>总支出</span><strong>${amount(m.expense)}</strong></div><div class="budget-breakdown-row"><span>预算外</span><strong>${amount(m.excludedExpense)}</strong></div>`:''}</div>`:''}</div><button class="text-button" data-action="budget">编辑</button></div>
+      <div class="budget-top"><div><div class="eyebrow">月预算</div><div class="budget-amount">${amount(m.budgetExpense)} <span class="of">/ ${amount(m.budget)}</span></div>${m.syncBudget>0?`<div class="helper budget-sync-note budget-sync-line">基础 ${amount(m.baseBudget)} · 收入同步 +${amount(m.syncBudget)}</div>`:''}${m.excludedExpense>0?`<div class="helper budget-sync-note budget-expense-line">总支出 ${amount(m.expense)} · 预算外 ${amount(m.excludedExpense)}</div>`:''}</div><button class="text-button" data-action="budget">编辑</button></div>
       <div class="progress-row"><div class="progress-meta"><span>预算使用 ${pct(m.budgetProgress)}</span><span>时间进度 ${pct(m.timeProgress)}</span></div><div class="progress ${m.budgetProgress>m.timeProgress?'danger':''}"><span style="width:${Math.min(m.budgetProgress*100,100)}%"></span></div></div>
       <div class="plan-grid">
         <div class="plan-tile"><div class="metric-label">${planLabel}</div><strong class="${planClass}">${planText}</strong></div>
