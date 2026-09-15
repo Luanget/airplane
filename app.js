@@ -7,7 +7,7 @@ const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.7.19';
+const APP_VERSION = '0.7.20';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -746,7 +746,7 @@ function bindMonthSwipe(){
 function openBudgetModal(){
   const syncBudget=syncedBudgetForMonth(ui.selectedMonth);
   const existing=budgetFor(ui.selectedMonth);
-  openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}总支出预算</label>${moneyInputMarkup('budgetInput',existing||'','例如 2000','budget-op')}<div class="helper">支持 + − × ÷。${syncBudget>0?`当前总预算中有 ${amount(syncBudget)} 来自“收入同步增加预算”；这里编辑的是总预算，保存时会自动保留这部分收入加成。`:'每个月可以单独设置和修改。收入只有在记账时主动开启“同步增加预算”才会提高预算。'} 当前月的普通预算会按剩余天数动态分配；当天同步增加的收入会完整加到当天额度，不在当天摊给后续日期。</div></section>`);
+  openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}总支出预算</label>${moneyInputMarkup('budgetInput',existing||'','例如 2000','budget-op')}<div class="helper">支持 + − × ÷。${syncBudget>0?`当前总预算中有 ${amount(syncBudget)} 来自“收入同步增加预算”；这里编辑的是总预算，保存时会自动保留这部分收入加成。`:'每个月可以单独设置和修改。收入默认开启“同步增加预算”，单笔不需要同步时可以关闭。'} 当前月的普通预算会按剩余天数动态分配；当天同步增加的收入会完整加到当天额度，不在当天摊给后续日期。</div></section>`);
   const readValue=bindMoneyExpressionInput('budgetInput','budget-op');
   document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok||v<=0){toast('预算需要大于 0');return;}if(v+0.005<syncBudget){toast(`总预算不能低于已同步增加的 ${amount(syncBudget)}`);return;}data.budgets[ui.selectedMonth]=Math.max(0,Math.round((v-syncBudget)*100)/100);saveData();closeModal({runDismiss:false});render();toast('月预算已保存');};
 }
@@ -907,7 +907,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   const restored=suppliedDraft||(!existing?loadTransactionDraft():null);
   let type=restored?.type||existing?.type||'expense';
   let selected=restored?.selectedCategoryId||existing?.categoryId||preferredCategoryId(type);
-  let budgetSync=!!(restored?.budgetSync??existing?.budgetSync??false);
+  let budgetSync=!!(restored?.budgetSync??(existing?existing.budgetSync===true:true));
   let budgetExcluded=!!(restored?.budgetExcluded??existing?.budgetExcluded??(type==='expense'&&categoryById(selected)?.budgetExcludedDefault===true));
   const currentTime=new Date().toTimeString().slice(0,5);
   const initial={amount:restored?.amount??(existing?Number(existing.amount).toFixed(2):''),date:restored?.date||existing?.date||defaultTransactionDateForSelectedMonth(),time:restored?.time||existing?.time||currentTime,note:restored?.note??existing?.note??''};
@@ -1311,7 +1311,7 @@ function scheduleBackgroundUpdateCheck(){
   // reuse the previous session's timestamp to suppress this first check.
   setTimeout(()=>{
     if(document.visibilityState==='visible'&&navigator.onLine!==false)checkForAppUpdate(false);
-  },2500);
+  },6000);
   if(updateIntervalTimer)clearInterval(updateIntervalTimer);
   updateIntervalTimer=setInterval(()=>backgroundUpdateIfDue(UPDATE_ACTIVE_INTERVAL_MS),UPDATE_ACTIVE_INTERVAL_MS);
 }
