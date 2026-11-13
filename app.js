@@ -7,7 +7,7 @@ const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.7.20';
+const APP_VERSION = '0.7.23';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -812,10 +812,65 @@ function normalizeAmountExpression(raw=''){
     .replace(/\s+/g,'');
 }
 
+// Keep a single operator when a user accidentally types several in a row.
+// Preserve *- and /- so negative factors (e.g. 10×-2) still work.
+function compactAmountOperators(raw=''){
+  return String(raw).replace(/[+\-−–—×xX÷*\/]{2,}/g,sequence=>{
+    const normalized=normalizeAmountExpression(sequence);
+    if((normalized[0]==='*'||normalized[0]==='/')&&normalized.endsWith('-')) return sequence[0]+sequence.at(-1);
+    return sequence.at(-1);
+  });
+}
+function tidyAmountInput(input){
+  const before=input.value,after=compactAmountOperators(before);
+  if(before===after)return;
+  const cursor=input.selectionStart;
+  input.value=after;
+  if(cursor!==null){
+    const newCursor=compactAmountOperators(before.slice(0,cursor)).length;
+    try{input.setSelectionRange(newCursor,newCursor);}catch{}
+  }
+}
+// Insert at the explicit caret, or append when the amount field has no caret.
+// The pointerdown snapshot also preserves selection on iOS if a tap blurs the input.
+function amountCaret(input){
+  return document.activeElement===input && input.selectionStart!==null
+    ? {start:input.selectionStart,end:input.selectionEnd??input.selectionStart} : null;
+}
+function insertAmountOperator(input,op,selection=null){
+  const raw=input.value,current=compactAmountOperators(raw);
+  const start=selection ? compactAmountOperators(raw.slice(0,selection.start)).length : current.length;
+  const end=selection ? compactAmountOperators(raw.slice(0,selection.end)).length : current.length;
+  // The clicked operator wins over an adjacent operator instead of stacking.
+  const left=current.slice(0,start).replace(/[+\-−–—×xX÷*\/]+$/,'');
+  const right=current.slice(end).replace(/^[+\-−–—×xX÷*\/]+/,'');
+  const hasNumber=/[0-9)]/.test(left+right);
+  input.value=hasNumber?left+op+right:(normalizeAmountExpression(op)==='-'?'−':'');
+  return hasNumber?left.length+op.length:input.value.length;
+}
+function bindAmountOperator(button,input,getOperator,onChange){
+  let pressedSelection=null;
+  button.addEventListener('pointerdown',e=>{
+    pressedSelection=amountCaret(input);
+    e.preventDefault();
+  });
+  button.addEventListener('pointercancel',()=>{pressedSelection=null;});
+  button.addEventListener('click',()=>{
+    const cursor=insertAmountOperator(input,getOperator(),pressedSelection||amountCaret(input));
+    pressedSelection=null;
+    onChange();
+    try{input.focus({preventScroll:true});}catch{input.focus();}
+    try{input.setSelectionRange(cursor,cursor);}catch{}
+  });
+}
+
 // Small local expression parser for the amount field. Deliberately avoids eval().
 // Supports +, -, ×/*, ÷// and parentheses while keeping the final ledger amount numeric.
 function parseAmountExpression(raw=''){
-  const expr=normalizeAmountExpression(raw);
+  // Ignore meaningless leading operators and unfinished trailing operators.
+  const expr=compactAmountOperators(normalizeAmountExpression(raw))
+    .replace(/^[+*\/]+/,'')
+    .replace(/[+\-*\/]+$/,'');
   if(!expr || !/^[0-9+\-*/().]+$/.test(expr)) return {ok:false,value:NaN};
   let i=0;
   const skip=()=>{};
@@ -889,15 +944,9 @@ function bindMoneyExpressionInput(inputId,group='money-op'){
     else{preview.textContent='继续输入算式';preview.classList.add('visible','invalid');}
     return parsed;
   };
-  input.addEventListener('input',update);input.addEventListener('change',update);
+  input.addEventListener('input',()=>{tidyAmountInput(input);update();});input.addEventListener('change',update);
   document.querySelectorAll(`[data-${group}]`).forEach(button=>{
-    button.addEventListener('pointerdown',e=>e.preventDefault());
-    button.addEventListener('click',()=>{
-      const op=button.getAttribute(`data-${group}`)||'';
-      const start=input.selectionStart??input.value.length,end=input.selectionEnd??start;
-      input.setRangeText(op,start,end,'end');update();
-      try{input.focus({preventScroll:true});}catch{input.focus();}
-    });
+    bindAmountOperator(button,input,()=>button.getAttribute(`data-${group}`)||'',update);
   });
   update();
   return ()=>parseAmountExpression(input.value);
@@ -907,7 +956,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   const restored=suppliedDraft||(!existing?loadTransactionDraft():null);
   let type=restored?.type||existing?.type||'expense';
   let selected=restored?.selectedCategoryId||existing?.categoryId||preferredCategoryId(type);
-  let budgetSync=!!(restored?.budgetSync??(existing?existing.budgetSync===true:true));
+  let budgetSync=existing?existing.budgetSync===true:(suppliedDraft?.budgetSync??true);
   let budgetExcluded=!!(restored?.budgetExcluded??existing?.budgetExcluded??(type==='expense'&&categoryById(selected)?.budgetExcludedDefault===true));
   const currentTime=new Date().toTimeString().slice(0,5);
   const initial={amount:restored?.amount??(existing?Number(existing.amount).toFixed(2):''),date:restored?.date||existing?.date||defaultTransactionDateForSelectedMonth(),time:restored?.time||existing?.time||currentTime,note:restored?.note??existing?.note??''};
@@ -947,6 +996,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{
       selected=b.dataset.cat;
       if(type==='expense'&&!existing)budgetExcluded=categoryById(selected)?.budgetExcludedDefault===true;
+      if(type==='income'&&!existing)budgetSync=true;
       markDirty();renderChooser();
     });
     const syncToggle=document.getElementById('budgetSyncToggle');
@@ -963,20 +1013,13 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     }
   };
   document.getElementById('expenseTab').onclick=()=>{type='expense';selected=preferredCategoryId(type);budgetExcluded=categoryById(selected)?.budgetExcludedDefault===true;markDirty();renderChooser();};
-  document.getElementById('incomeTab').onclick=()=>{type='income';selected=preferredCategoryId(type);markDirty();renderChooser();};
+  document.getElementById('incomeTab').onclick=()=>{type='income';selected=preferredCategoryId(type);if(!existing)budgetSync=true;markDirty();renderChooser();};
   document.getElementById('budgetSyncToggle').onclick=()=>{if(type!=='income')return;budgetSync=!budgetSync;markDirty();renderChooser();};
   document.getElementById('budgetIncludeToggle').onclick=()=>{if(type!=='expense')return;budgetExcluded=!budgetExcluded;markDirty();renderChooser();};
-  ['txAmount','txDate','txTime','txNote'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});el?.addEventListener('change',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});});
+  ['txAmount','txDate','txTime','txNote'].forEach(id=>{const el=document.getElementById(id);el?.addEventListener('input',()=>{if(id==='txAmount')tidyAmountInput(el);markDirty();if(id==='txAmount')updateAmountPreview();});el?.addEventListener('change',()=>{markDirty();if(id==='txAmount')updateAmountPreview();});});
   document.querySelectorAll('[data-amount-op]').forEach(button=>{
-    button.addEventListener('pointerdown',e=>e.preventDefault());
-    button.addEventListener('click',()=>{
-      const input=amountInput;if(!input)return;
-      const op=button.dataset.amountOp||'';
-      const start=input.selectionStart??input.value.length;
-      const end=input.selectionEnd??start;
-      input.setRangeText(op,start,end,'end');
+    bindAmountOperator(button,amountInput,()=>button.dataset.amountOp||'',()=>{
       dirty=true;persistDraft();updateAmountPreview();
-      try{input.focus({preventScroll:true});}catch{input.focus();}
     });
   });
   updateAmountPreview();
