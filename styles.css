@@ -482,3 +482,8 @@ body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
 /* 0.7.17: budget-excluded expenses keep real cashflow separate from daily-budget control. */
 .tx-budget-badge.excluded { background:rgba(232,180,95,.16); color:#a9711b; }
 .category-budget-default-badge { display:inline-flex; margin-left:6px; padding:2px 6px; border-radius:999px; background:rgba(232,180,95,.14); color:#9b6b1d; font-size:9px; font-style:normal; font-weight:750; vertical-align:1px; }
+
+/* Health entry: independent module; does not touch financial state or tabs. */
+.topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.topbar-actions > a { text-decoration: none; }
+.topbar-actions svg { width: 22px; height: 22px; }
