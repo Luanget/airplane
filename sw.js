@@ -1,4 +1,4 @@
-const SW_VERSION = "30";
+const SW_VERSION = "31";
 const CACHE = `airplane-shell-v${SW_VERSION}`;
 const SHELL = [
   "./",
@@ -6,6 +6,12 @@ const SHELL = [
   "./styles.css",
   "./app.js",
   "./manifest.webmanifest",
+  "./health/",
+  "./health/index.html",
+  "./health/app.css",
+  "./health/app.mjs",
+  "./health/core.mjs",
+  "./health/storage.mjs",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/icon-512-maskable.png",
@@ -75,8 +81,13 @@ self.addEventListener("fetch", event => {
   // its cache from version-busted network requests, this cache is also the
   // program version that the user explicitly installed.
   const isNavigation=request.mode === "navigate";
-  if(isNavigation) event.respondWith(cacheFirst(request,"./index.html"));
-  else event.respondWith(cacheFirst(request));
+  if(isNavigation){
+    // Health and Finance share one origin and one worker. Never serve the
+    // financial HTML shell as the offline fallback for a health navigation.
+    const healthPrefix = new URL("./health/", self.registration.scope).pathname;
+    const fallback = url.pathname.startsWith(healthPrefix) ? "./health/index.html" : "./index.html";
+    event.respondWith(cacheFirst(request, fallback));
+  } else event.respondWith(cacheFirst(request));
 });
 
 self.addEventListener("message", event => {
