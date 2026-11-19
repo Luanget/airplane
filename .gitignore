@@ -1,0 +1,24 @@
+# Only program code belongs in this public repository.
+# Never commit finance/health ledgers, exports, receipts, photos, or API secrets.
+health_tracker*.json
+health_tracker*.sqlite
+*backup*.json
+*Backup*.json
+*.sqlite
+*.sqlite3
+*.db
+*.csv
+*.tsv
+*.zip
+*.tar
+*.tar.xz
+.env
+.env.*
+*.pem
+*.key
+.private/
+private/
+userdata/
+user-data/
+*.log
+__pycache__/
