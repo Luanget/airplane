@@ -1,0 +1,20 @@
+name = "airplane-health-assistant"
+main = "index.mjs"
+compatibility_date = "2026-05-01"
+[vars]
+ALLOWED_ORIGINS = "http://127.0.0.1:8080,http://localhost:8080"
+USER_RPM = "3"
+USER_MONTHLY_CALLS = "60"
+MONTHLY_BUDGET_CENTS = "500"
+TOTAL_BUDGET_CENTS = "1000"
+
+[[durable_objects.bindings]]
+name = "QUOTA"
+class_name = "Quota"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Quota"]
+
+[observability]
+enabled = false

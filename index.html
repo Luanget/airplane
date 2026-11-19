@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https: http://127.0.0.1:8787; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f6f7f4" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)" />
@@ -14,15 +15,29 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="stylesheet" href="./styles.css" />
+<link rel="stylesheet" href="./shared.css">
 </head>
 <body>
-  <div class="app-shell">
+  <form id="account-gate" hidden>
+    <h1>打开私人账本</h1>
+    <p>输入自己的账户码以解锁本机记录。离线也可使用。</p>
+    <label>账户码<input type="password" required minlength="64" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <button type="submit">解锁</button> <a href="?">返回设备账本</a>
+    <output role="status"></output>
+  </form>
+  <div data-shell class="app-shell">
     <header class="topbar">
       <div>
         <div class="brand-row"><span class="brand-mark" data-icon="plane"></span><h1>Airplane</h1></div>
         <div class="month-switcher"><button class="month-step month-step-prev" id="prevMonthButton" aria-label="上个月" data-icon="chevron"></button><button class="month-button" id="monthButton" aria-label="选择月份"></button><button class="month-step" id="nextMonthButton" aria-label="下个月" data-icon="chevron"></button></div>
       </div>
-      <button class="icon-button" id="settingsButton" aria-label="打开设置" data-icon="settings"></button>
+      <div class="topbar-actions">
+        <a data-account class="account-link" href="?private=1">私人账本</a>
+        <a data-module-link class="icon-button" href="./health/" aria-label="打开健康管理" title="健康管理">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 10.1c0 5.6-8.8 10.3-8.8 10.3S3.2 15.7 3.2 10.1a4.7 4.7 0 0 1 8.8-2.2 4.7 4.7 0 0 1 8.8 2.2Z"/><path d="M8.5 12h7M12 8.5v7"/></svg>
+        </a>
+        <button class="icon-button" id="settingsButton" aria-label="打开设置" data-icon="settings"></button>
+      </div>
     </header>
 
     <main id="app" aria-live="polite"></main>
@@ -36,6 +51,6 @@
 
   <div id="modalRoot"></div>
   <input id="importInput" type="file" accept="application/json,.json" hidden />
-  <script src="./app.js" defer></script>
+  <script type="module" src="./boot.mjs"></script>
 </body>
 </html>

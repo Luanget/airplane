@@ -1,13 +1,15 @@
+import {checkForAppUpdate} from './updates.mjs';
 
 // STORAGE_KEY is intentionally permanent. Never rename it in a normal app update.
 // Keeping one stable key lets new program versions reuse the user's existing ledger.
+const financeStore = window.airplaneAccount.finance;
 const STORAGE_KEY = 'airplane-pwa-v1';
 const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
 const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.7.23';
+const APP_VERSION = '0.8.0';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -114,16 +116,20 @@ function dataNeedsMigration(parsed){
 function parseStoredData(raw){
   if(!raw) return null;
   const parsed=JSON.parse(raw);
+  const recognized=Array.isArray(parsed?.transactions) || Array.isArray(parsed?.categories)
+    || Array.isArray(parsed?.balanceAdjustments) || (parsed?.budgets && typeof parsed.budgets==='object')
+    || (parsed?.prefs && typeof parsed.prefs==='object');
+  if (!recognized || (parsed.transactions!==undefined && !Array.isArray(parsed.transactions))) throw new Error('unrecognized ledger');
   const needsMigration=dataNeedsMigration(parsed);
   return {value:normalizeData(parsed),needsMigration};
 }
 
 function writeStorageCopies(value){
   const raw=JSON.stringify(value);
-  localStorage.setItem(STORAGE_KEY,raw);
+  financeStore.setItem(STORAGE_KEY,raw);
   // A second on-device copy protects against a future buggy migration accidentally
   // damaging the primary key. It is not a substitute for exported JSON backups.
-  localStorage.setItem(RECOVERY_KEY,raw);
+  financeStore.setItem(RECOVERY_KEY,raw);
 }
 
 function runWhenIdle(task, timeout=1800){
@@ -135,16 +141,16 @@ function runWhenIdle(task, timeout=1800){
 }
 
 function ensureRecoveryCopyAfterLaunch(value){
-  if(localStorage.getItem(RECOVERY_KEY))return;
+  if(financeStore.getItem(RECOVERY_KEY))return;
   runWhenIdle(()=>{
     try{
-      if(!localStorage.getItem(RECOVERY_KEY))localStorage.setItem(RECOVERY_KEY,JSON.stringify(value));
+      if(!financeStore.getItem(RECOVERY_KEY))financeStore.setItem(RECOVERY_KEY,JSON.stringify(value));
     }catch(e){console.warn('Deferred recovery copy failed',e);}
   });
 }
 
 function loadData(){
-  const primaryRaw=localStorage.getItem(STORAGE_KEY);
+  const primaryRaw=financeStore.getItem(STORAGE_KEY);
   try {
     const parsed=parseStoredData(primaryRaw);
     if(parsed){
@@ -160,12 +166,12 @@ function loadData(){
     console.warn('Primary Airplane data is invalid; trying local recovery copy',e);
   }
 
-  const recoveryRaw=localStorage.getItem(RECOVERY_KEY);
+  const recoveryRaw=financeStore.getItem(RECOVERY_KEY);
   try {
     const recovered=parseStoredData(recoveryRaw);
     if(recovered){
-      localStorage.setItem(STORAGE_KEY,JSON.stringify(recovered.value));
-      if(recovered.needsMigration)localStorage.setItem(RECOVERY_KEY,JSON.stringify(recovered.value));
+      financeStore.setItem(STORAGE_KEY,JSON.stringify(recovered.value));
+      if(recovered.needsMigration)financeStore.setItem(RECOVERY_KEY,JSON.stringify(recovered.value));
       console.warn('Airplane restored data from the on-device recovery copy');
       return recovered.value;
     }
@@ -175,6 +181,10 @@ function loadData(){
 
   // Only a genuinely new origin/device, with neither a primary nor recovery copy,
   // starts with empty data. A program update by itself never reaches this path.
+  if(primaryRaw!==null || recoveryRaw!==null){
+    recoveryRequired=true;
+    return freshData();
+  }
   const created=freshData();
   writeStorageCopies(created);
   return created;
@@ -183,6 +193,7 @@ function loadData(){
 let dataRevision=0;
 function saveData(){ dataRevision++; monthTxCache.clear(); balanceCache.revision=-1; writeStorageCopies(data); }
 
+let recoveryRequired=false;
 let data = loadData();
 let ui = {tab:'home', selectedMonth:monthKey(new Date()), recordFilter:'all'};
 let storageProtection = {supported:!!(navigator.storage?.persist && navigator.storage?.persisted), checked:false, persisted:false};
@@ -506,7 +517,7 @@ function settingsContent(){
       <button class="setting-row" data-action="export-json"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">完整备份</span><span class="setting-sub">导出 JSON，可完整恢复预算、分类和账单</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="export-csv"><span class="mini-icon">${icon('file')}</span><span class="setting-copy"><span class="setting-title">导出明细 CSV</span><span class="setting-sub">方便在 Excel / Numbers 中查看</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="import"><span class="mini-icon">${icon('upload')}</span><span class="setting-copy"><span class="setting-title">恢复备份</span><span class="setting-sub">严格校验 Airplane JSON，恢复前自动留存当前快照</span></span><span class="chevron">${icon('chevron')}</span></button>
-      ${localStorage.getItem(PRE_RESTORE_KEY)?`<button class="setting-row" data-action="restore-pre-snapshot"><span class="mini-icon">${icon('refund')}</span><span class="setting-copy"><span class="setting-title">恢复前快照</span><span class="setting-sub">找回最近一次导入备份前的本机账本</span></span><span class="chevron">${icon('chevron')}</span></button>`:''}
+      ${financeStore.getItem(PRE_RESTORE_KEY)?`<button class="setting-row" data-action="restore-pre-snapshot"><span class="mini-icon">${icon('refund')}</span><span class="setting-copy"><span class="setting-title">恢复前快照</span><span class="setting-sub">找回最近一次导入备份前的本机账本</span></span><span class="chevron">${icon('chevron')}</span></button>`:''}
     </section>
     <div class="section-head"><h2>安装与保护</h2></div>
     <section class="card settings-section">
@@ -794,13 +805,13 @@ function preferredCategoryId(type){
 }
 function loadTransactionDraft(){
   try{
-    const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');
-    if(!d||!d.savedAt||Date.now()-d.savedAt>DRAFT_TTL_MS){localStorage.removeItem(DRAFT_KEY);return null;}
+    const d=JSON.parse(financeStore.getItem(DRAFT_KEY)||'null');
+    if(!d||!d.savedAt||Date.now()-d.savedAt>DRAFT_TTL_MS){financeStore.removeItem(DRAFT_KEY);return null;}
     return d;
-  }catch{localStorage.removeItem(DRAFT_KEY);return null;}
+  }catch{financeStore.removeItem(DRAFT_KEY);return null;}
 }
-function saveTransactionDraft(d){ localStorage.setItem(DRAFT_KEY,JSON.stringify({...d,savedAt:Date.now()})); }
-function clearTransactionDraft(){ localStorage.removeItem(DRAFT_KEY); }
+function saveTransactionDraft(d){ financeStore.setItem(DRAFT_KEY,JSON.stringify({...d,savedAt:Date.now()})); }
+function clearTransactionDraft(){ financeStore.removeItem(DRAFT_KEY); }
 
 function normalizeAmountExpression(raw=''){
   return String(raw)
@@ -1199,16 +1210,16 @@ function validatedBackupData(parsed){
   return normalizeData(structuredClone(payload));
 }
 function savePreRestoreSnapshot(){
-  localStorage.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(structuredClone(data),{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
+  financeStore.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(structuredClone(data),{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
 }
 function restorePreRestoreSnapshot(){
   try{
-    const raw=localStorage.getItem(PRE_RESTORE_KEY);if(!raw){toast('当前没有可恢复的快照');return;}
+    const raw=financeStore.getItem(PRE_RESTORE_KEY);if(!raw){toast('当前没有可恢复的快照');return;}
     const incoming=validatedBackupData(JSON.parse(raw));
     if(!confirm('恢复“恢复前快照”会替换当前账本。当前账本也会先保存为新的恢复前快照。继续吗？'))return;
     const current=structuredClone(data);
     data=incoming;clearTransactionDraft();
-    localStorage.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(current,{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
+    financeStore.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(current,{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
     saveData();closeModal({runDismiss:false});render();toast('已恢复上一次导入前的账本');
   }catch(err){console.warn('Airplane pre-restore snapshot is invalid',err);toast('恢复前快照已损坏，无法恢复');}
 }
@@ -1241,162 +1252,25 @@ document.getElementById('importInput').addEventListener('change', async e=>{
     const parsed=JSON.parse(await file.text());
     const incoming=validatedBackupData(parsed);
     if(!confirm('已确认这是有效的 Airplane 备份。恢复会替换当前设备上的账本，并自动保留一份“恢复前快照”。继续吗？'))return;
+    if(recoveryRequired){
+      const damaged={primary:financeStore.getItem(STORAGE_KEY),recovery:financeStore.getItem(RECOVERY_KEY)};
+      financeStore.setItem('airplane-damaged-before-restore-v1',JSON.stringify(damaged));
+      recoveryRequired=false;
+      clearTransactionDraft();writeStorageCopies(incoming);window.location.reload();return;
+    }
     savePreRestoreSnapshot();
     clearTransactionDraft();data=incoming;saveData();render();toast('备份已恢复，原账本已保留为恢复前快照');
   }catch(err){console.warn('Airplane backup import rejected',err);toast('无法识别这个 Airplane 备份');}
 });
 
-let swReloading=false;
-let updateReloadFallbackTimer=null;
-let airplaneRegistration=null;
-let updateBannerShown=false;
-let updateReminderDismissed=false;
-let pendingUpdateWorker=null;
-const UPDATE_CHECK_KEY='airplane-last-update-check-v1';
-const UPDATE_ACTIVE_INTERVAL_MS=5*60*1000;
-const UPDATE_RESUME_INTERVAL_MS=2*60*1000;
-let updateIntervalTimer=null;
-const observedRegistrations=new WeakSet();
-
-function activateWaitingServiceWorker(){
-  const worker=airplaneRegistration?.waiting||pendingUpdateWorker;
-  if(!worker){
-    // A previous bridge worker may already have activated itself. In that case
-    // the update succeeded; do not report a false failure.
-    toast('新版已经生效或正在完成切换',{duration:2200});
-    return;
-  }
-  const activate=()=>{
-    swReloading=true;
-    toast('正在更新 Airplane…',{duration:1800});
-    worker.postMessage({type:'SKIP_WAITING'});
-    // iOS can occasionally miss/delay controllerchange even after the new
-    // worker reaches activated. Keep a bounded reload fallback so the fresh
-    // shell is actually loaded after the user explicitly chose to update.
-    clearTimeout(updateReloadFallbackTimer);
-    updateReloadFallbackTimer=setTimeout(()=>{
-      if(swReloading)window.location.reload();
-    },4500);
-  };
-  if(worker.state==='installed'||worker.state==='activating'){activate();return;}
-  if(worker.state==='activated'){toast('Airplane 已是新版本');return;}
-  const onState=()=>{
-    if(worker.state==='installed'){worker.removeEventListener('statechange',onState);activate();}
-    else if(worker.state==='redundant'){worker.removeEventListener('statechange',onState);toast('新版准备失败，请稍后在设置中重试');}
-  };
-  worker.addEventListener('statechange',onState);
-  toast('新版正在准备，完成后会继续更新…',{duration:2200});
-}
-
-function hideUpdateBanner(){
-  document.querySelector('.update-banner')?.remove();
-  updateBannerShown=false;
-}
-function showUpdateAvailable(worker=null,{force=false}={}){
-  if(worker)pendingUpdateWorker=worker;
-  if(updateReminderDismissed&&!force)return;
-  if(force)updateReminderDismissed=false;
-  if(updateBannerShown&&document.querySelector('.update-banner'))return;
-  updateBannerShown=true;
-  document.querySelector('.update-banner')?.remove();
-  const d=document.createElement('div');d.className='update-banner';
-  d.innerHTML=`<span><strong>Airplane 有新版本</strong><small>已在后台准备好</small></span><button class="update-banner-action" type="button">更新</button><button class="update-banner-close" type="button" aria-label="稍后更新">${icon('close')}</button>`;
-  document.body.appendChild(d);
-  d.querySelector('.update-banner-action').onclick=()=>{hideUpdateBanner();activateWaitingServiceWorker();};
-  d.querySelector('.update-banner-close').onclick=()=>{updateReminderDismissed=true;hideUpdateBanner();};
-}
-
-function observeServiceWorkerRegistration(registration){
-  if(!registration)return;
-  if(registration.waiting)showUpdateAvailable(registration.waiting);
-  if(observedRegistrations.has(registration))return;
-  observedRegistrations.add(registration);
-  registration.addEventListener('updatefound',()=>{
-    const worker=registration.installing;
-    if(!worker)return;
-    worker.addEventListener('statechange',()=>{
-      if(worker.state==='installed'&&navigator.serviceWorker.controller)showUpdateAvailable(worker);
-    });
-  });
-}
-
-async function checkForAppUpdate(showToast=false){
-  if(!('serviceWorker' in navigator)){if(showToast)toast('当前环境不支持程序更新');return;}
-  try{
-    const registration=airplaneRegistration||await navigator.serviceWorker.getRegistration('./');
-    if(!registration){if(showToast)toast('更新服务尚未就绪');return;}
-    airplaneRegistration=registration;
-    observeServiceWorkerRegistration(registration);
-    await registration.update();
-    localStorage.setItem(UPDATE_CHECK_KEY,String(Date.now()));
-    if(registration.waiting){showUpdateAvailable(registration.waiting,{force:showToast});return;}
-    if(showToast){
-      if(registration.installing){toast('发现新版，正在后台准备…',{duration:2600});}
-      else toast('已检查，当前已是最新版本');
-    }
-  }catch(err){
-    console.warn('Airplane update check failed',err);
-    if(showToast)toast('暂时无法连接更新服务器，继续使用本地版本');
-  }
-}
-
-function lastUpdateCheckAt(){
-  return Number(localStorage.getItem(UPDATE_CHECK_KEY)||0);
-}
-function backgroundUpdateIfDue(minInterval=UPDATE_ACTIVE_INTERVAL_MS){
-  if(document.visibilityState!=='visible'||navigator.onLine===false)return;
-  if(Date.now()-lastUpdateCheckAt()<minInterval)return;
-  checkForAppUpdate(false);
-}
-function scheduleBackgroundUpdateCheck(){
-  // Startup is never blocked by the network: render from the local shell first,
-  // then always perform one fresh update check shortly after launch. Do not
-  // reuse the previous session's timestamp to suppress this first check.
-  setTimeout(()=>{
-    if(document.visibilityState==='visible'&&navigator.onLine!==false)checkForAppUpdate(false);
-  },6000);
-  if(updateIntervalTimer)clearInterval(updateIntervalTimer);
-  updateIntervalTimer=setInterval(()=>backgroundUpdateIfDue(UPDATE_ACTIVE_INTERVAL_MS),UPDATE_ACTIVE_INTERVAL_MS);
-}
-function bindForegroundUpdateChecks(){
-  document.addEventListener('visibilitychange',()=>{
-    if(document.visibilityState==='visible')setTimeout(()=>backgroundUpdateIfDue(UPDATE_RESUME_INTERVAL_MS),700);
-  });
-  // Reconnecting is a useful opportunity to discover a version that could not
-  // be checked while offline, without affecting normal launch performance.
-  window.addEventListener('online',()=>setTimeout(()=>backgroundUpdateIfDue(0),700));
-}
-
-async function registerAirplaneServiceWorker(){
-  if(!('serviceWorker' in navigator)) return;
-  try{
-    navigator.serviceWorker.addEventListener('controllerchange',()=>{
-      pendingUpdateWorker=null;hideUpdateBanner();
-      if(!swReloading)return;
-      clearTimeout(updateReloadFallbackTimer);
-      // Give the newly activated worker a brief moment to claim the client and
-      // finish cache cleanup, then reload through its fresh shell cache.
-      setTimeout(()=>window.location.reload(),120);
-    });
-    airplaneRegistration=await navigator.serviceWorker.getRegistration('./');
-    if(!airplaneRegistration){
-      airplaneRegistration=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
-    }
-    observeServiceWorkerRegistration(airplaneRegistration);
-    scheduleBackgroundUpdateCheck();
-  }catch(err){
-    console.warn('Airplane Service Worker setup failed',err);
-  }
-}
-
-window.addEventListener('load',()=>{
-  bindForegroundUpdateChecks();
-  // Keep the launch frame free of browser-management work. The already-active
-  // Service Worker serves the app from cache before this code runs; registration
-  // bookkeeping and update discovery can safely begin after the first paint.
-  setTimeout(registerAirplaneServiceWorker,700);
-});
-render();
+if(recoveryRequired){
+  document.querySelector('.tabbar').hidden=true;
+  document.querySelector('.topbar').hidden=true;
+  const app=document.querySelector('#app');
+  app.innerHTML='<section class="card recover-card"><h2>账本需要恢复</h2><p>本机的两份账本均无法解析。可以先保存原始副本，再选择一份有效的财务备份。</p><button id="save-damaged" class="secondary-button">导出原始副本</button><button id="import-repair" class="primary-button">选择财务备份</button></section>';
+  document.querySelector('#save-damaged').onclick=()=>downloadBlob('Airplane-damaged-backup.json',JSON.stringify({primary:financeStore.getItem(STORAGE_KEY),recovery:financeStore.getItem(RECOVERY_KEY)}),'application/json');
+  document.querySelector('#import-repair').onclick=()=>document.querySelector('#importInput').click();
+}else render();
 // Persistence status is important but not required to show the ledger. Query it
 // after launch instead of competing with the first interactive frame on iOS.
 runWhenIdle(()=>ensurePersistentStorage(),1600);

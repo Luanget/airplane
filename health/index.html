@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https: http://127.0.0.1:8787; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f7f4">
+  <meta name="description" content="Airplane 健康模块：离线记录饮食、体重、运动与库存。">
+  <link rel="manifest" href="../manifest.webmanifest">
+  <link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
+  <title>Airplane · 健康</title>
+  <link rel="stylesheet" href="./app.css">
+<link rel="stylesheet" href="../shared.css">
+</head>
+<body data-module="health">
+  <form id="account-gate" hidden>
+    <h1>打开私人账本</h1>
+    <p>输入自己的账户码以解锁本机记录。离线也可使用。</p>
+    <label>账户码<input type="password" required minlength="64" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <button type="submit">解锁</button> <a href="?">返回设备账本</a>
+    <output role="status"></output>
+  </form>
+  <div data-shell class="shell">
+    <header class="header">
+      <div class="header-top">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">✈</span><div><span class="brand-small">AIRPLANE</span><strong>健康管理</strong></div></div>
+        <a data-account class="account-link" href="?private=1">私人账本</a>
+        <a data-module-link class="finance-link" href="../index.html" title="返回Airplane财务主页">财务首页 <span aria-hidden="true">↗</span></a>
+      </div>
+      <nav class="tabs" aria-label="健康模块导航">
+        <button class="tab active" data-tab="overview" type="button">概览</button>
+        <button class="tab" data-tab="record" type="button">记录</button>
+        <button class="tab" data-tab="inventory" type="button">库存</button>
+        <button class="tab" data-tab="settings" type="button">设置</button>
+      </nav>
+    </header>
+    <main>
+      <section class="view" id="view-overview" aria-label="健康概览">
+        <div id="welcome" hidden class="notice notice-info">
+          <strong>首次使用：可以直接手动记录，或导入已有健康主账。</strong>
+          <p>已有历史健康数据时，可在“设置”中导入自己的 <code>health_tracker_*.json</code>。所有数据仅保存在当前设备，不会进入公开Git仓库或触碰财务记录。</p>
+          <button type="button" class="btn btn-primary" id="jump-import">去导入</button>
+        </div>
+        <div class="section-title-row"><div><h1>今日概览</h1></div><div class="date-ctrl"><label class="sr-only" for="report-date">选择日期</label><input type="date" id="report-date"></div></div>
+        <section class="hero-card" aria-label="今日能量">
+          <div class="hero-label">已记录热量 <span id="today-status" class="hero-tag">—</span></div>
+          <div class="hero-count"><span id="hero-calories">—</span><span class="unit">kcal</span></div>
+          <div class="progress-track"><div class="progress-fill" id="cal-progress"></div></div>
+          <div class="hero-foot"><span id="hero-goal">目标 1700 kcal</span><span id="hero-remaining">—</span></div>
+        </section>
+        <div class="stat-grid">
+          <article class="stat"><span class="stat-label">蛋白质</span><strong id="protein-stat">—</strong><small id="protein-goal">目标 ≥150g</small></article>
+          <article class="stat"><span class="stat-label">脂肪</span><strong id="fat-stat">—</strong><small id="fat-goal">目标 ≥45g</small></article>
+          <article class="stat"><span class="stat-label">碳水</span><strong id="carbs-stat">—</strong><small>按活动量调整</small></article>
+          <article class="stat"><span class="stat-label">钠</span><strong id="sodium-stat">—</strong><small>参考 2000mg</small></article>
+        </div>
+        <div class="stat-grid weight-grid">
+          <article class="stat"><span class="stat-label">最新晨重</span><strong id="weight-stat">—</strong><small id="weight-date">暂无记录</small></article>
+          <article class="stat"><span class="stat-label">最近7次均重</span><strong id="weight-average">—</strong><small id="weight-trend">—</small></article>
+        </div>
+        <section class="panel"><div class="panel-title"><div><h2>体重趋势</h2><p>最近14次有效晨重，非逐日插值</p></div></div><svg id="weight-chart" viewBox="0 0 540 185" role="img" aria-label="体重变化折线图"></svg></section>
+        <section class="panel"><div class="panel-title"><div><h2 id="cycle-title">六天减脂周期</h2><p id="cycle-range">—</p></div><strong class="cycle-total" id="cycle-deficit">—</strong></div>
+          <div class="progress-track cycle-track"><div class="progress-fill" id="cycle-progress"></div></div>
+          <div class="cycle-meta"><span id="cycle-pct">—</span><span id="cycle-equivalent">—</span></div>
+          <p class="panel-note" id="cycle-note">—</p>
+        </section>
+        <section class="panel"><div class="panel-title"><h2>当天记录</h2><button type="button" id="quick-record" class="btn btn-text">添加记录 ＋</button></div><div id="day-food-list" class="event-list"></div><div id="day-activity-list" class="activity-list"></div></section>
+      </section>
+      <section class="view hidden" id="view-record" aria-label="新增健康记录">
+        <div class="section-title-row"><div><h1>新增记录</h1></div></div>
+        <div class="notice notice-light">已吃的食物计入摄入并按确认数量扣库。计划保留在记录中，供下次查看。</div>
+        <details class="form-panel assistant-panel"><summary>智能饮食助手 <span class="summary-icon">＋</span></summary>
+          <div id="assistant-guest" hidden><p>使用获授权的私人账本即可识别食物和规划下一餐。</p><a class="btn btn-secondary" href="?private=1">打开私人账本</a></div>
+          <form id="assistant-form" hidden>
+            <label>用途<select name="mode"><option value="entry">文字录入</option><option value="photo">照片与标签</option><option value="plan">推荐下一餐</option></select></label>
+            <label>食物或要求<textarea name="text" rows="2" maxlength="600" placeholder="例如：鸡胸 245g、两包面、牛奶喝了 533g"></textarea></label>
+            <label id="photo-label" hidden>选择食物或营养标签照片<input type="file" name="image" accept="image/*"></label>
+            <label class="checkbox"><input type="checkbox" name="catalog" checked>附上相关库存食品（最多 16 项）</label>
+            <button type="submit" class="btn btn-secondary">预览要发送的数据</button>
+          </form>
+          <div id="send-preview" hidden><h3>本次发送给 OpenAI 的内容</h3><p id="send-description"></p><pre id="send-fields"></pre><img id="send-image" hidden alt="本次发送的压缩照片"><button id="send-request" class="btn btn-primary">同意并发送本次请求</button></div>
+          <p id="assistant-status" role="status" aria-live="polite"></p>
+          <form id="candidate-form" hidden><h3>核对候选</h3><p id="candidate-note"></p><div class="form-grid"><label>记录日期<input type="date" name="date" required></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div><div id="candidate-list"></div><button class="btn btn-primary" type="submit">确认所选记录</button> <button class="btn btn-text" id="discard" type="button">放弃</button></form>
+        </details>
+        <details class="form-panel" open><summary>手动饮食 <span class="summary-icon">＋</span></summary>
+          <form id="food-form">
+            <div class="form-grid"><label>日期<input type="date" name="date" required></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div>
+            <label>从库存食品选择（可选）<select name="foodId" id="food-select"><option value="">自定义食物</option></select></label>
+            <label>食品名称<input name="name" required placeholder="如：熟鸡胸、面包、外卖"></label>
+            <div class="form-grid"><label>份量描述<input name="portion" placeholder="如：246g / 1整包"></label><label>自动估值份量（g / mL / 个）<input type="number" name="amount" min="0" step="0.1" inputmode="decimal" placeholder="可选"></label></div>
+            <div class="form-grid"><label>热量 kcal<input name="kcal" type="number" step="0.01" min="0" required></label><label>蛋白质 g<input name="protein" type="number" step="0.01" min="0" required></label><label>碳水 g<input name="carbs" type="number" step="0.01" min="0" required></label><label>脂肪 g<input name="fat" type="number" step="0.01" min="0" required></label><label>钠 mg<input name="sodium" type="number" step="0.1" min="0" required></label><label>成本 ¥（可选）<input name="cost" type="number" step="0.01" min="0" placeholder="未知可留空"></label></div>
+            <div class="form-grid"><label>进食状态<select name="status"><option value="actual">已吃（计入）</option><option value="plan">仅计划（不计入）</option></select></label><label>库存扣减数量（原库存单位，可选）<input name="stockQty" type="number" min="0" step="0.01" placeholder="不填则不扣"></label></div>
+            <p class="form-hint">从食品库选择后，会按标签的100g或整份自动填写营养。请在提交前核对重量与标签；未知不能由AI代填为实测值。</p>
+            <button class="btn btn-primary full" type="submit">确认保存这条饮食</button>
+          </form>
+        </details>
+        <details class="form-panel"><summary>晨重 <span class="summary-icon">＋</span></summary><form id="weight-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>体重 kg<input type="number" name="kg" min="20" max="500" step="0.01" inputmode="decimal" required placeholder="75.0"></label></div><label class="checkbox"><input type="checkbox" name="isMorning" checked> 晨重（计入7次均重）</label><button type="submit" class="btn btn-primary full">保存体重</button></form></details>
+        <details class="form-panel"><summary>运动 <span class="summary-icon">＋</span></summary><form id="activity-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>运动类型<input name="name" required placeholder="通勤骑行 / 夜骑 / 步行"></label><label>距离 km<input name="km" type="number" min="0" step="0.01" placeholder="可选"></label><label>活动热量 kcal<input name="kcal" type="number" min="0" step="0.1" required></label></div><label class="checkbox"><input type="checkbox" name="includedInBase" checked> 已包含普通日TDEE（通勤通常勾选，防重复）</label><button type="submit" class="btn btn-primary full">保存运动</button></form></details>
+        <section class="panel"><h2>最近自行添加的记录</h2><div id="local-events" class="event-list"></div></section>
+      </section>
+      <section class="view hidden" id="view-inventory" aria-label="食物库存"><div class="section-title-row"><div><h1>现有库存</h1></div></div>
+        <div class="notice notice-light">显示主账导入时的库存，加上本应用内确认的库存变化。不会因“计划”自动减少。</div>
+        <label class="search-label">筛选食材<input id="inventory-search" type="search" placeholder="鸡胸 / 水饺 / 牛奶 / 芹菜"></label>
+        <div id="inventory-list" class="inventory-list"></div>
+        <details class="form-panel"><summary>登记入库、丢弃或盘点 <span class="summary-icon">＋</span></summary><form id="stock-form"><label>选择库存食品<select name="foodId" id="stock-food-select" required></select></label><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>库存变化量（增加填正数，消耗填负数）<input name="delta" type="number" step="0.01" required></label></div><label>原因<input name="reason" placeholder="新采购 / 丢弃 / 清点纠正"></label><button type="submit" class="btn btn-primary full">确认修改库存</button></form></details>
+      </section>
+      <section class="view hidden" id="view-settings" aria-label="设置和备份"><div class="section-title-row"><div><h1>数据与设置</h1></div></div>
+        <section class="panel"><h2>导入历史健康主账（可选）</h2><p class="muted">选择自己保存的 <code>health_tracker_*.json</code>，或直接从空账本开始。文件仅在当前浏览器解析，内容不会上传服务器。</p><input type="file" id="import-file" accept=".json,application/json" hidden><button id="choose-import" class="btn btn-primary">选择健康JSON</button><div id="import-preview" class="preview"></div><p class="form-hint">重新导入会替换现有健康模块数据。确认前会尝试先下载旧备份；请保存好备份文件。财务账本不会受到影响。</p></section>
+        <section class="panel"><h2>备份与恢复</h2><p class="muted">备份包括导入的历史数据、你在本模块新增的饮食、体重和运动、库存变化及设置。</p><div class="button-row"><button id="export-button" class="btn btn-secondary">导出健康备份JSON</button><input type="file" id="restore-file" accept=".json,application/json" hidden><button id="choose-restore" class="btn btn-secondary">恢复健康备份</button></div></section>
+        <section class="panel"><h2>计算参数</h2><form id="settings-form"><div class="form-grid"><label>每日热量参考 kcal<input type="number" name="calorieTarget" min="500" max="8000" required></label><label>普通日TDEE kcal<input type="number" name="baselineTdee" min="1000" max="8000" required></label><label>每周期目标缺口 kcal<input type="number" name="cycleTarget" min="100" max="30000" required></label><label>周期天数<input type="number" name="cycleDays" min="1" max="31" required></label><label>周期锚点<input type="date" name="cycleAnchor" required></label></div><button class="btn btn-secondary" type="submit">保存计算参数</button></form></section>
+        <section class="panel"><h2>数据状态</h2><div id="import-status" class="muted">尚未导入历史数据</div></section>
+        <section class="panel"><h2>隐私与更新</h2><p>设备账本由当前浏览器配置文件共享。多人共用设备时，请各自使用私人账本。账户码仅用于本机解锁与授权验证。</p><button id="check-update" class="btn btn-secondary">检查程序更新</button></section>
+      </section>
+    </main>
+    <footer class="footer">Airplane Health · 离线优先 · 账本数值为记录及估算，并非医疗诊断</footer>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="../boot.mjs"></script>
+</body>
+</html>

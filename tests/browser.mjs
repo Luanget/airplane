@@ -1,0 +1,165 @@
+// Run from a full clone. This upgrades the actual 0.7.23 shell on one origin.
+import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {readFileSync,existsSync} from 'node:fs';
+import {createServer} from 'node:http';
+import {resolve,extname} from 'node:path';
+import {randomBytes} from 'node:crypto';
+import {createRequire} from 'node:module';
+const {chromium} = createRequire(import.meta.url)('playwright-core');
+
+const root=process.cwd(), prefix='/airplane/';
+const publicAssets=new Set(['sw.js',...Array.from(readFileSync('sw.js','utf8').split('const assets')[0].matchAll(/'\.\/([^']+)'/g),m=>m[1])]);
+let old=true;
+const server=createServer((req,res)=>{
+  const path=new URL(req.url,'http://localhost').pathname;
+  let name=path.slice(prefix.length);
+  if (name.endsWith('/') || !name) name+='index.html';
+  if (!path.startsWith(prefix) || !publicAssets.has(name)) {res.writeHead(404).end();return;}
+  try {
+    const buf=old ? execFileSync('git',['show','6fb5f50:'+name],{stdio:['ignore','pipe','ignore']}) : readFileSync(resolve(root,name));
+    const mime={'.html':'text/html','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.png':'image/png','.webmanifest':'application/manifest+json'};
+    res.writeHead(200,{'Content-Type':mime[extname(name)] || 'text/plain','Cache-Control':'no-store'}).end(buf);
+  } catch {res.writeHead(404).end();}
+});
+await new Promise((ok,fail)=>server.once('error',fail).listen(0,'127.0.0.1',ok));
+const base='http://127.0.0.1:'+server.address().port+prefix;
+let browser;
+try {
+  browser=await chromium.launch({executablePath:process.env.CHROME_PATH || ['/usr/bin/google-chrome','/usr/bin/chromium'].find(existsSync),headless:true});
+  const ctx=await browser.newContext({viewport:{width:390,height:844}});
+  const page=await ctx.newPage();
+  page.setDefaultTimeout(10000);
+  const errors=[]; page.on('pageerror',err=>errors.push(String(err)));
+  page.on('dialog',dialog=>dialog.accept());
+  await page.goto(base);
+  await page.locator('[data-action="budget"]').first().click();
+  await page.locator('#budgetInput').fill('1234');
+  await page.locator('#modalSave').click();
+  await page.locator('#addButton').click();
+  await page.locator('#txAmount').fill('12.34');
+  await page.locator('#txNote').fill('synthetic legacy entry');
+  await page.locator('#txSubmit').click();
+  const ledger=()=>page.evaluate(()=>localStorage.getItem('airplane-pwa-v1'));
+  // Let 0.7.23 apply its own first-relaunch defaults before comparing bytes.
+  await page.reload();await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
+  const before=await ledger();
+  assert.equal(JSON.parse(before).transactions[0].amount,12.34);
+  assert.ok(Object.values(JSON.parse(before).budgets).includes(1234));
+  await page.evaluate(async()=>{await navigator.serviceWorker.ready;await caches.open('another-app');});
+  await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
+  old=false;
+  await page.evaluate(async()=>{await (await navigator.serviceWorker.ready).update();});
+  await page.locator('.update-banner-action').waitFor();
+  assert.equal(await page.locator('[data-account]').count(),0);
+  await page.locator('.update-banner-action').click();
+  await page.locator('[data-account]').waitFor();
+  assert.equal(await ledger(),before);
+  assert.equal(await page.evaluate(()=>localStorage.getItem('airplane-pwa-recovery-v1')),before);
+  await page.locator('#settingsButton').click();
+  const downloading=page.waitForEvent('download');
+  await page.locator('[data-action="export-json"]').click();
+  const backup=JSON.parse(readFileSync(await (await downloading).path(),'utf8'));
+  assert.deepEqual(backup.data,JSON.parse(before));
+  await page.locator('#importInput').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
+  await page.waitForFunction(()=>localStorage.getItem('airplane-pre-restore-v1'));
+  assert.deepEqual(JSON.parse(await ledger()),backup.data);
+  console.log('PASS old finance budget, transaction, backup/restore and user-approved PWA upgrade');
+
+  await ctx.setOffline(true);
+  await page.goto(base+'health/?test=offline');
+  await page.locator('[data-tab="settings"]').click();
+  const synthetic={tables:{food_events:[],weight_events:[],food_inventory:[{'食品ID':'fixture','名称':'合成库存','库存值':5,'库存单位':'包','标准份量':'每包','kcal':100}]}};
+  await page.locator('#import-file').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(synthetic))});
+  await page.waitForFunction(()=>document.querySelector('#view-overview')?.classList.contains('hidden')===false);
+  await page.locator('[data-tab="inventory"]').click();
+  await page.getByText('合成库存',{exact:true}).waitFor();
+  await page.reload();await page.locator('[data-tab="inventory"]').click();
+  await page.getByText('合成库存',{exact:true}).waitFor();
+  await page.locator('[data-tab="settings"]').click();
+  const healthDownload=page.waitForEvent('download');
+  await page.locator('#export-button').click();
+  const healthCopy=JSON.parse(readFileSync(await (await healthDownload).path(),'utf8'));
+  assert.equal(healthCopy.legacy.inventory[0].id,'fixture');
+  await page.locator('#restore-file').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from('{"appType":"airplane-health-v1"}')});
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('导入失败'));
+  await page.locator('#restore-file').setInputFiles({name:'valid.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(healthCopy))});
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('恢复成功'));
+  assert.equal(await ledger(),before);
+  const cacheNames=await page.evaluate(()=>caches.keys());
+  assert.ok(cacheNames.includes('another-app'));
+  assert.ok(!cacheNames.some(k=>/^airplane-shell-v\d+$/.test(k)));
+  await page.goto(base);
+  await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
+  console.log('PASS separate offline routes, local import, health persisted across reload');
+  const codes=[randomBytes(32).toString('hex'),randomBytes(32).toString('hex')];
+  async function unlock(url,code) {
+    await page.goto(url+'?private=1');await page.locator('#account-gate input').fill(code);
+    await page.locator('#account-gate button').click();
+    await page.locator('[data-shell]').waitFor();
+  }
+  await unlock(base,codes[0]); assert.equal(await page.getByText('synthetic legacy entry').count(),0);
+  await page.locator('#addButton').click();await page.locator('#txAmount').fill('5');
+  await page.locator('#txNote').fill('private synthetic');await page.locator('#txSubmit').click();
+  await unlock(base,codes[1]);assert.equal(await page.getByText('private synthetic').count(),0);
+  await unlock(base,codes[0]);await page.getByText('private synthetic',{exact:true}).waitFor();
+  assert.equal(await ledger(),before);
+  await unlock(base+'health/',codes[0]);
+  await page.locator('[data-tab="inventory"]').click();assert.equal(await page.getByText('合成库存',{exact:true}).count(),0);
+  await ctx.setOffline(false);
+  const calls=[];
+  await ctx.route('http://127.0.0.1:8787/api/assist',async route=>{
+    const input=route.request().postDataJSON(); calls.push(input);
+    assert.ok(route.request().headers().authorization.startsWith('Bearer '));
+    const item={sku:null,name:'合成餐点',action:input.mode==='plan'?'plan':'eat',amount:120,unit:'g',packageSize:null,packageUnit:null,
+      basisAmount:100,basisUnit:'g',nutrients:{kcal:100,protein:10,carbs:10,fat:3,sodium:10},uncertainty:'合成测试估值'};
+    await route.fulfill({json:{note:'供测试',items:[item]},headers:{'Access-Control-Allow-Origin':new URL(base).origin}});
+  });
+  await page.locator('[data-tab="record"]').click();
+  await page.locator('.assistant-panel > summary').click();
+  const form=page.locator('#assistant-form');
+  await form.locator('textarea').fill('合成餐点');
+  await form.locator('[type=submit]').click();
+  await page.locator('#send-preview').waitFor();assert.equal(calls.length,0);
+  await page.locator('#send-request').click();await page.locator('#candidate-list legend').waitFor();
+  assert.equal(await page.locator('#local-events .event-row').count(),0);
+  await page.locator('#candidate-list').getByLabel('数量',{exact:true}).fill('90');
+  await page.locator('#candidate-form [type=submit]').click();
+  await page.locator('#local-events .event-row').waitFor(); assert.equal(calls.length,1);
+  await page.locator('[data-tab="overview"]').click();
+  assert.equal(await page.locator('#hero-calories').textContent(),'90');
+  await page.locator('[data-tab="record"]').click();await form.getByRole('combobox').selectOption('plan');
+  await form.locator('[type=submit]').click();await page.locator('#send-request').click();
+  await page.locator('#candidate-list legend').waitFor();assert.equal(calls[1].summary.totals.kcal,90);
+  await page.locator('#candidate-form [type=submit]').click();
+  await page.waitForFunction(()=>document.querySelector('#candidate-form').hidden);
+  await form.getByRole('combobox').selectOption('photo');
+  const pixels=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=40;c.height=40;return c.toDataURL('image/png').split(',')[1];});
+  await form.locator('[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(pixels,'base64')});
+  await form.locator('[type=submit]').click();await page.locator('#send-image').waitFor();
+  assert.equal(calls.length,2);await page.locator('#send-request').click();await page.locator('#candidate-list legend').waitFor();
+  assert.ok(calls[2].photo.startsWith('data:image/jpeg;base64,/9j/'));await page.locator('#discard').click();
+  await page.locator('[data-tab="overview"]').click();assert.equal(await page.locator('#hero-calories').textContent(),'90');
+  await unlock(base+'health/',codes[1]); assert.equal(await page.locator('#hero-calories').textContent(),'—');
+  // Refuse malformed backups and detect stale writes in the actual IndexedDB.
+  await page.evaluate(async()=>{
+    const {readState,saveState}=await import('./storage.mjs');
+    const state=await readState(), expected=state.revision??0;
+    await saveState(state,expected);
+    try {await saveState(state,expected);}catch(err){if(err.message.includes('其他页面'))return;}
+    throw Error('stale write accepted');
+  });
+  await page.goto(base);
+  await page.evaluate(()=>{localStorage.setItem('airplane-pwa-v1','{');localStorage.setItem('airplane-pwa-recovery-v1','invalid');});
+  await page.reload();await page.getByRole('button',{name:'导出原始副本'}).waitFor();
+  assert.equal(await ledger(),'{');
+  await page.locator('#importInput').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
+  await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
+  assert.deepEqual(JSON.parse(await ledger()),backup.data);
+  assert.deepEqual(errors,[]);
+  console.log('PASS two encrypted accounts, three consent previews, editable candidates and local-only confirmation');
+} finally {
+  await browser?.close();
+  server.closeAllConnections();
+  await new Promise(resolve=>server.close(resolve));
+}

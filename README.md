@@ -1,6 +1,56 @@
-# Airplane PWA 0.7.21
+# Airplane PWA 0.8.0
 
-## 本版体验收尾
+Airplane 在设备上保存财务和健康账本。财务首页的心形按钮进入健康管理。健康页提供饮食、体重、运动、库存和六天周期汇总，记录页可以手动填写，也可以从智能助手的候选开始。
+
+## 本地运行
+
+在仓库根目录执行以下命令，打开 **http://127.0.0.1:8080/**。静态服务只发布应用资源。首次在线打开并完成缓存后，两个模块都可以离线重新打开。设置中的「检查程序更新」会下载新版，点击「更新」后切换。修改离线资源时请同步提升 `sw.js` 中的版本号。
+
+```sh
+python3 serve.py
+```
+
+旧设备升级时继续使用原网站地址与浏览器配置文件。设备账本沿用 `airplane-pwa-v1`、`airplane-pwa-recovery-v1`、原草稿和恢复前快照。健康主账与健康备份在「健康 → 设置」中导入、导出。导入会先预览并要求确认。财务设置仍接受原始账本 JSON 和已有完整备份。
+
+## 账户和设备
+
+- **设备账本**可直接打开。它属于当前浏览器配置文件，适合在自己的设备延续旧账。共用同一浏览器的人也能打开这个入口。
+- **私人账本**使用独立随机账户码。财务和健康内容均在本机加密保存，每次重新打开或切换模块需要解锁。点「锁定账户」离开。可以先导出设备账本，再在自己的私人账本中明确导入。两个入口独立保存。
+- 账户码需要单独保存。删除站点数据会清除本机账本。导出的 JSON 是可读备份，请私下保管。私有存储使用本地附带的 TweetNaCl 1.0.3 secretbox。浏览器从随机账户码分别派生本地加密密钥和 API 凭证，服务端仅保存凭证摘要。
+- 在「健康 → 记录 → 智能饮食助手」选择文字、照片或下一餐。先在本地查看发送内容，再同意本次发送。照片在本机缩放、重编码。目录最多发送 16 个 SKU，可取消分享。只有下一餐模式附上今日汇总、目标、库存量、价格和营养基准。原账快照、体重历史和财务数据均留在设备。
+- 候选可修改 SKU、动作、份量、包装和营养基准。已知标签优先，缺少的参数可补填。克和毫升分别处理。最后一次确认在单个本地事务内入账，库存不足时整批退回。计划保留在本地记录，热量和扣库在确认已吃时计算。缺少摄入记录的日期不产生缺口，当前日从次日开始计入周期。
+
+## 可选的 Cloudflare Worker
+
+需要 Node 22.13+。在仓库根目录运行 `npm ci`。用 `node worker/issue-account.mjs` 为每人生成一份随机账户码和摘要。账户码私下交给本人，授权名单只放摘要。离线解锁无需访问 Worker，取消 API 授权也不会锁住本地数据。
+
+本地开发时在 **worker/.dev.vars** 中设置以下两项。该文件受 Git 忽略且本地静态服务器无法读取。这里的值为占位符。
+
+```dotenv
+OPENAI_API_KEY="项目密钥占位"
+AI_USERS='["第一位用户的64位摘要","第二位用户的64位摘要"]'
+```
+
+再开一个终端运行 `npm run dev:api`。前端预览默认向本机 8787 端口发起请求。手动功能只需静态服务。将来启用远程 API 时需要：
+
+1. 在 Cloudflare Worker 的 **Secrets** 设置同名两项，使用获准创建 Responses 的 OpenAI 项目密钥。服务端请求固定到 `gpt-5.4-mini-2026-03-17`。
+2. 使用有 Workers 编辑权限的 Cloudflare 账户，绑定支持 SQLite 的 Durable Object `QUOTA`。配置和首次迁移已在 `worker/wrangler.toml` 中。单一对象同时检查每分钟、每人每月、全站每月与全站累计额度。默认分别为 3 次、60 次、5 美元和 10 美元。额度用 UTC 日历月，累计额度持续有效。
+3. 在 `ALLOWED_ORIGINS` 填写前端的精确源（协议、主机和端口）。同源部署将 `/api/assist` 路由给 Worker。GitHub Pages 使用独立 Worker 时，将其公开 HTTPS 接口填入 `health/endpoint.mjs`。保持原 PWA 地址可继续读取旧账本。
+4. 网关使用 `store:false`、严格 JSON Schema、固定模型及 4096 输出 token 上限。发起请求前按完整上下文预留约 0.319 美元。拿到有效 usage 后按标准价结算，含缓存输入按普通输入价保守计价。超时或用量不明会保留预留额；这些是本应用自身的额度计数。模型或计价变动时一并核对 `worker/responses.mjs` 的价格与上限。服务端只持久化用量计数，不提供账本读写接口。
+
+接口依据见 [Responses](https://developers.openai.com/api/reference/resources/responses/methods/create)、[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)、[图像输入](https://developers.openai.com/api/docs/guides/images-vision) 和 [模型规格与计价](https://developers.openai.com/api/docs/models/gpt-5.4-mini)。
+
+## 验证
+
+```sh
+npm test
+npm run test:worker
+npm run test:browser
+```
+
+浏览器回归需要完整 Git 历史与 Chrome / Chromium，可用 `CHROME_PATH` 指定浏览器可执行文件。测试使用临时浏览器、合成账本和模拟 OpenAI 响应。本地 Worker 测试运行真实 SQLite Durable Object，并发请求共享同一个预算。
+
+## 财务版本记录
 
 - 首页账单与统计页支持左右滑动切换月份；向左进入下个月，向右回到上个月，同时保留顶部箭头和月份选择器。
 - 查看历史月份时新增账单默认落在所查看月份的对应日期；若日期超过该月月底则取最后一天。保存后自动切到这笔记录所在月份，避免“保存后看不到”。
@@ -13,11 +63,10 @@
 - 清空数据、导入备份、恢复前快照时同步清理未完成的记账草稿，避免旧草稿跨账本残留。
 - 顶部余额统一改为“当前总余额”；旧版本遗留的未来日期账单在日期到来前不会提前影响当前总余额。
 
-## 保持不变
+## 财务存储
 
 - 数据主键：`airplane-pwa-v1`
 - 恢复副本：`airplane-pwa-recovery-v1`
-- Service Worker cache：`airplane-shell-v28`
 - 启动仍优先使用本地缓存；更新检查在后台进行，不阻塞打开。
 
 

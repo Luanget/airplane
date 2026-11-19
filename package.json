@@ -1,0 +1,19 @@
+{
+  "name": "airplane-pwa",
+  "version": "0.8.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "test": "node --test --experimental-test-isolation=none tests/*.test.mjs",
+    "test:worker": "node tests/runtime.mjs",
+    "test:browser": "node tests/browser.mjs",
+    "dev:api": "wrangler dev --local --config worker/wrangler.toml --port 8787"
+  },
+  "devDependencies": {
+    "miniflare": "5.20261118.0-beta",
+    "playwright-core": "1.57.0",
+    "wrangler": "4.165.0"
+  }
+}
