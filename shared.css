@@ -46,3 +46,14 @@
 #account-gate input { width:100%; display:block; padding:10px; margin:8px 0 16px; box-sizing:border-box; }
 #account-gate button { background:#226a40; color:white; border:0; border-radius:10px; padding:9px 16px; }
 #account-gate a { color:inherit; padding:8px; }
+
+.ai-dialog { box-sizing:border-box; width:min(92vw,430px); max-height:85dvh; overflow:auto; color:var(--text,var(--ink)); background:var(--surface); border:1px solid var(--line); padding:22px; border-radius:18px; font:15px/1.6 system-ui; }
+.ai-dialog::backdrop { background:#1119 }
+.ai-dialog h2 { margin:0 0 8px }
+.ai-dialog label,.ai-dialog output { display:block; margin:12px 0 }
+.ai-dialog input,.ai-dialog textarea { display:block; box-sizing:border-box; width:100%; margin-top:5px; padding:9px; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; }
+.ai-dialog button,.ai-setup { background:var(--surface-2,var(--blue-light)); color:inherit; border:1px solid var(--line); border-radius:8px; padding:8px 12px; cursor:pointer; }
+.ai-actions { display:flex; flex-wrap:wrap; gap:8px }
+.ai-dialog button[type=submit] { background:#23683d; color:white; }
+
+.ai-dialog pre { white-space:pre-wrap; font:inherit; overflow-wrap:anywhere; }

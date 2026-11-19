@@ -69,6 +69,7 @@ async function handleImport(file,kind){try{const raw=JSON.parse(await file.text(
  await commit(imported,kind==='backup'?'健康备份恢复成功':'历史健康数据已导入');switchTab('overview');
  }catch(e){toast('导入失败：'+e.message);}}
 function attach(){
+ $('open-assistant').onclick=()=>{switchTab('record');document.querySelector('.assistant-panel').open=true;$('assistant-form').elements.text.focus();};
  attachAssistant({getState:()=>state, commit, today:dateNow});
  $('check-update').onclick=()=>checkForAppUpdate(true);
  document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));

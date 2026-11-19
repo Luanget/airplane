@@ -40,7 +40,21 @@ export function matches(s, x) {
     default: return false;
   }
 }
+const calendarDate = s => typeof s==='string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
+  && Number.isFinite(Date.parse(s+'T00:00:00Z')) && new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
+const type=choice('expense','income');
+const financeInput=object({mode:choice('finance'),text:string(600,1),date:string(10,10),
+  categories:list(object({id:string(100,1),name:string(100,1),type}),200)});
+export const financeSchema=object({note:string(400),entry:optional(object({
+  type,amount:number(100000000,0.01),categoryId:string(100,1),date:string(10,10),note:string(200)
+}))});
+export function validFinanceEntry(entry,input) {
+  return calendarDate(entry.date) && entry.date<=input.date
+    && Math.abs(entry.amount*100-Math.round(entry.amount*100))<0.00001
+    && input.categories.some(c=>c.id===entry.categoryId && c.type===entry.type);
+}
 export function validInput(data) {
+  if (data?.mode==='finance') return matches(financeInput,data) && !!data.text.trim() && calendarDate(data.date);
   if (!matches(inputSchema,data)) return false;
   if (data.mode === 'photo') {
     if (!data.photo?.startsWith('data:image/jpeg;base64,/9j/') ||

@@ -1,4 +1,4 @@
-# Airplane PWA 0.8.0
+# Airplane PWA 0.8.1
 
 Airplane 在设备上保存财务和健康账本。财务首页的心形按钮进入健康管理。健康页提供饮食、体重、运动、库存和六天周期汇总，记录页可以手动填写，也可以从智能助手的候选开始。
 
@@ -16,29 +16,29 @@ python3 serve.py
 
 - **设备账本**可直接打开。它属于当前浏览器配置文件，适合在自己的设备延续旧账。共用同一浏览器的人也能打开这个入口。
 - **私人账本**使用独立随机账户码。财务和健康内容均在本机加密保存，每次重新打开或切换模块需要解锁。点「锁定账户」离开。可以先导出设备账本，再在自己的私人账本中明确导入。两个入口独立保存。
-- 账户码需要单独保存。删除站点数据会清除本机账本。导出的 JSON 是可读备份，请私下保管。私有存储使用本地附带的 TweetNaCl 1.0.3 secretbox。浏览器从随机账户码分别派生本地加密密钥和 API 凭证，服务端仅保存凭证摘要。
+- 账户码需要单独保存。删除站点数据会清除本机账本。导出的 JSON 是可读备份，请私下保管。私有存储使用本地附带的 TweetNaCl 1.0.3 secretbox。私人账本的 Key 与当前账户绑定，设备账本的 Key 由同一浏览器配置文件共享。
 - 在「健康 → 记录 → 智能饮食助手」选择文字、照片或下一餐。先在本地查看发送内容，再同意本次发送。照片在本机缩放、重编码。目录最多发送 16 个 SKU，可取消分享。只有下一餐模式附上今日汇总、目标、库存量、价格和营养基准。原账快照、体重历史和财务数据均留在设备。
 - 候选可修改 SKU、动作、份量、包装和营养基准。已知标签优先，缺少的参数可补填。克和毫升分别处理。最后一次确认在单个本地事务内入账，库存不足时整批退回。计划保留在本地记录，热量和扣库在确认已吃时计算。缺少摄入记录的日期不产生缺口，当前日从次日开始计入周期。
 
-## 可选的 Cloudflare Worker
+## 给每个人导入自己的模型 Key
 
-需要 Node 22.13+。在仓库根目录运行 `npm ci`。用 `node worker/issue-account.mjs` 为每人生成一份随机账户码和摘要。账户码私下交给本人，授权名单只放摘要。离线解锁无需访问 Worker，取消 API 授权也不会锁住本地数据。
+1. 启动前端后打开 **http://127.0.0.1:8080/#model**。也可以从首页的「AI 记账」或「AI 饮食与库存」进入「本机模型设置」。
+2. 粘贴分配给自己的 OpenAI 项目 Key，或选择只含该 Key 的文本文件，点击「保存 Key」。页面直接请求 OpenAI 的 Responses API。普通用户只需 Airplane 页面和 Key。
+3. 财务首页输入一笔收支，例如「昨天坐地铁花了 6 元」，同意发送后会打开原记账表单。核对后点「完成」即写入当前账本，沿用原有分类、余额和预算规则。健康助手支持吃喝记录、采购入库和出库；核对后点「确认入账并更新库存」。
+4. 「试识别饮食示例」会真实发送「鸡胸245g、两包面、牛奶喝了533g」与三项样例 SKU，逐项显示候选数量和库存变化，全程只读。样例牛奶库存单位为克；实际库存采用毫升时，质量与体积需要另外核实。
+5. 应用默认使用低成本的 `gpt-6-luna`，由签发 Key 的 OpenAI 项目按用量计费。Airplane 不设置调用次数、个人额度或全站预算。OpenAI 项目本身的余额、模型权限和速率限制继续适用。
 
-本地开发时在 **worker/.dev.vars** 中设置以下两项。该文件受 Git 忽略且本地静态服务器无法读取。这里的值为占位符。
+Key 仅在当前设备保存，调用时作为身份凭证发给 `https://api.openai.com/v1/responses`，不进入财务或健康备份。设备账本使用 IndexedDB 保存密文和不可导出的浏览器加密密钥，私人账本使用账户密钥加密。使用设备账本时，同一浏览器配置文件的使用者可以用这把 Key 发起请求。持有原始 Key 的人也可以从 Airplane 之外调用 API。为每人单独签发、需要时在 OpenAI 项目中单独撤销；「移除本机 Key」只清除当前设备的副本。
 
-```dotenv
-OPENAI_API_KEY="项目密钥占位"
-AI_USERS='["第一位用户的64位摘要","第二位用户的64位摘要"]'
+接口与模型见 [Responses](https://developers.openai.com/api/reference/resources/responses/methods/create)、[结构化输出](https://developers.openai.com/api/docs/guides/structured-outputs) 和 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)。
+
+### 可选的本机 Worker
+
+需要用服务端文件调试时，`worker/.dev.vars` 支持 `OPENAI_API_KEY` 和 `AI_USERS`（账户凭证摘要的 JSON 数组）。用 `node worker/issue-account.mjs` 可生成私人账户码和对应摘要，`npm ci && npm run dev:api` 启动本机接口。它保留本机来源与账户校验。网页导入的 Key 直接发给 OpenAI，网页使用无需运行此接口。使用本机文件而非浏览器时，可在项目根目录执行以下命令进行同样的一次真实、只读样例识别：
+
+```sh
+node worker/example.mjs
 ```
-
-再开一个终端运行 `npm run dev:api`。前端预览默认向本机 8787 端口发起请求。手动功能只需静态服务。将来启用远程 API 时需要：
-
-1. 在 Cloudflare Worker 的 **Secrets** 设置同名两项，使用获准创建 Responses 的 OpenAI 项目密钥。服务端请求固定到 `gpt-5.4-mini-2026-03-17`。
-2. 使用有 Workers 编辑权限的 Cloudflare 账户，绑定支持 SQLite 的 Durable Object `QUOTA`。配置和首次迁移已在 `worker/wrangler.toml` 中。单一对象同时检查每分钟、每人每月、全站每月与全站累计额度。默认分别为 3 次、60 次、5 美元和 10 美元。额度用 UTC 日历月，累计额度持续有效。
-3. 在 `ALLOWED_ORIGINS` 填写前端的精确源（协议、主机和端口）。同源部署将 `/api/assist` 路由给 Worker。GitHub Pages 使用独立 Worker 时，将其公开 HTTPS 接口填入 `health/endpoint.mjs`。保持原 PWA 地址可继续读取旧账本。
-4. 网关使用 `store:false`、严格 JSON Schema、固定模型及 4096 输出 token 上限。发起请求前按完整上下文预留约 0.319 美元。拿到有效 usage 后按标准价结算，含缓存输入按普通输入价保守计价。超时或用量不明会保留预留额；这些是本应用自身的额度计数。模型或计价变动时一并核对 `worker/responses.mjs` 的价格与上限。服务端只持久化用量计数，不提供账本读写接口。
-
-接口依据见 [Responses](https://developers.openai.com/api/reference/resources/responses/methods/create)、[Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)、[图像输入](https://developers.openai.com/api/docs/guides/images-vision) 和 [模型规格与计价](https://developers.openai.com/api/docs/models/gpt-5.4-mini)。
 
 ## 验证
 
@@ -48,7 +48,7 @@ npm run test:worker
 npm run test:browser
 ```
 
-浏览器回归需要完整 Git 历史与 Chrome / Chromium，可用 `CHROME_PATH` 指定浏览器可执行文件。测试使用临时浏览器、合成账本和模拟 OpenAI 响应。本地 Worker 测试运行真实 SQLite Durable Object，并发请求共享同一个预算。
+浏览器回归需要完整 Git 历史与 Chrome / Chromium，可用 `CHROME_PATH` 指定浏览器可执行文件。测试使用临时浏览器、合成账本和模拟 OpenAI 响应。本地 Worker 测试运行真实 workerd，验证鉴权以及并发请求。
 
 ## 财务版本记录
 

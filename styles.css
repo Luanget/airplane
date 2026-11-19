@@ -448,3 +448,4 @@ body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .topbar-actions > a { text-decoration: none; }
 .topbar-actions svg { width: 22px; height: 22px; }
+.finance-ai-launch { display:block; margin:0 20px 8px auto; border-radius:16px; padding:7px 14px; background:var(--green-soft); color:var(--text); font-weight:650; }

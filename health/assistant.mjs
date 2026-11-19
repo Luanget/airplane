@@ -1,7 +1,7 @@
 import {inventoryWithMoves} from './core.mjs';
 import {confirmItems, requestData, resolveItem} from './candidates.mjs';
 import {matches, resultSchema, units, validInput, nutrientKeys} from './contract.mjs';
-import {ENDPOINT} from './endpoint.mjs';
+import {recognize} from '../ai/client.mjs';
 
 const $ = id => document.getElementById(id);
 const labels = {kcal:'热量 kcal',protein:'蛋白质 g',carbs:'碳水 g',fat:'脂肪 g',sodium:'钠 mg'};
@@ -86,7 +86,7 @@ function editRow(container, original, state, planOnly) {
 
 export function attachAssistant({getState,commit,today}) {
   const form = $('assistant-form'), review = $('candidate-form'), status = $('assistant-status');
-  if (!window.airplaneAccount?.bearer) { $('assistant-guest').hidden=false; return; }
+  document.addEventListener('airplane-key-imported',()=>{ status.textContent='本机 Key 已保存'; });
   form.hidden=false;
   let prepared=null, rows=[], version=0, busy=false, baseRevision=0;
   const send=$('send-request');
@@ -109,7 +109,7 @@ export function attachAssistant({getState,commit,today}) {
       if (!validInput(data)) throw Error('请检查输入文字、库存参数或照片');
       baseRevision=getState().revision ?? 0;
       const {photo:picture,...fields}=data;
-      $('send-description').textContent='经授权服务发送本次文字'+(photo?'、下方压缩照片':'')+'和所列字段。'+(mode==='plan'?'规划使用今日汇总、目标和所选库存价格。':'')+'完整账本、照片元数据及财务记录保留在本机。';
+      $('send-description').textContent='本设备将向 OpenAI 发送本次文字'+(photo?'、下方压缩照片':'')+'和所列字段。'+(mode==='plan'?'规划使用今日汇总、目标和所选库存价格。':'')+'完整账本、照片元数据及财务记录保留在本机。';
       $('send-fields').textContent=JSON.stringify(fields,null,2);
       $('send-image').hidden=!picture; if (picture) $('send-image').src=picture;
       prepared=data; $('send-preview').hidden=false; send.disabled=busy;
@@ -121,21 +121,15 @@ export function attachAssistant({getState,commit,today}) {
     const id=version, data=prepared;
     busy=true; send.disabled=true; status.textContent='正在生成候选…';
     try {
-      const res=await fetch(ENDPOINT,{method:'POST',cache:'no-store',credentials:'omit',redirect:'error',
-        referrerPolicy:'no-referrer',signal:AbortSignal.timeout(60000),
-        headers:{'Content-Type':'application/json',Authorization:'Bearer '+window.airplaneAccount.bearer},body:JSON.stringify(data)});
+      const result=await recognize(data);
       if (id!==version) return;
-      if (!res.headers.get('Content-Type')?.includes('application/json')) throw Error('智能服务尚未接通，请检查 Worker 地址');
-      const result=await res.json();
-      if (id!==version) return;
-      if (!res.ok) throw Error(result.error || '请求失败');
       if (!matches(resultSchema,result)) throw Error('服务返回的候选格式无效');
       prepared=null; $('send-preview').hidden=true; $('send-image').removeAttribute('src'); $('send-fields').textContent='';
       if (!result.items.length) { status.textContent=result.note || '未识别到食物'; return; }
       $('candidate-note').textContent=result.note; review.elements.date.value=today();
       rows=result.items.map(c=>editRow($('candidate-list'),c,getState(),data.mode==='plan'));
       review.hidden=false; status.textContent='候选已生成，核对后可入账。';
-    } catch (err) { if (id===version) status.textContent=err.name==='TypeError'?'无法连接智能服务，请检查网络和 Worker 地址':err.message; }
+    } catch (err) { if (id===version) status.textContent=err.name==='TypeError'?'无法连接 OpenAI，请检查设备网络':err.message; }
     finally { busy=false; send.disabled=false; }
   };
   review.onsubmit=async e=>{

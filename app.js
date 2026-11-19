@@ -1,3 +1,4 @@
+import {attachFinanceAssistant} from './ai/finance.mjs';
 import {checkForAppUpdate} from './updates.mjs';
 
 // STORAGE_KEY is intentionally permanent. Never rename it in a normal app update.
@@ -9,7 +10,7 @@ const DRAFT_KEY = 'airplane-transaction-draft-v1';
 const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.8.1';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -124,9 +125,11 @@ function parseStoredData(raw){
   return {value:normalizeData(parsed),needsMigration};
 }
 
+let observedFinanceRaw=null;
 function writeStorageCopies(value){
   const raw=JSON.stringify(value);
   financeStore.setItem(STORAGE_KEY,raw);
+  observedFinanceRaw=raw;
   // A second on-device copy protects against a future buggy migration accidentally
   // damaging the primary key. It is not a substitute for exported JSON backups.
   financeStore.setItem(RECOVERY_KEY,raw);
@@ -151,6 +154,7 @@ function ensureRecoveryCopyAfterLaunch(value){
 
 function loadData(){
   const primaryRaw=financeStore.getItem(STORAGE_KEY);
+  observedFinanceRaw=primaryRaw;
   try {
     const parsed=parseStoredData(primaryRaw);
     if(parsed){
@@ -170,7 +174,9 @@ function loadData(){
   try {
     const recovered=parseStoredData(recoveryRaw);
     if(recovered){
-      financeStore.setItem(STORAGE_KEY,JSON.stringify(recovered.value));
+      const restoredRaw=JSON.stringify(recovered.value);
+      financeStore.setItem(STORAGE_KEY,restoredRaw);
+      observedFinanceRaw=restoredRaw;
       if(recovered.needsMigration)financeStore.setItem(RECOVERY_KEY,JSON.stringify(recovered.value));
       console.warn('Airplane restored data from the on-device recovery copy');
       return recovered.value;
@@ -964,6 +970,7 @@ function bindMoneyExpressionInput(inputId,group='money-op'){
 }
 
 function openTransactionModal(existing=null,suppliedDraft=null){
+  const assistantRevision=suppliedDraft?.fromAssistant ? financeStore.getItem(STORAGE_KEY) : null;
   const restored=suppliedDraft||(!existing?loadTransactionDraft():null);
   let type=restored?.type||existing?.type||'expense';
   let selected=restored?.selectedCategoryId||existing?.categoryId||preferredCategoryId(type);
@@ -1043,6 +1050,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   };
   renderChooser();
   const submit=()=>{
+    if(assistantRevision!==null && assistantRevision!==financeStore.getItem(STORAGE_KEY)){toast('账本已在其他页面变更，请刷新后重新记入');return;}
     const parsedAmount=parseAmountExpression(document.getElementById('txAmount').value); const value=parsedAmount.value; const c=categoryById(selected);
     if(!parsedAmount.ok||!value||value<=0){toast('请输入有效金额或算式');return;} if(!c){toast('请选择分类');return;}
     const chosenDate=document.getElementById('txDate').value||localISO();
@@ -1264,13 +1272,21 @@ document.getElementById('importInput').addEventListener('change', async e=>{
 });
 
 if(recoveryRequired){
+  document.querySelector('#open-finance-ai').hidden=true;
   document.querySelector('.tabbar').hidden=true;
   document.querySelector('.topbar').hidden=true;
   const app=document.querySelector('#app');
   app.innerHTML='<section class="card recover-card"><h2>账本需要恢复</h2><p>本机的两份账本均无法解析。可以先保存原始副本，再选择一份有效的财务备份。</p><button id="save-damaged" class="secondary-button">导出原始副本</button><button id="import-repair" class="primary-button">选择财务备份</button></section>';
   document.querySelector('#save-damaged').onclick=()=>downloadBlob('Airplane-damaged-backup.json',JSON.stringify({primary:financeStore.getItem(STORAGE_KEY),recovery:financeStore.getItem(RECOVERY_KEY)}),'application/json');
   document.querySelector('#import-repair').onclick=()=>document.querySelector('#importInput').click();
-}else render();
+}else {
+  attachFinanceAssistant({categories:()=>data.categories,today:localISO,
+    revision:()=>{
+      if(observedFinanceRaw!==financeStore.getItem(STORAGE_KEY))throw Error('账本已在其他页面变更，请刷新后重新识别');
+      return dataRevision;
+    },openEntry:draft=>openTransactionModal(null,draft)});
+  render();
+}
 // Persistence status is important but not required to show the ledger. Query it
 // after launch instead of competing with the first interactive frame on iOS.
 runWhenIdle(()=>ensurePersistentStorage(),1600);

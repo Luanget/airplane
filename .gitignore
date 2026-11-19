@@ -46,3 +46,6 @@ node_modules/
 *.mp4
 *.avif
 *.tgz
+
+# Local plain-text API key imports
+*.txt

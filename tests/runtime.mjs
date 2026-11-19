@@ -1,5 +1,5 @@
 // Local Cloudflare runtime. All outbound traffic is replaced by a synthetic
-// Responses endpoint. The SQLite object, HTTP dispatch and bindings are real.
+// Responses endpoint. HTTP dispatch, bindings and authorization run inside workerd.
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomBytes} from 'node:crypto';
@@ -14,10 +14,8 @@ const origin='http://localhost:8080';
 let calls=0;
 const mf=new Miniflare(convertV4MiniflareOptions({
   compatibilityDate:'2026-05-01',
-  modules:['worker/index.mjs','worker/responses.mjs','health/contract.mjs'].map(path=>({type:'ESModule',path,contents:readFileSync(path,'utf8')})),
-  bindings:{ALLOWED_ORIGINS:origin,AI_USERS:JSON.stringify([a.id,b.id]),OPENAI_API_KEY:'synthetic',
-    USER_RPM:'3',USER_MONTHLY_CALLS:'5',MONTHLY_BUDGET_CENTS:'40',TOTAL_BUDGET_CENTS:'40'},
-  durableObjects:{QUOTA:{className:'Quota',useSQLite:true}},
+  modules:['worker/index.mjs','ai/responses.mjs','health/contract.mjs'].map(path=>({type:'ESModule',path,contents:readFileSync(path,'utf8')})),
+  bindings:{ALLOWED_ORIGINS:origin,AI_USERS:JSON.stringify([a.id,b.id]),OPENAI_API_KEY:'synthetic'},
   outboundService:async req=>{
     assert.equal(req.url,'https://api.openai.com/v1/responses');
     assert.equal(req.headers.get('authorization'),'Bearer synthetic');
@@ -28,14 +26,14 @@ const mf=new Miniflare(convertV4MiniflareOptions({
   }
 }));
 try {
-  const send=bearer=>mf.dispatchFetch('https://example.invalid/api/assist',{method:'POST',
+  const send=bearer=>mf.dispatchFetch('http://127.0.0.1/api/assist',{method:'POST',
     headers:{Origin:origin,'Content-Type':'application/json',Authorization:'Bearer '+bearer},
     body:JSON.stringify(requestData(newState(),'entry','测试',null,'2030-01-01',false))});
   assert.equal((await send('invalid')).status,401);
   assert.equal(calls,0);
   const both=await Promise.all([send(a.bearer),send(b.bearer)]);
-  assert.deepEqual(both.map(r=>r.status).sort(),[200,429]);
-  assert.equal(calls,1);
+  assert.deepEqual(both.map(r=>r.status).sort(),[200,200]);
+  assert.equal(calls,2);
   assert.equal((await send(b.bearer)).status,200);
-  console.log('PASS real Worker + SQLite Durable Object, concurrent shared budget, upstream usage settlement');
+  console.log('PASS optional loopback Worker, authorization and concurrent requests without application quotas');
 } finally { await mf.dispose(); }

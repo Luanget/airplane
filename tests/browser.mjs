@@ -108,15 +108,26 @@ try {
   await page.locator('[data-tab="inventory"]').click();assert.equal(await page.getByText('合成库存',{exact:true}).count(),0);
   await ctx.setOffline(false);
   const calls=[];
-  await ctx.route('http://127.0.0.1:8787/api/assist',async route=>{
-    const input=route.request().postDataJSON(); calls.push(input);
+  const fixtureKey='sk-synthetic-test-only';
+  await ctx.route('https://api.openai.com/v1/responses',async route=>{
+    const body=route.request().postDataJSON();assert.equal(body.model,'gpt-6-luna');
+    assert.equal(route.request().headers().authorization,'Bearer '+fixtureKey);
+    const content=body.input[0].content, input=JSON.parse(content[0].text);
+    if (content[1]) input.photo=content[1].image_url;
+    calls.push(input);
     assert.ok(route.request().headers().authorization.startsWith('Bearer '));
     const item={sku:null,name:'合成餐点',action:input.mode==='plan'?'plan':'eat',amount:120,unit:'g',packageSize:null,packageUnit:null,
       basisAmount:100,basisUnit:'g',nutrients:{kcal:100,protein:10,carbs:10,fat:3,sodium:10},uncertainty:'合成测试估值'};
-    await route.fulfill({json:{note:'供测试',items:[item]},headers:{'Access-Control-Allow-Origin':new URL(base).origin}});
+    const parsed=input.mode==='finance' ? {note:'',entry:{type:'expense',amount:28,date:input.date,note:'午餐',categoryId:input.categories.find(c=>c.name==='餐饮').id}} : {note:'供测试',items:[item]};
+    await route.fulfill({json:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(parsed)}]}]},headers:{'Access-Control-Allow-Origin':new URL(base).origin}});
   });
   await page.locator('[data-tab="record"]').click();
   await page.locator('.assistant-panel > summary').click();
+  await page.locator('[data-ai-key]').click();
+  const keys=page.locator('#ai-keys');
+  await keys.locator('[type=file]').setInputFiles({name:'test.txt',mimeType:'text/plain',buffer:Buffer.from(fixtureKey)});
+  await keys.locator('[type=submit]').click();await keys.getByText(/已保存，可关闭/).waitFor();
+  await keys.locator('[data-close]').click();
   const form=page.locator('#assistant-form');
   await form.locator('textarea').fill('合成餐点');
   await form.locator('[type=submit]').click();
@@ -149,6 +160,23 @@ try {
     try {await saveState(state,expected);}catch(err){if(err.message.includes('其他页面'))return;}
     throw Error('stale write accepted');
   });
+  await page.goto(base+'#model');
+  await keys.getByText('此账本尚未导入 Key').waitFor();
+  await keys.locator('[name=key]').fill(fixtureKey);await keys.locator('[type=submit]').click();
+  await keys.getByText(/已保存，可关闭/).waitFor();await keys.locator('[data-close]').click();
+  await page.reload();await page.goto(base+'#model');await keys.getByText(/已配置/).waitFor();
+  await keys.locator('[data-close]').click();await page.locator('#open-finance-ai').click();
+  const finance=page.locator('#finance-assistant');
+  await finance.locator('textarea').fill('午餐28元');await finance.locator('[type=submit]').click();
+  await page.locator('#txSubmit').waitFor();
+  assert.equal(await ledger(),before);assert.equal(await page.locator('#txAmount').inputValue(),'28');
+  await page.locator('#txSubmit').click();assert.equal(JSON.parse(await ledger()).transactions.at(-1).amount,28);
+  assert.equal(calls.at(-1).mode,'finance');
+  assert.deepEqual(Object.keys(calls.at(-1)).sort(),['categories','date','mode','text']);
+  await page.goto(base+'#model');await keys.locator('[data-forget]').click();
+  await keys.getByText('已移除').waitFor();await page.reload();
+  await keys.getByText('此账本尚未导入 Key').waitFor();await keys.locator('[data-close]').click();
+  console.log('PASS direct BYOK, branch-local encrypted keys, finance confirmation, removal and offline access');
   await page.goto(base);
   await page.evaluate(()=>{localStorage.setItem('airplane-pwa-v1','{');localStorage.setItem('airplane-pwa-recovery-v1','invalid');});
   await page.reload();await page.getByRole('button',{name:'导出原始副本'}).waitFor();

@@ -1,3 +1,4 @@
+import {installKeyDialog} from './ai/client.mjs';
 import {accountKeys, privateAccount} from './account.mjs';
 import {installUpdates} from './updates.mjs';
 
@@ -7,6 +8,7 @@ const accountLink = document.querySelector('[data-account]');
 const gate = document.querySelector('#account-gate');
 const content = document.querySelector('[data-shell]');
 installUpdates();
+const openKeys=installKeyDialog();
 if (isPrivate) {
   content.hidden = true;
   gate.hidden = false;
@@ -38,4 +40,7 @@ async function start(account) {
   window.airplaneAccount = account;
   if (health) await import('./health/app.mjs');
   else await import('./app.js');
+  const openFromLink=()=>{if(location.hash==='#model') openKeys();};
+  window.addEventListener('hashchange',openFromLink);
+  openFromLink();
 }
