@@ -24,18 +24,24 @@ body[data-module="health"] fieldset { min-width:0 }
 .panel, .form-panel, .inventory-list { margin:14px 0 }
 .panel > p, .panel-note, .panel form { margin-top:10px }
 .panel-note, .panel p, .form-hint, .event-empty, .notice, .preview { font-size:13px; line-height:1.55 }
-.weight-card svg[role=slider] { display:block; width:100%; max-height:220px; margin-top:4px; touch-action:pan-y; cursor:ew-resize; user-select:none }
+.weight-card svg[role=slider] { display:block; width:100%; max-height:220px; margin-top:4px; touch-action:pan-y; cursor:ew-resize; user-select:none; -webkit-tap-highlight-color:transparent }
+.weight-card svg[role=slider]:focus:not(:focus-visible) { outline:none }
 .weight-card svg text { fill:var(--muted); font-size:10px }
 .weight-card .chart-grid { stroke:var(--line) }
 .weight-line { fill:none; stroke:var(--green); stroke-width:2.3; stroke-linejoin:round; stroke-linecap:round }
 .weight-crosshair { stroke:var(--muted); stroke-width:1; stroke-dasharray:3 3 }
 .weight-marker { fill:var(--surface); stroke:var(--green); stroke-width:2.5 }
-body[data-module="health"] .weight-chart-value { margin:7px 0 2px; color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums }
+body[data-module="health"] .weight-chart-value { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 8px; width:fit-content; margin:4px 0 2px; padding:3px 8px; border-radius:8px; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums }
+.weight-chart-value strong { color:var(--text); font-size:14px }
 .health-trend-link { min-height:34px; color:inherit; text-decoration:none }
 .health-trend-link strong { font-size:17px }
 .health-trend-link span,.health-trend-back span { display:grid; place-items:center; color:var(--muted) }
 .health-trend-link svg,.health-trend-back svg { width:17px; height:17px }
 .health-trend-link:focus-visible,.health-tx-row:focus-visible,.health-trend-back:focus-visible,.weight-card svg:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+@supports selector(.weight-card:has(svg:focus-visible)) {
+ .weight-card svg[role=slider]:focus { outline:none }
+ .weight-card:has(svg[role=slider]:focus-visible) .weight-chart-value { box-shadow:0 0 0 2px var(--green) }
+}
 .health-trend-link:active { background:var(--surface-2) }
 .health-trend-back { display:inline-flex; gap:4px; align-items:center; text-decoration:none }
 .health-trend-back svg { transform:rotate(180deg) }

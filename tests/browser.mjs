@@ -116,6 +116,11 @@ try {
   await page.mouse.move(plot.x+plot.width*.12,plot.y+plot.height*.5,{steps:5});
   await page.mouse.up();
   assert.match(await weightChart.getAttribute('aria-valuetext'),/1月1日.*80\.0 kg/);
+  assert.equal(await weightChart.evaluate(plot=>getComputedStyle(plot).outlineStyle),'none');
+  await weightChart.press('End');
+  assert.match(await weightChart.getAttribute('aria-valuetext'),/1月4日.*79\.7 kg/);
+  assert.equal(await weightChart.evaluate(plot=>getComputedStyle(plot).outlineStyle),'none');
+  assert.notEqual(await page.locator('#weight-chart-value').evaluate(readout=>getComputedStyle(readout).boxShadow),'none');
   assert.match(page.url(),/health\/\?test=offline$/);
   await page.getByRole('region',{name:'早餐',exact:true}).getByText('合成菜单0').waitFor();
   await page.getByRole('region',{name:'午餐',exact:true}).getByText('合成菜单1').waitFor();

@@ -6,6 +6,8 @@ export function renderWeightChart(svg,output,points){
  svg.onpointerdown=svg.onpointermove=svg.onkeydown=null;
  svg.toggleAttribute('hidden',!points.length);
  if(!points.length){output.textContent='暂无有效晨重记录';return;}
+ const valueLabel=document.createElement('strong'),dateLabel=document.createElement('span');
+ output.replaceChildren(valueLabel,dateLabel);
  let min=Infinity,max=-Infinity;
  for(const {kg} of points){min=Math.min(min,kg);max=Math.max(max,kg);}
  min=Math.floor(min*2)/2-.5;max=Math.ceil(max*2)/2+.5;
@@ -27,8 +29,9 @@ export function renderWeightChart(svg,output,points){
   marker.setAttribute('cx',x);marker.setAttribute('cy',y(kg));
   crosshair.setAttribute('x1',x);crosshair.setAttribute('x2',x);
   svg.setAttribute('aria-valuenow',index+1);
-  const value=displayDay(date,true)+' · '+kg.toFixed(1)+' kg';
-  svg.setAttribute('aria-valuetext',value);output.textContent=value;
+  valueLabel.textContent=kg.toFixed(1)+' kg';
+  dateLabel.textContent=displayDay(date,true);
+  svg.setAttribute('aria-valuetext',dateLabel.textContent+' · '+valueLabel.textContent);
  }
  function pointAt(event){
   const matrix=svg.getScreenCTM();
@@ -41,6 +44,7 @@ export function renderWeightChart(svg,output,points){
  svg.setAttribute('aria-valuemax',points.length);
  svg.onpointerdown=event=>{
   if(event.button!==0||!event.isPrimary)return;
+  event.preventDefault();
   svg.setPointerCapture(event.pointerId);pointAt(event);
  };
  svg.onpointermove=event=>{
