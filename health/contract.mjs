@@ -72,7 +72,8 @@ const ledgerOperations=[
   proposal('purchase',purchaseSchema),proposal('entry',chatEntrySchema),proposal('plan',resultSchema),
   proposal('food_edit',object({name:string(80,1),amount:number(100000,0.001),unit,
    meal:optional(string(24,1)),time:optional(string(5,5))})),
-  proposal('inventory',object({operation:choice('count','shopping'),name:string(80,1),quantity:number(100000),unit}))
+  proposal('inventory',object({operation:choice('count','shopping'),name:string(80,1),quantity:number(100000),unit})),
+  proposal('portions',object({name:string(80,1),quantities:{...list(number(100000,0.001)),minItems:1},unit}))
 ];
 export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
   {type:'null'},...ledgerOperations,proposal('skill',object({text:string(320,1)})),

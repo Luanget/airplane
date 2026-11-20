@@ -8,7 +8,7 @@ import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
 import {financeReview} from './finance.mjs';
 import {chatInstructions} from './responses.mjs';
 import {cleanSkill,localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
-import {foodEditReview,inventoryReview,skillReview} from './operations.mjs';
+import {foodEditReview,inventoryReview,portionReview,skillReview} from './operations.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 import {batchReview} from './batch.mjs';
@@ -27,16 +27,23 @@ const retryFollowUp=$('[data-retry-follow-up]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
 const historySearch=historyPanel.querySelector('input');
 const historyConfirmation=$('[data-delete-confirm]'),historyDelete=$('[data-delete-apply]');
-const readPanel=$('[data-read-preview]').closest('section'),share=$('[data-share-read]'),skip=$('[data-skip-read]');
-const consentPanel=$('#assistant-consent'),approve=$('[data-approve-send]'),cancelSend=$('[data-cancel-send]');
-const consentKey='airplane-ai-send-consent-v1';
 const skillForm=$('#assistant-skill form'),skillOutput=skillForm.querySelector('output');
 const keyPanel=$('#assistant-key-panel'),settings=$('#assistant-settings-sheet');
-let busy=false,saving=false,prepared=null,pending=null,activeRequest=null,deletingThread=null,followUp=null,photoRun=null;
-let firstSend=!demo&&localStorage.getItem(consentKey)!=='yes';
+let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null,photoRun=null;
 
 hydrateShell();
 $('#assistant-settings').onclick=()=>settings.showModal();
+function onSettingsBackdrop(event){
+ if(event.target!==settings)return false;
+ const {left,top,right,bottom}=settings.getBoundingClientRect();
+ return event.clientX<left||event.clientX>right||event.clientY<top||event.clientY>bottom;
+}
+let backdropPress=false;
+settings.addEventListener('pointerdown',event=>{backdropPress=onSettingsBackdrop(event);});
+settings.addEventListener('click',event=>{
+ if(backdropPress&&onSettingsBackdrop(event))settings.close();
+ backdropPress=false;
+});
 settings.addEventListener('close',()=>{
  if(location.hash==='#api-key')history.replaceState(history.state,'',location.pathname+location.search);
 });
@@ -45,7 +52,6 @@ if(demo){
  keyPanel.hidden=false;
  keyPanel.querySelector('[data-demo-key]').hidden=false;
  for(const link of document.querySelectorAll('.topbar-actions a'))link.search='?demo=1';
- composer.elements.allowRead.checked=true;
 }else{
  window.airplaneAccount=workspace.account;
  installUpdates();
@@ -195,13 +201,14 @@ function append(role,text,carry=true,source){
 }
 function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;delete review.dataset.syncPending;}
 function clearFollowUp(){followUp=null;retryFollowUp.hidden=true;}
-function clearRead(){pending=null;readPanel.hidden=true;$('[data-read-preview]').textContent='';}
-function clearConsent(){prepared=null;consentPanel.hidden=true;}
 function resetPhoto(){
  composer.elements.image.value='';$('[data-attachment]').textContent='';clearPhoto.hidden=true;
 }
+function clearComposer(){
+ composer.elements.text.value='';composer.elements.allowRead.checked=true;resetPhoto();
+}
 function lock(){
- const waiting=busy||saving||!!pending||!!prepared;
+ const waiting=busy||saving;
  send.disabled=waiting;newChat.disabled=busy||saving;historyButton.disabled=busy||saving;
  for(const button of historyList.querySelectorAll('button'))button.disabled=busy||saving;
  historySearch.disabled=busy||saving;
@@ -210,7 +217,6 @@ function lock(){
  composer.elements.image.disabled=waiting;
  composer.elements.allowRead.disabled=waiting;
  clearPhoto.disabled=waiting;
- share.disabled=busy;skip.disabled=busy;approve.disabled=busy;cancelSend.disabled=busy;
  retryFollowUp.disabled=waiting;
  for(const button of photoResults.querySelectorAll('button'))button.disabled=waiting;
  for(const fields of review.querySelectorAll('.assistant-batch-step'))fields.disabled=waiting||review.dataset.syncPending==='yes';
@@ -223,7 +229,7 @@ function renderThread(){
  photoResults.replaceChildren();
  start.hidden=messages.length>0;
  for(const m of messages)if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source);
- clearConsent();clearRead();clearReview();clearFollowUp();composer.elements.text.value='';resetPhoto();syncThreads();updateContext();lock();
+ clearReview();clearFollowUp();clearComposer();syncThreads();updateContext();lock();
 }
 function refreshSkill(){skillForm.elements.skill.value=workspace.readSkill().slice(0,320);updateContext();}
 $('#assistant-skill pre').textContent=chatInstructions;
@@ -253,7 +259,6 @@ composer.elements.text.addEventListener('keydown',e=>{
 for(const button of document.querySelectorAll('[data-example]')){
  button.onclick=()=>{
   composer.elements.text.value=button.dataset.example;
-  composer.elements.allowRead.checked=button.hasAttribute('data-use-ledger');
   composer.elements.text.focus();
  };
 }
@@ -289,6 +294,7 @@ async function makeReview(proposal,flow,photoJob){
     {apply,label:'确认加入补货清单',saved:'补货清单已更新。'}:
     {apply,label:'确认盘点',saved:'库存已按盘点结果更新。'};
   }else if(mode==='food_edit')draft=foodEditReview(review,proposal,current,today,book.current?.foodDate);
+  else if(mode==='portions')draft=portionReview(review,proposal,current,today);
   else draft=healthReview(review,proposal,current,today);
   if(draft){
    label=draft.label;
@@ -319,7 +325,7 @@ async function makeReview(proposal,flow,photoJob){
  actions.append(apply);review.append(actions,out);
  let continuationApproved=false;
  review.onsubmit=async e=>{
-  e.preventDefault();if(saving||busy||pending||prepared)return;
+  e.preventDefault();if(saving||busy)return;
   if(review.dataset.syncPending!=='yes')continuationApproved=willContinue&&e.submitter===apply;
   saving=true;lock();out.textContent='';
   let resume=false;
@@ -330,7 +336,7 @@ async function makeReview(proposal,flow,photoJob){
    if(continuationApproved){
     followUp={
      input:{...flow.input,date:localDate(),text:flow.input.text||'继续完成刚才照片中的请求。',history:[],photo:null},
-     options:{skill:flow.options.skill,allowRead:true,applied:result.operations.map(operation=>operation.mode)},
+     options:{skill:flow.options.skill,allowRead:flow.options.allowRead,applied:result.operations.map(operation=>operation.mode)},
      steps:[]
     };
     resume=true;
@@ -348,11 +354,12 @@ async function makeReview(proposal,flow,photoJob){
  for(const select of review.querySelectorAll('select'))select.dataset.picker='';
  syncChoiceFields(review);
  review.hidden=false;
- thread.scrollTop=Math.max(0,thread.scrollTop+review.getBoundingClientRect().top-thread.getBoundingClientRect().top-88);
+ const contextAbove=mode==='plan'?10:88;
+ thread.scrollTop=Math.max(0,thread.scrollTop+review.getBoundingClientRect().top-thread.getBoundingClientRect().top-contextAbove);
 }
 
 async function complete(response,flow,source){
- clearRead();clearReview();
+ clearReview();
  tell('');
  append('assistant',response.reply,!source,source);
  try{await makeReview(response.proposal,flow);}
@@ -370,13 +377,20 @@ function describeSummary(scope,summary){
   if(!rows.length)rows.push('没有匹配的实际饮食记录');
   return [displayDay(summary.date,true),...rows].join('\n');
  }
- const rows=summary.stock.map(row=>row.name+' · '+(row.qty??'数量未知')+' '+row.unit);
+ const rows=summary.stock.map(row=>row.name+' · '+(row.qty??'数量未知')+' '+row.unit+
+  (row.portions?.length?' · 分装 '+row.portions.map(qty=>qty+' '+row.unit).join('、'):''));
  if(!rows.length)rows.push('没有匹配的食品');
  if(summary.today){
   const day=summary.today;
   rows.push('今日热量 '+(day.kcal??'未知')+' / '+day.kcalTarget+' kcal',
-   '今日蛋白质 '+(day.protein??'未知')+' / '+day.proteinMin+' g');
-  if(day.incomplete.length)rows.push('部分营养数据待补');
+   '蛋白质 '+(day.protein??'未知')+' g · 参考 '+day.proteinMin+'–'+day.proteinMax+' g',
+   '脂肪 '+(day.fat??'未知')+' g · 参考下限 '+day.fatMin+' g',
+   '碳水 '+(day.carbs??'未知')+' g'+(day.carbRange?' · 参考 '+day.carbRange.low+'–'+day.carbRange.high+' g':''),
+   '钠 '+(day.sodium??'未知')+' mg · 参考 '+day.sodiumTarget+' mg');
+  if(day.incomplete.length){
+   const names={kcal:'热量',protein:'蛋白质',fat:'脂肪',carbs:'碳水',sodium:'钠'};
+   rows.push('待补数据：'+day.incomplete.map(key=>names[key]).filter(Boolean).join('、'));
+  }
  }
  return rows.join('\n');
 }
@@ -387,24 +401,33 @@ function querySource(steps){
   first.scope==='foods'?'查看本次饮食记录 · '+first.summary.foods.length+' 条':'查看本次查询数据';
  return {label,text:steps.map(({scope,summary})=>describeSummary(scope,summary)).join('\n\n')};
 }
-async function showResponse(response,flow){
+async function resolveResponse(response,flow){
  const {input,options,steps}=flow;
- if(response.call){
+ const queried=new Set();
+ while(response.call){
    if(!options.allowRead)throw Error('本轮未允许账本查询');
-   const {args,item}=response.call,summary=await readLedger(workspace,args,input.date);
-   pending={input,options,steps,item,summary,scope:args.scope};
-   $('[data-read-label]').textContent='助手请求了：'+readLabels[args.scope]+'。';
-   $('[data-read-preview]').textContent=describeSummary(args.scope,summary);
-   readPanel.hidden=false;thread.scrollTop=thread.scrollHeight;
-   tell('核对本轮账本摘要后继续。');
- }else await complete(response,flow,querySource(steps));
+   const {args,item}=response.call;
+   const key=JSON.stringify(Object.entries(args).sort(([a],[b])=>a.localeCompare(b)));
+   if(queried.has(key))throw Error('助手重复查询同一范围，请重试或缩小问题。');
+   queried.add(key);
+   tell('正在查询'+readLabels[args.scope]+'…');
+   const summary=await readLedger(workspace,args,input.date);
+   steps.push({item,summary,scope:args.scope});
+   response=await requestReply(input,{...options,continuation:steps});
+   if(args.scope==='foods')try{book.setFoodDate(summary.date);}catch{}
+ }
+ return response;
+}
+async function showResponse(response,flow){
+ const resolved=await resolveResponse(response,flow);
+ await complete(resolved,flow,querySource(flow.steps));
 }
 async function continueAfterSave(){
- if(!followUp||busy||saving||pending||prepared)return;
+ if(!followUp||busy||saving)return;
  busy=true;retryFollowUp.hidden=true;lock();
  tell('账本已保存，正在继续本轮…');
  try{
-  const flow=followUp;
+  const flow={...followUp,steps:[]};
   const response=await requestReply(flow.input,flow.options);
   await showResponse(response,flow);
   clearFollowUp();
@@ -434,11 +457,11 @@ async function recognizePhotos(jobs,flow,total){
    try{
     const photo=await jpeg(job.file);
     if(run.stopped)throw Error('识别已停止。');
-    const reply=await requestReply({...flow.input,photo},{
-     ...flow.options,photoPosition:{index:job.index,total}
-    });
+    const input={...flow.input,photo},options={...flow.options,photoPosition:{index:job.index,total}},steps=[];
+    const reply=await resolveResponse(await requestReply(input,options),{input,options,steps});
     job.file=null;job.proposal=reply.proposal;job.reply=reply.reply;
-    remember('assistant','照片 '+job.index+'\n'+reply.reply,true);
+    const source=querySource(steps);
+    remember('assistant','照片 '+job.index+'\n'+reply.reply,!source,source);
     showPhoto(job,reply.reply,job.proposal?'核对':'');
    }catch(err){
     const message=run.stopped?'识别已停止。':
@@ -455,7 +478,7 @@ async function sendPhotos(input,options,files){
  const total=files.length;
  const flow={input,options,steps:[]};
  append('user',[input.text,'（附 '+total+' 张照片）'].filter(Boolean).join(' '));
- composer.elements.text.value='';resetPhoto();clearReview();
+ clearComposer();clearReview();
  const group=document.createElement('section');
  group.className='card photo-batch';group.setAttribute('aria-label','照片识别结果');
  const jobs=files.map((file,i)=>{
@@ -466,7 +489,7 @@ async function sendPhotos(input,options,files){
   const job={file,index,label,output,button};
   showPhoto(job,'等待识别','识别');
   button.onclick=async()=>{
-   if(busy||saving||pending||prepared)return;
+   if(busy||saving)return;
    busy=true;lock();
    try{
     if(job.file)await recognizePhotos([job],flow,total);
@@ -486,12 +509,12 @@ async function sendMessage(input,options,files){
  const userText=[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' ');
  const response=await requestReply(input,options,userText);
  append('user',userText);
- composer.elements.text.value='';resetPhoto();
+ clearComposer();
  clearReview();
  await showResponse(response,{input,options,steps:[]});
 }
 composer.onsubmit=async e=>{
- e.preventDefault();if(busy||saving||pending||prepared)return;
+ e.preventDefault();if(busy||saving)return;
  const text=composer.elements.text.value.trim(),files=[...composer.elements.image.files];
  if(!text&&!files.length){tell('请输入消息或添加照片');return;}
  busy=true;lock();tell('');
@@ -502,46 +525,9 @@ composer.onsubmit=async e=>{
   }
   const photo=files.length===1?await jpeg(files[0]):null,{turns,skill}=updateContext();
   const input={mode:'chat',text,photo,date:localDate(),history:turns};
-  const options={skill,allowRead:composer.elements.allowRead.checked&&!files.length};
+  const options={skill,allowRead:composer.elements.allowRead.checked};
   if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
-  if(firstSend){
-   prepared={input,options,files};
-   consentPanel.hidden=false;
-   tell('还没发送。请在下方确认首次发送。');
-   consentPanel.scrollIntoView({block:'nearest'});
-   return;
-  }
   await sendMessage(input,options,files);
  }catch(err){report(err);}
  finally{busy=false;lock();}
-};
-approve.onclick=async()=>{
- if(!prepared||busy)return;
- const {input,options,files}=prepared;
- busy=true;clearConsent();lock();
- firstSend=false;
- try{localStorage.setItem(consentKey,'yes');}catch{}
- try{await sendMessage(input,options,files);}
- catch(err){report(err);}
- finally{busy=false;lock();}
-};
-cancelSend.onclick=()=>{clearConsent();tell('');lock();composer.elements.text.focus();};
-share.onclick=async()=>{
- if(!pending||busy)return;
- const {input,options,item,summary,scope}=pending;
- const steps=[...pending.steps,{item,summary,scope}];
- busy=true;lock();tell(demo?'正在生成演示回复…':'账本摘要已发送，正在等待 OpenAI 回复…');
- try{
-  const response=await requestReply(input,{...options,continuation:steps});
-  if(scope==='foods'){
-   try{book.setFoodDate(summary.date);}catch{}
-  }
-  await showResponse(response,{input,options,steps});
- }
- catch(err){report(err);}
- finally{busy=false;lock();}
-};
-skip.onclick=()=>{
- const source=querySource(pending?.steps??[]);
- clearRead();tell('');append('assistant','已取消发送这次账本摘要。',false,source);lock();
 };

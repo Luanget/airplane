@@ -4,10 +4,11 @@ import {inventoryWithMoves,validateAppState} from '../health/core.mjs';
 import {displayStockQuantity,stockMeasure} from '../health/inventory.mjs';
 import {updateAssistantLedgers} from '../health/purchase-sync.mjs';
 import {financeFields} from './finance.mjs';
-import {foodEditReview,inventoryReview} from './operations.mjs';
+import {foodEditReview,inventoryReview,portionReview} from './operations.mjs';
 
 function healthDraft(container,operation,current,today,foodDate){
  if(operation.mode==='inventory')return inventoryReview(container,operation,current,today);
+ if(operation.mode==='portions')return portionReview(container,operation,current,today).apply;
  if(operation.mode==='food_edit')return foodEditReview(container,operation,current,today,foodDate).apply;
  return healthReview(container,operation,current,today)?.apply;
 }
@@ -35,8 +36,7 @@ export async function batchReview(container,{operations,next},workspace,today,fo
  preview.className='assistant-batch-preview';
  if(next==='continue'){
   const notice=document.createElement('p');
-  notice.textContent=workspace.account.demo?'保存后继续演示本轮。新的账本摘要仍需你核对。':
-   '选择继续时，会把本轮原请求和已完成的操作类型发给 OpenAI。新的账本摘要仍需你核对。';
+  notice.textContent='保存后用更新后的账本继续本轮。';
   container.append(notice);
  }
  container.append(preview);

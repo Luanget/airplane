@@ -119,7 +119,13 @@ body[data-module="health"] [data-shell] label.checkbox { display:flex; gap:8px; 
 body[data-module="health"] [data-shell] .shopping-row input[type=number] { width:78px; margin:0 }
 
 .inventory-heading { margin:0 0 6px }
-.inventory-food { min-height:48px; width:100%; text-align:left; font-size:14px }
+.health-ai-link { display:inline-flex; align-items:center; text-decoration:none }
+.food-entry-head { display:flex; justify-content:space-between; align-items:center }
+.food-entry-head a { margin-inline-start:auto }
+.stock-item:not(:last-child) { border-bottom:1px solid var(--line) }
+.inventory-food { display:flex; justify-content:space-between; align-items:center; gap:10px; min-height:48px; width:100%; text-align:left; font-size:14px }
+.stock-actions { padding:0 6px 10px; color:var(--muted); font-size:13px; overflow-wrap:anywhere; line-height:1.5 }
+.stock-actions .button-row { margin-top:4px }
 .inventory-food strong { min-width:0; overflow-wrap:anywhere; font-weight:650 }
 .stock-name { min-width:0 }
 .stock-name small,.stock-group summary small { display:block; margin-top:2px; color:var(--muted); font-size:12px; font-weight:400 }

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeLedger, dayIntake, cycleForDate, energyForDay, addFood, inventoryWithMoves, localStockChange, newState, weightTrend, isActualStatus, carbReference} from '../health/core.mjs';
+import {normalizeLedger, recoverLegacyPortions, batchBalances, availableBatches, deleteEvent, dayIntake, cycleForDate, energyForDay, addFood, inventoryWithMoves, localStockChange, newState, weightTrend, isActualStatus, carbReference} from '../health/core.mjs';
+import {registerPortions} from '../health/inventory.mjs';
 
 const synthetic = () => ({
   tables: {
@@ -25,6 +26,43 @@ test('example state contains neither financial storage keys nor real private rec
  const raw=JSON.stringify(newState());
  for(const k of ['airplane-pwa-v1','airplane-pwa-recovery-v1','airplane-transaction-draft-v1']) assert.equal(raw.includes(k),false);
  assert.equal(newState().legacy.foods.length,0);
+});
+
+test('opening portions restore only the matching current snapshot and never add stock',()=>{
+ const raw=synthetic();
+ raw.updated_at='2024-01-03T16:00:00+08:00';
+ raw.tables.food_inventory=[{'食品ID':'example-portions','名称':'合成分装食品','库存值':620,'库存单位':'g熟重',
+  '库存基准':'余3袋 [300,200,250] | 余3袋 [180,220,220]','库存份数估算':3}];
+ const state=normalizeLedger(raw),foodId='example-portions',date='2024-01-03';
+ const portions=availableBatches(state,foodId,date);
+ assert.deepEqual(portions.map(b=>b.remaining),[180,220,220]);
+ assert.equal(inventoryWithMoves(state)[0].qty,620);
+ const meal={date,meal:'午餐',name:'合成分装食品',foodId,stockQty:220,batchId:portions[2].id};
+ const saved=addFood(state,meal);
+ assert.equal(inventoryWithMoves(state)[0].qty,400);
+ assert.deepEqual(availableBatches(state,foodId,date).map(b=>b.id),portions.slice(0,2).map(b=>b.id));
+ assert.equal(availableBatches(state,foodId,date,saved.id).at(-1).remaining,220);
+ deleteEvent(state,'foods',saved.id);
+ assert.equal(inventoryWithMoves(state)[0].qty,620);
+ assert.equal(batchBalances(recoverLegacyPortions(state),foodId).length,3);
+ const old=normalizeLedger(raw);
+ delete old.legacy.portionsRecovered;
+ delete old.local.batches;
+ localStockChange(old,{foodId,delta:-50,date});
+ assert.equal(batchBalances(recoverLegacyPortions(old),foodId).length,0);
+ assert.equal(inventoryWithMoves(old)[0].qty,570);
+ const inconsistent=structuredClone(raw);
+ inconsistent.tables.food_inventory[0]['库存值']=619;
+ assert.equal(batchBalances(normalizeLedger(inconsistent)).length,0);
+});
+
+test('different portions reclassify loose stock without changing its quantity',()=>{
+ const state=normalizeLedger(synthetic()),foodId='test-food',date='2024-01-03';
+ assert.throws(()=>registerPortions(state,{foodId,date,quantities:[1,5]}),/余量/);
+ assert.equal(state.local.stockMoves.length,0);
+ registerPortions(state,{foodId,date,quantities:[1,1.5,2]});
+ assert.deepEqual(batchBalances(state,foodId).map(batch=>batch.remaining),[1,1.5,2]);
+ assert.equal(inventoryWithMoves(state)[0].qty,5);
 });
 test('plans and discarded records do not count as intake',()=>{
  assert.equal(isActualStatus('计划'),false);

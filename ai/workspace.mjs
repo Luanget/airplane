@@ -1,6 +1,6 @@
 import {readState,saveState} from '../health/storage.mjs';
 import {readFinance} from '../finance-storage.mjs';
-import {dayIntake,inventoryWithMoves,isStockReference,validDate} from '../health/core.mjs';
+import {batchBalances,carbReference,dayIntake,inventoryWithMoves,isStockReference,validDate} from '../health/core.mjs';
 import {summarizeFoodHistory} from '../health/food-history.mjs';
 import {expenseSummaryReadSchema,foodHistoryReadSchema,ledgerReadSchema,matches} from '../health/contract.mjs';
 import {displayStockQuantity,stockMeasure} from '../health/inventory.mjs';
@@ -70,10 +70,17 @@ export async function readLedger(workspace,args,today){
  const state=await workspace.readHealth(),query=args.query.trim().toLowerCase();
  const inventory=inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s)&&(args.scope==='stock'||s.qty>0)&&(!query||s.name?.toLowerCase().includes(query)))
   .sort((a,b)=>Number(b.name?.toLowerCase()===query)-Number(a.name?.toLowerCase()===query));
- const result={stock:inventory.map(s=>({name:s.name,qty:displayStockQuantity(s,s.qty),unit:stockMeasure(s).unit}))};
+ const portions=new Map();
+ for(const batch of batchBalances(state)){
+  if(batch.remaining<=0||batch.date>today||!batch.portion&&!batch.parent)continue;
+  const weights=portions.get(batch.foodId)??[];
+  weights.push(batch.remaining);portions.set(batch.foodId,weights);
+ }
+ const result={stock:inventory.map(s=>({name:s.name,qty:displayStockQuantity(s,s.qty),unit:stockMeasure(s).unit,
+  ...(portions.has(s.id)?{portions:portions.get(s.id).map(qty=>displayStockQuantity(s,qty))}:{})}))};
  if(args.scope==='stock')return result;
  const intake=dayIntake(state,today);
- return {...result,today:{kcal:intake.totals.kcal,protein:intake.totals.protein,
-  kcalTarget:state.settings.calorieTarget,proteinMin:state.settings.proteinMin,
-  incomplete:intake.incomplete.filter(key=>key==='kcal'||key==='protein')}};
+ const {calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget}=state.settings;
+ return {...result,today:{...intake.totals,kcalTarget:calorieTarget,proteinMin,proteinMax,
+  fatMin,carbRange:carbReference(state.settings),sodiumTarget,incomplete:intake.incomplete}};
 }
