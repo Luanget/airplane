@@ -1,4 +1,4 @@
-const SW_VERSION = '44';
+const SW_VERSION = '45';
 const scope = self.registration.scope;
 const prefix = 'airplane-shell:' + new URL(scope).pathname + ':';
 const CACHE = prefix + SW_VERSION;
@@ -7,6 +7,7 @@ const SHELL = [
   './calendar.mjs','./boot.mjs','./legacy-export.mjs','./shell.mjs','./account.mjs','./vendor/nacl-fast.min.js','./manifest.webmanifest',
   './health/index.html','./health/app.css','./health/app.mjs','./health/core.mjs',
   './finance-storage.mjs','./health/backup.mjs','./health/inventory.mjs','./health/purchases.mjs','./health/purchase-sync.mjs','./health/shopping.mjs','./health/purchase-ui.mjs','./health/storage.mjs','./health/assistant.mjs','./health/candidates.mjs',
+  './assistant/index.html','./assistant/workspace.css','./ai/workspace.mjs','./ai/operations.mjs','./ai/demo.mjs','./ai/threads.mjs',
   './health/contract.mjs','./ai/client.mjs','./ai/chat.mjs','./ai/finance.mjs','./ai/keys.mjs','./ai/responses.mjs',
   './icons/icon-192.png','./icons/icon-512.png','./icons/icon-512-maskable.png','./icons/apple-touch-icon.png'
 ];
@@ -31,7 +32,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   url.search = '';
-  if (e.request.mode === 'navigate' && [scope, new URL('./health/',scope).href].includes(url.href))
+  if (e.request.mode === 'navigate' && [scope, new URL('./health/',scope).href, new URL('./assistant/',scope).href].includes(url.href))
     url.pathname += 'index.html';
   if (!assets.has(url.href)) return;
   e.respondWith(caches.open(CACHE).then(async cache => await cache.match(url.href) || fetch(e.request)));

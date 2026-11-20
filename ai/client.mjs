@@ -1,6 +1,35 @@
 import {bindSheetSwipe} from '../shell.mjs';
-import {MODEL,OPENAI_URL,modelRequest,parseResult} from './responses.mjs';
+import {MODEL,OPENAI_URL,modelRequest,parseResult,pendingLedgerRead} from './responses.mjs';
 import {readKey,importKey,forgetKey} from './keys.mjs';
+
+const keyFields=`  <p>导入自己的 OpenAI Key 后直接调用 ${MODEL}。Key 加密保存在本机。</p>
+  <label>OpenAI API Key<input name="key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="sk-…"></label>
+  <label>或选择仅包含 Key 的文本文件<input name="file" type="file" accept=".txt,text/plain"></label>
+  <output role="status"></output>
+  <div class="ai-actions"><button type="submit">保存 Key</button><button type="button" data-remove>移除本机 Key</button></div>`;
+
+export function bindKeyForm(form,onSaved=()=>{}) {
+ const out=form.querySelector('output');
+ form.onsubmit=async e=>{
+  e.preventDefault();
+  try{
+   const file=form.elements.file.files[0],typed=form.elements.key.value.trim();
+   if(file&&typed)throw Error('请选择一种导入方式');
+   if(file?.size>8192)throw Error('请选择仅包含一行 Key 的文本文件');
+   await importKey(file?await file.text():typed);
+   form.reset();out.textContent='已保存 Key';onSaved();
+  }catch(err){out.textContent=err.message;}
+ };
+ form.querySelector('[data-remove]').onclick=async()=>{
+  try{await forgetKey();form.reset();out.textContent='已移除本机 Key';}
+  catch{out.textContent='无法移除 Key，请检查浏览器存储';}
+ };
+ return out;
+}
+export function mountKeyForm(form) {
+ form.innerHTML=keyFields;
+ return bindKeyForm(form);
+}
 
 export function installKeyDialog() {
  const dialog=document.createElement('dialog');
@@ -9,31 +38,12 @@ export function installKeyDialog() {
  dialog.setAttribute('aria-labelledby','ai-key-title');
  dialog.innerHTML=`<div class="modal-grabber" aria-hidden="true"></div><form>
   <div class="modal-head"><button type="button" class="cancel" data-close>关闭</button><h2 id="ai-key-title">API Key</h2><span></span></div>
-  <p>导入自己的 OpenAI Key 后直接调用 ${MODEL}。Key 加密保存在本机。</p>
-  <label>OpenAI API Key<input name="key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="sk-…"></label>
-  <label>或选择仅包含 Key 的文本文件<input name="file" type="file" accept=".txt,text/plain"></label>
-  <output role="status"></output>
-  <div class="ai-actions"><button type="submit">保存 Key</button><button type="button" data-remove>移除本机 Key</button></div></form>`;
+  ${keyFields}</form>`;
  document.body.append(dialog);
  bindSheetSwipe(dialog);
- const form=dialog.querySelector('form'),out=form.querySelector('output');
+ const form=dialog.querySelector('form');
  let afterSave=null;
- form.onsubmit=async e=>{
-  e.preventDefault();
-  try{
-   const file=form.elements.file.files[0],typed=form.elements.key.value.trim();
-   if(file&&typed)throw Error('请选择一种导入方式');
-   if(file?.size>8192)throw Error('请选择仅包含一行 Key 的文本文件');
-   await importKey(file?await file.text():typed);
-   const proceed=afterSave;
-   form.reset();dialog.close();
-   proceed?.();
-  }catch(err){out.textContent=err.message;}
- };
- form.querySelector('[data-remove]').onclick=async()=>{
-  try{await forgetKey();form.reset();out.textContent='已移除本机 Key';}
-  catch{out.textContent='无法移除 Key，请检查浏览器存储';}
- };
+ const out=bindKeyForm(form,()=>{const proceed=afterSave;dialog.close();proceed?.();});
  form.querySelector('[data-close]').onclick=()=>dialog.close();
  dialog.onclose=()=>{form.reset();out.textContent='';afterSave=null;};
  async function open(onSaved=null){
@@ -49,11 +59,11 @@ export function installKeyDialog() {
  return open;
 }
 
-export async function recognize(input) {
+export async function recognize(input,options={}) {
  if(!navigator.onLine)throw Error('目前离线，手动录入仍可用');
  const key=await readKey();
  if(!key)throw Error('请先点「API Key」导入自己的密钥');
- const request=modelRequest(input);
+ const request=modelRequest(input,options);
  const response=await fetch(OPENAI_URL,{method:'POST',cache:'no-store',credentials:'omit',
   referrerPolicy:'no-referrer',redirect:'error',signal:AbortSignal.timeout(60000),
   headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(request)});
@@ -62,6 +72,13 @@ export async function recognize(input) {
    404:'当前项目无法使用此模型',429:'OpenAI 的额度、余额或速率限制阻止了本次调用'};
   throw Error(errors[response.status]??'OpenAI 暂时无法完成识别');
  }
- try{return parseResult(await response.json(),input);}
+ try{
+  const body=await response.json(),call=pendingLedgerRead(body);
+  if(call){
+   if(!options.allowRead||options.continuation)throw Error();
+   return {call};
+  }
+  return parseResult(body,input);
+ }
  catch{throw Error('模型未返回可核对的候选，请补充输入后重试');}
 }

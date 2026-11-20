@@ -17,7 +17,7 @@ class StaticApp(SimpleHTTPRequestHandler):
 
     def send_head(self):
         path = urlsplit(self.path).path
-        if path in ('/', '/health/'):
+        if path in ('/', '/health/', '/assistant/'):
             path += 'index.html'
         if path[1:] not in PUBLIC:
             self.send_error(404)

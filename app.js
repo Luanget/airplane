@@ -996,6 +996,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     if(!saveData())return;clearTransactionDraft();ui.day=record.date;ui.selectedMonth=record.date.slice(0,7);closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
     if(syncStock){
       const url=new URL('./health/',location.href);
+      if(window.airplaneAccount.demo)url.searchParams.set('demo','1');
       url.searchParams.set('financeTx',record.id);
       location.href=url.href;
     }
@@ -1012,6 +1013,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
 
 function openLinkedPurchase(order){
   const url=new URL('./health/',location.href);
+  if(window.airplaneAccount.demo)url.searchParams.set('demo','1');
   url.searchParams.set('editPurchase',order.id);
   location.href=url.href;
 }
