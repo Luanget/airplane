@@ -1,3 +1,4 @@
+import {attachPurchases} from './purchase-ui.mjs';
 import {attachCombinedBackup,combinedBackup} from './backup.mjs';
 import {addBatch,convertCookingWeight,measuredGrams,saveSku,splitBatch,stockAlerts} from './inventory.mjs';
 import {units} from './contract.mjs';
@@ -12,11 +13,12 @@ const fmt=(v,d=0)=> v===null||v===undefined?'—':Number(v).toLocaleString('zh-C
 const dateNow=()=>{const d=new Date();const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`;};
 let state=newState(), selectedDate=dateNow(),tab='overview',toastHandle;
 const editing={};
+let updatePurchases=()=>{};
 const settingKeys=['calorieTarget','baselineTdee','cycleTarget','cycleDays','cycleAnchor','proteinMin','proteinMax','fatMin','sodiumTarget'];
 function toast(message){const t=$('toast');t.textContent=String(message);t.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>t.classList.remove('show'),3500);}
 function text(id,value){$(id).textContent=String(value);}
 function switchTab(next){tab=next;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===next));document.querySelectorAll('.view').forEach(x=>x.classList.toggle('hidden',x.id!==`view-${next}`));render();window.scrollTo({top:0,behavior:'instant'});}
-function render(){ if(tab==='overview')renderOverview();if(tab==='record')renderRecord();if(tab==='inventory')renderInventory();if(tab==='settings')renderSettings();if(tab==='trends')renderTrends(); }
+function render(){ if(tab==='inventory')updatePurchases();if(tab==='overview')renderOverview();if(tab==='record')renderRecord();if(tab==='inventory')renderInventory();if(tab==='settings')renderSettings();if(tab==='trends')renderTrends(); }
 function progress(id,val){$(id).style.width=`${Math.max(0,Math.min(100,Number(val)||0))}%`;}
 function renderOverview(){
  const today=dateNow(),intake=dayIntake(state,selectedDate),cals=intake.totals.kcal,known=intake.reported;
@@ -105,7 +107,7 @@ function renderInventory(){
 
 }
 function renderSettings(){
- const s=state.settings, form=$('settings-form');for(const k of settingKeys)form.elements[k].value=s[k];
+ const s=state.settings, form=$('settings-form');for(const k of settingKeys)form.elements[k].value=s[k];form.elements.preferences.value=s.preferences??'';
  const l=state.legacy;text('import-status',state.importInfo?`已导入：${state.importInfo.sourceVersion} · ${state.importedAt?.slice(0,10)}\n饮食 ${l.foods.length} 条 / 体重 ${l.weights.length} 条 / 运动 ${l.activities.length} 条 / 库存 ${l.inventory.length} 项；当前应用新增饮食 ${state.local.foods.length} 条。`:'尚未导入历史账本。可先手动添加记录，但更推荐导入旧账。');$('import-status').style.whiteSpace='pre-line';
 }
 function rebuildFoodSelection(){
@@ -123,7 +125,8 @@ function rebuildFoodSelection(){
 }
 function updateBatches(){
  const form=$('food-form'),selected=form.elements.batchId.value;
- form.elements.batchId.innerHTML='<option value="">自动扣减</option>'+batchBalances(state,form.elements.foodId.value).filter(b=>b.foodId===form.elements.foodId.value&&b.remaining>0)
+ const edited=events(state,'foods').find(e=>e.id===editing.food);
+ form.elements.batchId.innerHTML='<option value="">自动扣减</option>'+batchBalances(state,form.elements.foodId.value).filter(b=>b.foodId===form.elements.foodId.value&&(b.remaining>0||b.id===edited?.batchId))
   .map(b=>`<option value="${E(b.id)}">${E(b.date)} · 余 ${fmt(b.remaining,3)}</option>`).join('');
  if([...form.elements.batchId.options].some(o=>o.value===selected))form.elements.batchId.value=selected;
 }
@@ -175,6 +178,7 @@ function bindForm(type,update,message){
  };
 }
 function attach(){
+ updatePurchases=attachPurchases({getState:()=>state,commit,notify:toast,switchTab,today:dateNow});
  attachCombinedBackup({getState:()=>state,setState:next=>{state=next;rebuildFoodSelection();render();},notify:toast,download});
  for(const select of document.querySelectorAll('[data-units]'))select.innerHTML=units.map(u=>`<option>${E(u)}</option>`).join('');
  document.querySelector('[data-nutrients]').innerHTML=NUTRIENTS.map((k,i)=>`<label>${['热量 kcal','蛋白质 g','碳水 g','脂肪 g','钠 mg'][i]}<input type="number" name="${k}" min="0" step="any"></label>`).join('');
@@ -265,6 +269,7 @@ function attach(){
   e.preventDefault();const fields=Object.fromEntries(new FormData(e.target)),next=structuredClone(state);
   if(+fields.proteinMin>+fields.proteinMax){toast('蛋白质下限不能大于上限');return;}
   for(const k of settingKeys)next.settings[k]=k==='cycleAnchor'?fields[k]:Number(fields[k]);
+  next.settings.preferences=fields.preferences.trim();
   try{await commit(next,'参数已更新');}catch(err){toast(err.message);}
  };
  $('choose-import').addEventListener('click',()=>$('import-file').click());$('import-file').addEventListener('change',e=>{if(e.target.files[0])handleImport(e.target.files[0],'ledger');e.target.value='';});

@@ -1,8 +1,8 @@
 // The user's recognition check uses a synthetic catalog. Never open the ledger.
-import {newState} from '../health/core.mjs';
-import {requestData,resolveItem} from '../health/candidates.mjs';
-export const exampleText='鸡胸245g、两包面、牛奶喝了533g';
-const foods=[['chicken','鸡胸','g',245],['noodles','面','包',2],['milk','牛奶','g',533]];
+import {newState} from '../../health/core.mjs';
+import {requestData,resolveItem} from '../../health/candidates.mjs';
+export const exampleText='示例鱼肉120g、两包饼干、示例酸奶喝了88g';
+const foods=[['chicken','示例鱼肉','g',120],['noodles','饼干','包',2],['milk','示例酸奶','g',88]];
 function demoState() {
   const state=newState();
   state.legacy.inventory=foods.map(([id,name,unit])=>({id,name,unit,active:true,qty:1000,

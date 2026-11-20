@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.openai.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' http://127.0.0.1:8787; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f6f7f4">
   <meta name="description" content="Airplane 健康模块：离线记录饮食、体重、运动与库存。">
@@ -25,8 +25,8 @@
       <div class="header-top">
         <div class="brand"><span class="brand-mark" aria-hidden="true">✈</span><div><span class="brand-small">AIRPLANE</span><strong>健康管理</strong></div></div>
         <a data-account class="account-link" href="?private=1">私人账本</a>
-        <a data-module-link class="finance-link" href="../index.html" title="返回Airplane财务主页">财务首页 <span aria-hidden="true">↗</span></a>
       </div>
+      <nav class="module-switch" aria-label="模块"><a data-module-link href="../index.html">财务</a><span aria-current="page">健康</span></nav>
       <nav class="tabs" aria-label="健康模块导航">
         <button class="tab active" data-tab="overview" type="button">今日</button>
         <button class="tab" data-tab="record" type="button">记录</button>
@@ -78,8 +78,8 @@
             <div class="form-grid"><label>日期<input type="date" name="date" required></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div>
             <label>从库存食品选择（可选）<select name="foodId" id="food-select"><option value="">自定义食物</option></select></label>
             <label>食品名称<input name="name" required placeholder="如：熟鸡胸、面包、外卖"></label>
-            <div class="form-grid"><label>份量描述<input name="portion" placeholder="如：246g / 1整包"></label><label>自动估值份量（g / mL / 个）<input type="number" name="amount" min="0" step="0.1" inputmode="decimal" placeholder="可选"></label></div>
-            <div class="form-grid"><label>热量 kcal<input name="kcal" type="number" step="0.01" min="0"></label><label>蛋白质 g<input name="protein" type="number" step="0.01" min="0"></label><label>碳水 g<input name="carbs" type="number" step="0.01" min="0"></label><label>脂肪 g<input name="fat" type="number" step="0.01" min="0"></label><label>钠 mg<input name="sodium" type="number" step="0.1" min="0"></label><label>成本 ¥（可选）<input name="cost" type="number" step="0.01" min="0" placeholder="未知可留空"></label></div>
+            <div class="form-grid"><label>份量描述<input name="portion" placeholder="如：246g / 1整包"></label><label>自动估值份量（g / mL / 个）<input type="number" name="amount" min="0" step="any" inputmode="decimal" placeholder="可选"></label></div>
+            <div class="form-grid"><label>热量 kcal<input name="kcal" type="number" step="0.01" min="0"></label><label>蛋白质 g<input name="protein" type="number" step="0.01" min="0"></label><label>碳水 g<input name="carbs" type="number" step="0.01" min="0"></label><label>脂肪 g<input name="fat" type="number" step="0.01" min="0"></label><label>钠 mg<input name="sodium" type="number" step="any" min="0"></label><label>成本 ¥（可选）<input name="cost" type="number" step="0.01" min="0" placeholder="未知可留空"></label></div>
             <div class="form-grid"><label>进食状态<select name="status"><option value="actual">已吃（计入）</option><option value="plan">计划</option><option value="cancelled">取消</option></select></label><label>库存扣减数量（原库存单位，可选）<input name="stockQty" type="number" min="0" step="any" placeholder="不填则不扣"></label></div>
             <div class="form-grid"><label>消耗批次<select name="batchId" id="food-batch"></select></label><label>数据来源<select name="quality"><option value="label">标签或实测</option><option value="estimated">估算</option><option value="unknown">待补数据</option></select></label></div>
             <label>估算依据或备注<input name="uncertainty"></label>
@@ -119,15 +119,23 @@
           <label>原批次<select name="batchId" data-batch-options required></select></label><div class="form-grid"><label>记录日期<input name="date" type="date" required></label><label>份数<input name="count" type="number" min="1" max="100" step="1" required></label><label>每份数量（库存单位）<input name="quantity" type="number" min="0.001" step="any" required></label></div>
           <button type="submit" class="btn btn-primary full">确认分装</button>
         </form></details>
+        <details class="form-panel" id="purchase-panel"><summary>一张订单，多项采购</summary><form id="purchase-form">
+          <div class="form-grid"><label>订单日期<input type="date" name="date" required></label><label>订单总额 ¥<input type="number" name="total" min="0" step="0.01" required></label></div>
+          <label>订单备注<input name="note"></label><label>关联已有财务支出<select name="financeId"></select></label>
+          <div data-lines></div><button type="button" data-add-line class="btn btn-secondary">再加一项食品</button>
+          <label class="checkbox"><input type="checkbox" name="createExpense"> 入库后打开财务表单，确认新增支出</label>
+          <button type="submit" class="btn btn-primary full">确认采购入库</button>
+        </form></details>
+        <section class="panel"><h2>采购记录</h2><div id="purchases-list"></div></section>
         <section class="panel"><h2>批次与流水</h2><div id="batch-list"></div><div id="stock-history"></div></section>
         <details class="form-panel"><summary>登记入库、丢弃或盘点 <span class="summary-icon">＋</span></summary><form id="stock-form"><label>选择库存食品<select name="foodId" id="stock-food-select" required></select></label><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>库存变化量（增加填正数，消耗填负数）<input name="delta" type="number" step="0.01" required></label></div><label class="checkbox"><input name="count" type="checkbox"> 输入的是盘点总数量</label><label>原因<input name="reason" placeholder="新采购 / 丢弃 / 清点纠正"></label><button type="submit" class="btn btn-primary full">确认修改库存</button></form></details>
       </section>
       <section class="view hidden" id="view-assistant" aria-label="AI 助手">
         <h1>AI 助手</h1>
         <details class="form-panel assistant-panel" open><summary>智能饮食助手 <span class="summary-icon">＋</span></summary>
-          <button type="button" data-ai-key class="ai-setup">本机模型设置</button>
+          <button type="button" data-ai-key class="ai-setup">AI 权限</button>
           <form id="assistant-form">
-            <label>用途<select name="mode"><option value="entry">文字录入</option><option value="photo">照片与标签</option><option value="plan">推荐下一餐</option></select></label>
+            <label>用途<select name="mode"><option value="entry">文字录入</option><option value="activity">运动识别</option><option value="purchase">采购识别</option><option value="photo">照片与标签</option><option value="plan">推荐下一餐</option></select></label>
             <label>食物或要求<textarea name="text" rows="2" maxlength="600" placeholder="例如：鸡胸 245g、两包面、牛奶喝了 533g"></textarea></label>
             <label id="photo-label" hidden>选择食物或营养标签照片<input type="file" name="image" accept="image/*"></label>
             <label class="checkbox"><input type="checkbox" name="catalog" checked>附上相关库存食品（最多 16 项）</label>
@@ -135,7 +143,7 @@
           </form>
           <div id="send-preview" hidden><h3>本次发送给 OpenAI 的内容</h3><p id="send-description"></p><pre id="send-fields"></pre><img id="send-image" hidden alt="本次发送的压缩照片"><button id="send-request" class="btn btn-primary">同意发送并识别</button></div>
           <p id="assistant-status" role="status" aria-live="polite"></p>
-          <form id="candidate-form" hidden><h3>核对候选</h3><p id="candidate-note"></p><div class="form-grid"><label>记录日期<input type="date" name="date" required></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div><div id="candidate-list"></div><button class="btn btn-primary" type="submit">确认入账并更新库存</button> <button class="btn btn-text" id="discard" type="button">放弃</button></form>
+          <form id="candidate-form" hidden><h3>核对候选</h3><p id="candidate-note"></p><div class="form-grid"><label>记录日期<input type="date" name="date" required></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div><div id="candidate-extra"></div><div id="candidate-list"></div><button class="btn btn-primary" type="submit">确认入账并更新库存</button> <button class="btn btn-text" id="discard" type="button">放弃</button></form>
         </details>
       </section>
       <section class="view hidden" id="view-trends" aria-label="健康趋势">
@@ -149,9 +157,9 @@
           <div class="button-row"><button class="btn btn-secondary" data-export>导出所选账本</button><button class="btn btn-secondary" data-snapshot>导出恢复前快照</button></div>
           <label>选择统一备份以预览恢复<input type="file" accept=".json,application/json"></label><output aria-live="polite"></output>
         </section>
-        <section class="panel"><h2>计算参数</h2><form id="settings-form"><div class="form-grid"><label>每日热量参考 kcal<input type="number" name="calorieTarget" min="500" max="8000" required></label><label>普通日TDEE kcal<input type="number" name="baselineTdee" min="1000" max="8000" required></label><label>每周期目标缺口 kcal<input type="number" name="cycleTarget" min="100" max="30000" required></label><label>周期天数<input type="number" name="cycleDays" min="1" max="31" required></label><label>蛋白质下限 g<input type="number" name="proteinMin" min="0" step="any" required></label><label>蛋白质上限 g<input type="number" name="proteinMax" min="0" step="any" required></label><label>脂肪下限 g<input type="number" name="fatMin" min="0" step="any" required></label><label>钠参考 mg<input type="number" name="sodiumTarget" min="0" step="any" required></label><label>周期锚点<input type="date" name="cycleAnchor" required></label></div><button class="btn btn-secondary" type="submit">保存计算参数</button></form></section>
+        <section class="panel"><h2>计算参数</h2><form id="settings-form"><div class="form-grid"><label>每日热量参考 kcal<input type="number" name="calorieTarget" min="500" max="8000" required></label><label>普通日TDEE kcal<input type="number" name="baselineTdee" min="1000" max="8000" required></label><label>每周期目标缺口 kcal<input type="number" name="cycleTarget" min="100" max="30000" required></label><label>周期天数<input type="number" name="cycleDays" min="1" max="31" required></label><label>蛋白质下限 g<input type="number" name="proteinMin" min="0" step="any" required></label><label>蛋白质上限 g<input type="number" name="proteinMax" min="0" step="any" required></label><label>脂肪下限 g<input type="number" name="fatMin" min="0" step="any" required></label><label>钠参考 mg<input type="number" name="sodiumTarget" min="0" step="any" required></label><label>周期锚点<input type="date" name="cycleAnchor" required></label></div><label>饮食偏好 / 规划规则<input name="preferences" maxlength="300" placeholder="常做的菜、忌口、可用时间"></label><button class="btn btn-secondary" type="submit">保存计算参数</button></form></section>
         <section class="panel"><h2>数据状态</h2><div id="import-status" class="muted">尚未导入历史数据</div></section>
-        <section class="panel"><h2>隐私与更新</h2><p>设备账本由当前浏览器配置文件共享。多人共用设备时，请各自使用私人账本。模型 Key 在当前账本的「本机模型设置」中导入或移除。</p><button id="check-update" class="btn btn-secondary">检查程序更新</button></section>
+        <section class="panel"><h2>隐私与更新</h2><p>设备账本由当前浏览器配置文件共享。多人共用设备时，请各自使用私人账本。智能录入通过服务端授权。</p><button id="check-update" class="btn btn-secondary">检查程序更新</button></section>
       </section>
     </main>
     <footer class="footer">Airplane Health · 离线优先 · 账本数值为记录及估算，并非医疗诊断</footer>

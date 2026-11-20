@@ -57,3 +57,7 @@
 .ai-dialog button[type=submit] { background:#23683d; color:white; }
 
 .ai-dialog pre { white-space:pre-wrap; font:inherit; overflow-wrap:anywhere; }
+
+.module-switch { display:flex; gap:4px; width:fit-content; margin:.65rem 1rem; border:1px solid var(--line,var(--border)); border-radius:12px; padding:3px; background:var(--surface) }
+.module-switch > * { min-width:54px; padding:8px 12px; text-align:center; color:inherit; text-decoration:none; border-radius:8px; font-weight:650 }
+.module-switch [aria-current] { background:var(--green-soft,var(--blue-light)); color:var(--green,#23683d) }

@@ -1,4 +1,4 @@
-import {installKeyDialog} from './ai/client.mjs';
+import {installAccessDialog} from './ai/client.mjs';
 import {accountKeys, privateAccount} from './account.mjs';
 import {installUpdates} from './updates.mjs';
 
@@ -8,7 +8,7 @@ const accountLink = document.querySelector('[data-account]');
 const gate = document.querySelector('#account-gate');
 const content = document.querySelector('[data-shell]');
 installUpdates();
-const openKeys=installKeyDialog();
+const openKeys=installAccessDialog();
 if (isPrivate) {
   content.hidden = true;
   gate.hidden = false;

@@ -12,7 +12,6 @@ export function attachFinanceAssistant({categories,today,openEntry,revision}) {
   dlg.addEventListener('close',()=>{generation++;submit.disabled=false;});
   form.querySelector('[data-close]').onclick=()=>dlg.close();
   form.elements.text.oninput=()=>{generation++;submit.disabled=false;status.textContent='';};
-  document.addEventListener('airplane-key-imported',()=>{status.textContent='本机 Key 已保存';});
   form.onsubmit=async e=>{
     e.preventDefault();
     if (submit.disabled) return;
@@ -28,7 +27,7 @@ export function attachFinanceAssistant({categories,today,openEntry,revision}) {
       const {type,amount,date,categoryId,note}=result.entry;
       dlg.close();form.reset();
       openEntry({type,amount,date,note,selectedCategoryId:categoryId,fromAssistant:true});
-    } catch(err){if(id===generation) status.textContent=err instanceof TypeError?'无法连接 OpenAI，请检查设备网络':err.message;}
+    } catch(err){if(id===generation) status.textContent=err instanceof TypeError?'无法连接 AI 服务，请检查设备网络':err.message;}
     finally {if(id===generation) submit.disabled=false;}
   };
 }

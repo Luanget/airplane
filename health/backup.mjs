@@ -48,13 +48,14 @@ export function attachCombinedBackup({getState,setState,notify,download}) {
    try {
     if(finance){
      replaceFinance(account.finance,finance,previous.primary);
-     account.finance.removeItem(DRAFT_KEY);
     }
    }catch(err){
     setState(await saveState(current,saved.revision,account));
     throw err;
    }
-   setState(saved);notify('已恢复 '+summary);
+   setState(saved);
+   if(finance)account.finance.removeItem(DRAFT_KEY);
+   notify('已恢复 '+summary);
   }catch(err){notify(err.message);}
  };
 }

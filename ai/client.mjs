@@ -1,55 +1,58 @@
-import {exampleInput,assessExample,exampleText} from './example.mjs';
-import {MODEL,callModel} from './responses.mjs';
-import {readKey,importKey,forgetKey} from './keys.mjs';
+import {accountKeys} from '../account.mjs';
 
-export function installKeyDialog() {
-  const dlg=document.createElement('dialog');
-  dlg.id='ai-keys';dlg.className='ai-dialog';dlg.setAttribute('aria-labelledby','ai-key-title');
-  dlg.innerHTML=`<form><h2 id="ai-key-title">本机模型设置</h2><p>默认模型 ${MODEL}。Key 保存在当前账本的本机存储中，调用费用记入签发这个 Key 的 OpenAI 项目。</p>
-    <label>OpenAI API Key<input name="key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…"></label>
-    <label>或导入纯文本 Key 文件<input name="file" type="file" accept=".txt,text/plain"></label>
-    <output role="status"></output><div class="ai-actions"><button type="submit">保存 Key</button><button type="button" data-forget>移除本机 Key</button><button type="button" data-close>关闭</button></div>
-    <details><summary>试识别饮食示例</summary><p>${exampleText}。本次向 OpenAI 发送这句话和三项样例 SKU（牛奶按克计）。结果仅在这里显示。</p><button data-demo type="button">同意发送并试识别一次</button><pre data-result role="status"></pre></details></form>`;
-  document.body.append(dlg);
-  const f=dlg.querySelector('form'),msg=f.querySelector('output');
-  const clear=()=>{f.elements.key.value=''; f.elements.file.value='';};
-  const demo=f.querySelector('[data-demo]'),result=f.querySelector('[data-result]');
-  dlg.addEventListener('close',()=>{
-    clear();
-    if (location.hash==='#model') history.replaceState(null,'',location.pathname+location.search);
-  });
-  demo.onclick=async()=>{
-    if (demo.disabled) return;
-    demo.disabled=true;result.textContent='正在识别样例…';
-    try { result.textContent=assessExample(await recognize(exampleInput())).join('\n'); }
-    catch(err) {result.textContent=err instanceof TypeError?'无法连接 OpenAI，请检查设备网络':err.message;}
-    finally {demo.disabled=false;}
-  };
-  f.querySelector('[data-close]').onclick=()=>dlg.close();
-  f.querySelector('[data-forget]').onclick=async()=>{
-    try {await forgetKey(window.airplaneAccount);clear();msg.textContent='已移除';} catch {msg.textContent='移除失败，请检查本机存储';}
-  };
-  f.onsubmit=async e=>{
-    e.preventDefault();
-    try {
-      const file=f.elements.file.files[0];
-      if (file && f.elements.key.value.trim()) throw Error('请选择一种导入方式');
-      if (file?.size>8192) throw Error('请选择仅含一行 Key 的文本文件');
-      await importKey(window.airplaneAccount,file?await file.text():f.elements.key.value);
-      clear();msg.textContent='已保存，可关闭设置或试识别下方示例';document.dispatchEvent(new Event('airplane-key-imported'));
-    } catch(err) {msg.textContent=err.message;}
-  };
-  async function open(){
-    if (!dlg.open) dlg.showModal();
-    try { msg.textContent=await readKey(window.airplaneAccount)?'已配置，可替换或移除':'此账本尚未导入 Key'; }
-    catch {msg.textContent='读取失败，可重新导入 Key';}
+// A same-origin HTTPS route can point at the Worker in production.
+const base=location.hostname==='127.0.0.1'||location.hostname==='localhost'?'http://127.0.0.1:8787':'';
+const accessSlot=()=> 'airplane-ai-session:'+(window.airplaneAccount?.id??'device');
+const token=()=>sessionStorage.getItem(accessSlot());
+async function api(path,data) {
+ if(!navigator.onLine)throw Error('目前离线，手动录入仍可用');
+ if(!token())throw Error('先在「AI 权限」输入管理员提供的访问码');
+ const response=await fetch(base+path,{method:data?'POST':'GET',cache:'no-store',credentials:'omit',redirect:'error',
+   signal:AbortSignal.timeout(60000),headers:{Authorization:'Bearer '+token(),...(data?{'Content-Type':'application/json'}:{})},
+   body:data?JSON.stringify(data):undefined});
+ const result=await response.json();
+ if(!response.ok)throw Error(result.error||'AI 服务当前不可用');
+ return result;
+}
+export function installAccessDialog() {
+ const dialog=document.createElement('dialog');
+ dialog.id='ai-access';dialog.className='ai-dialog';dialog.setAttribute('aria-labelledby','ai-access-title');
+ dialog.innerHTML=`<form><h2 id="ai-access-title">AI 权限</h2><p>输入管理员提供的 Airplane 访问码。本地账本可以直接使用。</p>
+  <label>访问码<input name="code" type="password" autocomplete="off" spellcheck="false"></label>
+  <output role="status"></output><div class="ai-actions"><button type="submit">验证授权</button><button type="button" data-remove>断开授权</button><button type="button" data-close>关闭</button></div><button type="button" data-old-secret>清理旧版浏览器密钥</button></form>`;
+ document.body.append(dialog);
+ const form=dialog.querySelector('form'),out=form.querySelector('output');
+ async function showUsage(){
+  if(!token()){out.textContent='尚未授权 AI';return;}
+  try{
+   const u=await api('/api/usage');
+   out.textContent=`${u.month} 已用 ${u.calls}/${u.monthlyCalls} 次，计费与预留约 $${(u.billableMicros/1e6).toFixed(3)}`;
+  }catch(err){out.textContent=err instanceof TypeError?'无法连接 AI 服务':err.message;}
+ }
+ form.onsubmit=async e=>{
+  e.preventDefault();
+  try {
+   const keys=await accountKeys(form.elements.code.value.trim());
+   sessionStorage.setItem(accessSlot(),keys.bearer);form.reset();
+   await showUsage();
+  }catch(err){out.textContent=err.message;}
+ };
+ form.querySelector('[data-remove]').onclick=()=>{sessionStorage.removeItem(accessSlot());out.textContent='已移除本次会话授权';};
+ form.querySelector('[data-old-secret]').onclick=()=>{
+  if(!confirm('移除旧版保存在本机的 OpenAI Key？服务端授权和账本记录可继续使用。'))return;
+  const slot='airplane-openai-credential-v1';
+  if(window.airplaneAccount?.id){
+   window.airplaneAccount.finance.removeItem(slot);out.textContent='已清理当前私人账本的旧版密钥';return;
   }
-  document.addEventListener('click',e=>{if(e.target.closest('[data-ai-key]')) open();});
-  return open;
+  const req=indexedDB.deleteDatabase(slot);
+  req.onsuccess=()=>{out.textContent='已清理设备账本的旧版密钥';};
+  req.onerror=()=>{out.textContent='浏览器无法清理旧版密钥';};
+  req.onblocked=()=>{out.textContent='请先关闭仍在使用旧版的 Airplane 页面';};
+ };
+ form.querySelector('[data-close]').onclick=()=>dialog.close();
+ dialog.onclose=()=>form.reset();
+ const open=()=>{if(!dialog.open){dialog.showModal();showUsage();}};
+ document.addEventListener('click',e=>{if(e.target.closest('[data-ai-key]'))open();});
+ return open;
 }
-export async function recognize(data) {
-  if (!navigator.onLine) throw Error('当前离线，手动记录仍可使用');
-  const key=await readKey(window.airplaneAccount);
-  if (!key) throw Error('请先点击「本机模型设置」导入自己的 Key');
-  return callModel(key,data);
-}
+export const recognize=data=>api('/api/assist',data);

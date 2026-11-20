@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.openai.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' http://127.0.0.1:8787; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f6f7f4" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)" />
@@ -33,16 +33,14 @@
       </div>
       <div class="topbar-actions">
         <a data-account class="account-link" href="?private=1">私人账本</a>
-        <a data-module-link class="icon-button" href="./health/" aria-label="打开健康管理" title="健康管理">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 10.1c0 5.6-8.8 10.3-8.8 10.3S3.2 15.7 3.2 10.1a4.7 4.7 0 0 1 8.8-2.2 4.7 4.7 0 0 1 8.8 2.2Z"/><path d="M8.5 12h7M12 8.5v7"/></svg>
-        </a>
         <button class="icon-button" id="settingsButton" aria-label="打开设置" data-icon="settings"></button>
       </div>
     </header>
 
+    <nav class="module-switch" aria-label="模块"><span aria-current="page">财务</span><a data-module-link href="./health/">健康</a></nav>
     <button type="button" class="finance-ai-launch" id="open-finance-ai">AI 记账</button>
     <dialog class="ai-dialog" id="finance-assistant" aria-labelledby="finance-ai-title"><form>
-      <h2 id="finance-ai-title">AI 记账</h2><button type="button" data-ai-key>本机模型设置</button>
+      <h2 id="finance-ai-title">AI 记账</h2><button type="button" data-ai-key>AI 权限</button>
       <label>描述一笔收支<textarea name="text" maxlength="600" rows="2" required placeholder="例如：昨天坐地铁花了 6 元"></textarea></label>
       <p>本次只向 OpenAI 发送这句话、今天日期和可用分类。识别后可核对金额、日期与预算选项。</p>
       <details><summary>本次使用的分类</summary><p data-fields></p></details><output role="status"></output>

@@ -1,3 +1,5 @@
+import {readState as readHealthState} from './health/storage.mjs';
+import {purchaseTransactionId} from './health/purchases.mjs';
 import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,validateFinanceBackup} from './finance-storage.mjs';
 import {attachFinanceAssistant} from './ai/finance.mjs';
 import {checkForAppUpdate} from './updates.mjs';
@@ -7,7 +9,7 @@ import {checkForAppUpdate} from './updates.mjs';
 const financeStore = window.airplaneAccount.finance;
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.8.1';
+const APP_VERSION = '0.9.0';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -978,7 +980,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   let dirty=!!restored;
   const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,budgetSync:!!existing.budgetSync,budgetExcluded:existing.budgetExcluded===true,amount:Number(existing.amount),date:existing.date||initial.date,time:existing.time||initial.time,note:existing.note??''}:null;
   const captureDraft=()=>({type,selectedCategoryId:selected,budgetSync,budgetExcluded,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
-  const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
+  const persistDraft=()=>{if(!existing&&!suppliedDraft?.purchaseId&&dirty)saveTransactionDraft(captureDraft());};
   openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="budgetIncludeToggle" class="budget-sync-toggle ${budgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${budgetExcluded?'false':'true'}"><span><strong>计入日常预算</strong><small>关闭后仍计入总支出并减少余额，但不占用月预算和每日额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||budgetExcluded!==editBaseline.budgetExcluded||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirm('放弃本次修改？');},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
@@ -1042,22 +1044,41 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     const draft={...captureDraft(),savedAt:Date.now()};dirty=true;
     // Editing an existing record must never leak into the draft used by the next
     // brand-new transaction. Keep edit state only in memory while organizing.
-    if(!existing)saveTransactionDraft(draft);
-    openCategoryManager(type,{fromTransaction:true,draft,existing,onReturn:(returnType)=>openTransactionModal(existing,{...draft,type:returnType,selectedCategoryId:(returnType===type?selected:preferredCategoryId(returnType))})});
+    if(!existing&&!suppliedDraft?.purchaseId)saveTransactionDraft(draft);
+    openCategoryManager(type,{fromTransaction:true,draft,existing,onReturn:(returnType)=>openTransactionModal(existing,{...suppliedDraft,...draft,type:returnType,selectedCategoryId:(returnType===type?selected:preferredCategoryId(returnType))})});
   };
   renderChooser();
-  const submit=()=>{
+  const submit=(syncStock=false)=>{
+    if (observedFinanceRaw!==financeStore.getItem(STORAGE_KEY)){toast('账本已在其他页面更新，请刷新');return;}
     if(assistantRevision!==null && assistantRevision!==financeStore.getItem(STORAGE_KEY)){toast('账本已在其他页面变更，请刷新后重新记入');return;}
     const parsedAmount=parseAmountExpression(document.getElementById('txAmount').value); const value=parsedAmount.value; const c=categoryById(selected);
     if(!parsedAmount.ok||!value||value<=0){toast('请输入有效金额或算式');return;} if(!c){toast('请选择分类');return;}
     const chosenDate=document.getElementById('txDate').value||localISO();
     if(chosenDate>localISO()){toast('记账日期不能晚于今天');return;}
-    const record={...(existing||{}),id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,budgetExcluded:type==='expense'&&budgetExcluded,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
-    if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;} else data.transactions.push(record);
+    if(suppliedDraft?.purchaseId&&(type!=='expense'||Math.round(value*100)!==suppliedDraft.purchaseCents||chosenDate!==suppliedDraft.date)){
+      toast('采购关联需要相同的支出金额和日期');return;
+    }
+    if(syncStock&&type!=='expense'){toast('请先填写食品采购支出');return;}
+    const record={...(existing||{}),id:existing?.id||suppliedDraft?.purchaseId||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,budgetExcluded:type==='expense'&&budgetExcluded,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
+    if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;}
+    else if(data.transactions.some(t=>t.id===record.id)){toast('这张采购订单已记账');return;}
+    else data.transactions.push(record);
     if(type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
     clearTransactionDraft();saveData();ui.selectedMonth=record.date.slice(0,7);closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
+    if(syncStock){
+      const url=new URL('./health/',location.href);
+      if(window.airplaneAccount.id)url.searchParams.set('private','1');
+      url.searchParams.set('financeTx',record.id);
+      location.href=url.href;
+    }
   };
-  document.getElementById('txSubmit').onclick=submit;
+  document.getElementById('txSubmit').onclick=()=>submit();
+  if(!suppliedDraft?.purchaseId){
+    const sync=document.createElement('button');
+    sync.type='button';sync.className='secondary-button';sync.textContent='保存食品支出并同步入库';
+    sync.onclick=()=>submit(true);
+    document.getElementById('txSubmit').after(sync);
+  }
   document.getElementById('txDelete')?.addEventListener('click',()=>{closeModal({runDismiss:false});deleteTransaction(existing.id);});
 }
 
@@ -1270,6 +1291,16 @@ if(recoveryRequired){
     },openEntry:draft=>openTransactionModal(null,draft)});
   render();
 }
+const purchaseQuery=new URL(location.href).searchParams.get('purchase');
+if(purchaseQuery&&!recoveryRequired)readHealthState().then(health=>{
+  const order=(health.local.purchases??[]).find(p=>p.id===purchaseQuery);
+  if(!order||!order.totalCents){toast('没有可确认的采购支出');return;}
+  const id=purchaseTransactionId(order);
+  if(data.transactions.some(t=>t.id===id)){toast('这张采购订单已记账');return;}
+  if(order.financeId){toast('请先恢复已关联的财务支出');return;}
+  openTransactionModal(null,{type:'expense',selectedCategoryId:preferredCategoryId('expense'),
+    amount:(order.totalCents/100).toFixed(2),date:order.date,note:order.note||'食品采购',purchaseId:id,purchaseCents:order.totalCents});
+}).catch(()=>toast('无法读取关联采购'));
 // Persistence status is important but not required to show the ledger. Query it
 // after launch instead of competing with the first interactive frame on iOS.
 runWhenIdle(()=>ensurePersistentStorage(),1600);

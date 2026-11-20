@@ -57,3 +57,11 @@ test('combined backup accepts partial choices and requires a valid source ledger
  assert.deepEqual(unpackBackup(combinedBackup(s,null)),{health:s,finance:null});
  assert.throws(()=>unpackBackup({format:'airplane-combined-v1',finance:{transactions:[]}}));
 });
+
+test('a historical supplement cannot use a batch acquired later',()=>{
+ const s=newState();
+ const sku=saveSku(s,{name:'合成食品',unit:'g',basisUnit:'g',basisAmount:100});
+ addBatch(s,{foodId:sku.id,date:'2030-05-06',quantity:400});
+ assert.throws(()=>addFood(s,{...food,foodId:sku.id,stockQty:100}));
+ assert.equal(inventoryWithMoves(s)[0].qty,400);
+});

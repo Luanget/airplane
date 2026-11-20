@@ -2,8 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
 import gateway from '../worker/index.mjs';
-import {parseResult,modelRequest,callModel,MODEL} from '../ai/responses.mjs';
-import {exampleInput,assessExample} from '../ai/example.mjs';
+import {parseResult,modelRequest,MODEL} from '../ai/responses.mjs';
+import {exampleInput,assessExample} from './fixtures/ai-sample.mjs';
 import {accountKeys} from '../account.mjs';
 
 const input=exampleInput();
@@ -12,7 +12,7 @@ const envelope=body=>({status:'completed',output:[{type:'message',content:[{type
 test('optional loopback Worker rejects unauthorized callers, oversized data and remote image URLs before billing',async t=>{
   const {id,bearer}=await accountKeys(randomBytes(32).toString('hex'));
   let calls=0;
-  const env={OPENAI_API_KEY:'synthetic',AI_USERS:JSON.stringify([id]),ALLOWED_ORIGINS:origin};
+  const env={OPENAI_API_KEY:'synthetic',AI_USERS:JSON.stringify([id]),ALLOWED_ORIGINS:origin,QUOTA:{idFromName:n=>n,get:()=>({fetch:async()=>{calls++;return Response.json({items:[],note:''});}})}};
   t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json(envelope({items:[],note:''}));});
   const send=(body,overrides={})=>gateway.fetch(new Request('http://127.0.0.1/api/assist',{method:'POST',
     body:JSON.stringify(body),headers:{'content-type':'application/json',Origin:origin,Authorization:'Bearer '+bearer,...overrides}}),env);
@@ -27,19 +27,14 @@ test('optional loopback Worker rejects unauthorized callers, oversized data and 
   const ok=await send(input);assert.equal(ok.status,200);assert.equal(ok.headers.get('cache-control'),'no-store');
   assert.equal(calls,1);
 });
-test('BYOK sends the selected key only to Responses, uses the economy model and reports provider errors',async t=>{
+test('structured requests exclude stored conversation and use server model parameters',()=>{
   const raw=envelope({items:[],note:'测试'});
-  const stub=t.mock.method(globalThis,'fetch',async (url,init)=>{
-    assert.equal(url,'https://api.openai.com/v1/responses');
-    assert.equal(init.headers.Authorization,'Bearer fixture-only');
-    const data=JSON.parse(init.body);assert.equal(data.model,MODEL);
-    assert.equal(data.store,false);assert.equal(data.text.format.strict,true);
-    assert.ok(!('tools' in data));assert.equal(init.redirect,'manual');
-    return Response.json(raw);
-  });
-  assert.deepEqual(await callModel('fixture-only',input),{items:[],note:'测试'});
-  stub.mock.mockImplementation(async()=>new Response(null,{status:401}));
-  await assert.rejects(callModel('fixture-only',input),/Key/);
+  const req=modelRequest(input,{model:MODEL,maxOutput:2048,effort:'low'});
+  assert.equal(req.model,MODEL);
+  assert.equal(req.store,false);assert.equal(req.text.format.strict,true);
+  assert.equal(req.max_output_tokens,2048);
+  assert.deepEqual(req.reasoning,{effort:'low'});
+  assert.ok(!('tools' in req));
   assert.throws(()=>parseResult({...raw,status:'incomplete'},input));
   assert.throws(()=>parseResult({...raw,output:[{type:'message',content:[{type:'refusal'}]}]},input));
   assert.throws(()=>parseResult({...raw,output:[]},input));

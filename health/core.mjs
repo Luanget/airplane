@@ -3,7 +3,7 @@ export const APP_SCHEMA = 'airplane-health-v1';
 export const DEFAULT_SETTINGS = Object.freeze({
   calorieTarget: 2000, proteinMin: 100, proteinMax: 160,
   fatMin: 40, sodiumTarget: 2000, baselineTdee: 2200,
-  cycleDays: 6, cycleTarget: 3500, cycleAnchor: '2026-01-01'
+  cycleDays: 7, cycleTarget: 3500
 });
 export const NUTRIENTS = ['kcal', 'protein', 'carbs', 'fat', 'sodium'];
 const NUTRIENT_KEYS = {kcal:'kcal', protein:'蛋白质(g)', carbs:'碳水(g)', fat:'脂肪(g)', sodium:'钠(mg)'};
@@ -14,8 +14,11 @@ export const round = (v, digits=1) => Number((v || 0).toFixed(digits));
 export const validDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) && Number.isFinite(Date.parse(`${s}T00:00:00Z`)) && new Date(`${s}T00:00:00Z`).toISOString().slice(0,10)===s;
 export const utcDay = s => Date.parse(`${s}T00:00:00Z`) / 86400000;
 export function addDays(s,n){ return new Date((utcDay(s)+n)*86400000).toISOString().slice(0,10); }
-export function newState(){ return {
-  appType: APP_SCHEMA, settings:{...DEFAULT_SETTINGS}, importedAt:null, importInfo:null,
+export function newState(){
+ const today=new Date();
+ const cycleAnchor=new Date(today.getTime()-today.getTimezoneOffset()*60000).toISOString().slice(0,10);
+ return {
+  appType: APP_SCHEMA, settings:{...DEFAULT_SETTINGS,cycleAnchor}, importedAt:null, importInfo:null,
   legacy: { foods:[], weights:[], activities:[], inventory:[], daily:{}, energy:{}, rules:[], sourceSnapshot:null },
   local: { foods:[], weights:[], activities:[], stockMoves:[] }
 }; }
@@ -178,7 +181,7 @@ export function energyForDay(state,date,today){
 
 }
 export function cycleForDate(state,date,today){
- const settings=state.settings;const anchor=validDate(settings.cycleAnchor)?settings.cycleAnchor:'2026-01-01';const days=Math.max(1,Number(settings.cycleDays)||6);
+ const settings=state.settings;const anchor=validDate(settings.cycleAnchor)?settings.cycleAnchor:today;const days=Math.max(1,Number(settings.cycleDays)||DEFAULT_SETTINGS.cycleDays);
  const numDays=utcDay(date)-utcDay(anchor);const shift=Math.floor(numDays/days)*days;const start=addDays(anchor,shift),end=addDays(start,days-1);
  const dates=Array.from({length:days},(_,i)=>addDays(start,i));const entries=dates.map(d=>energyForDay(state,d,today));const closed=entries.filter(e=>e.closed&&e.reported);
  const sum=round(closed.reduce((s,e)=>s+e.deficit,0),2);const goal=Number(settings.cycleTarget)||7700;
@@ -211,7 +214,7 @@ function assertBalances(state,foodId) {
  if (batches.some(b=>b.remaining<0) || sku?.qty!==null && sku?.qty < round(batches.reduce((n,b)=>n+b.remaining,0),6))
   throw Error('库存不足，或该批次已有消耗记录');
 }
-export function allocateStock(state,foodId,qty,batchId) {
+export function allocateStock(state,foodId,qty,batchId,date) {
  const sku=inventoryWithMoves(state).find(x=>x.id===foodId);
  if(!sku||sku.qty===null)throw Error('请先确认食品和库存实盘数量');
  if(qty>sku.qty+1e-6)throw Error('库存不足，当前剩余 '+sku.qty+' '+sku.unit);
@@ -228,7 +231,7 @@ export function allocateStock(state,foodId,qty,batchId) {
  }
  for(const b of batches){
   if(remaining<=0)break;
-  if(b.remaining<=0 || batchId && b.id!==batchId)continue;
+  if(b.remaining<=0 || batchId && b.id!==batchId || date&&b.date>date)continue;
   const part=Math.min(remaining,b.remaining);
   // Allocate the remaining cost. Reversals return exactly the original cents.
   const allocated=state.local.stockMoves.filter(m=>m.batchId===b.id&&m.delta<0).reduce((n,m)=>n+(m.costCents??0),0);
@@ -257,7 +260,7 @@ export function addFood(state,fields,id) {
  try{
   const affected=new Set(oldMoves.filter(m=>m.linkedFoodId===entry.id).map(m=>m.foodId));
   if(status==='actual'&&foodId&&qty>0){
-   const parts=allocateStock(state,foodId,qty,batchId);
+   const parts=allocateStock(state,foodId,qty,batchId,date);
    const cents=parts.some(p=>p.costCents===null)?null:parts.reduce((sum,p)=>sum+p.costCents,0);
    entry.cost=explicitCost??(cents===null?null:cents/100);
    for(const part of parts)state.local.stockMoves.push({id:makeId('stock'),foodId,delta:-part.qty,batchId:part.batchId,
@@ -299,7 +302,7 @@ export function localStockChange(state,{foodId,delta,date,reason,batchId,count=f
  const knownMoves=opening?state.local.stockMoves.filter(m=>m.foodId===foodId).reduce((n,m)=>n+m.delta,0):0;
  const change=count?round(value-(item.qty??knownMoves),6):value;
  if(change===0&&!opening)throw Error('库存数量没有变化');
- const parts=change<0?allocateStock(state,foodId,-change,batchId).map(p=>({delta:-p.qty,batchId:p.batchId,costCents:p.costCents})): [{delta:change}];
+ const parts=change<0?allocateStock(state,foodId,-change,batchId,date).map(p=>({delta:-p.qty,batchId:p.batchId,costCents:p.costCents})): [{delta:change}];
  const actionId=makeId('movement');
  const moves=parts.map(p=>({...p,id:makeId('stock'),actionId,foodId,date,opening,reason:reason||(count?'盘点':'库存调整'),createdAt:new Date().toISOString()}));
  state.local.stockMoves.push(...moves);

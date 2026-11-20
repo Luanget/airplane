@@ -57,7 +57,7 @@ test('requests never serialize the health snapshot, financial data or historical
   assert.ok(!matches(resultSchema,{items:[{...part,amount:-1}],note:''}));
 });
 test('six-day boundary, next-day closing and missing days, with imported energy-only baseline',()=>{
-  const state=newState(); state.settings.cycleAnchor=date;
+  const state=newState(); state.settings.cycleAnchor=date;state.settings.cycleDays=6;
   assert.equal(cycleForDate(state,'2030-01-07','2030-01-07').start,'2030-01-07');
   state.legacy.energy[date]={intake:800,tdee:null};
   const next=confirmItems(state,[part],date,'晚餐');

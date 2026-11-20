@@ -53,7 +53,7 @@ export function splitBatch(state,{batchId,date,quantity,count}) {
   const total=round(part*parts,6);
   if(!batch || !validDate(date) || !(part>0)||!Number.isInteger(parts)||parts<1||parts>100||total>batch.remaining+1e-6)
     throw Error('请检查分装数量和原批次余量（一次最多 100 份）');
-  const [{costCents}]=allocateStock(state,batch.foodId,total,batchId);
+  const [{costCents}]=allocateStock(state,batch.foodId,total,batchId,date);
   const actionId=makeId('split');
   state.local.stockMoves.push({id:actionId,batchId,foodId:batch.foodId,date,delta:-total,costCents,reason:'分装转出',createdAt:new Date().toISOString()});
   return Array.from({length:parts},(_,i)=>addBatch(state,{...batch,id:actionId+'-'+i,date,quantity:part,parent:batchId,

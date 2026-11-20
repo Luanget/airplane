@@ -1,4 +1,5 @@
-import {inventoryWithMoves, addFood, localStockChange, dayIntake, round, makeId} from './core.mjs';
+import {inventoryWithMoves, addFood, localStockChange, dayIntake, round, makeId, addDays, cycleForDate} from './core.mjs';
+import {measuredGrams,saveSku} from './inventory.mjs';
 import {nutrientKeys} from './contract.mjs';
 
 export function requestData(state, mode, text, photo, date, shareCatalog) {
@@ -24,7 +25,14 @@ export function requestData(state, mode, text, photo, date, shareCatalog) {
   if (planning) {
     const intake = dayIntake(state,date);
     const {calorieTarget,proteinMin,fatMin,cycleDays,cycleTarget} = state.settings;
-    summary = {totals:intake.reported ? intake.totals : null,calorieTarget,proteinMin,fatMin,cycleDays,cycleTarget};
+    const cycle=cycleForDate(state,date,date);
+    const recent=[1,2,3].map(n=>{
+      const day=addDays(date,-n),daily=dayIntake(state,day);
+      return {date:day,kcal:daily.incomplete.includes('kcal') ? null : daily.totals.kcal,
+        protein:daily.incomplete.includes('protein') ? null : daily.totals.protein};
+    });
+    summary={totals:intake.reported?intake.totals:null,calorieTarget,proteinMin,fatMin,cycleDays,cycleTarget,
+      cycleDeficit:cycle.closedDays?cycle.deficit:null,closedDays:cycle.closedDays,recent,preferences:String(state.settings.preferences??'').slice(0,300)};
   }
   return {mode,text,catalog,summary,photo};
 }
@@ -68,6 +76,7 @@ export function manualStockQty(sku, amount) {
 
 // One path handles the preview and the eventual write. No model-supplied totals.
 export function resolveItem(state, c) {
+  if (c.weighing)c={...c,amount:measuredGrams(c.weighing),unit:'g'};
   if (!Number.isFinite(c.amount) || c.amount <= 0 || c.amount > 100000) throw Error('请核对份量');
   const sku = c.sku ? inventoryWithMoves(state).find(s => s.active && s.id === c.sku) : null;
   if (c.sku && !sku) throw Error('库存食品已变更，请重新选择');
@@ -82,12 +91,18 @@ export function resolveItem(state, c) {
       return [k,labelAmount === null ? null : round(sku.nutrition[k]*labelAmount/n,2)];
     return [k,modelAmount === null || c.nutrients[k] === null ? null : round(c.nutrients[k]*modelAmount/c.basisAmount,2)];
   }));
-  return {sku, stockQty, nutrition, pack};
+  return {sku, stockQty, nutrition, pack,amount:c.amount,unit:c.unit};
 }
 export function confirmItems(current, candidates, date, meal) {
   const next = structuredClone(current);
   for (const c of candidates) {
-    const {sku,stockQty,nutrition,pack} = resolveItem(next,c);
+    const {sku,stockQty,nutrition,pack,amount,unit} = resolveItem(next,c);
+    if(c.action==='label'){
+      saveSku(next,{id:sku?.id,name:c.name,unit:sku?.unit??c.unit,basisUnit:c.basisUnit,basisAmount:c.basisAmount,
+        ...c.nutrients,quality:'estimated',source:'确认 AI 读取的标签',packageSize:c.packageSize,packageUnit:c.packageUnit,
+        price:sku?.priceBasis===sku?.unit?sku?.pricePerUnit:null,minimum:sku?.minimum,stage:sku?.stage,stockStage:sku?.stockStage});
+      continue;
+    }
     if (['add','remove'].includes(c.action)) {
       if (!sku && c.action === 'remove') throw Error('出库需要选择已有食品');
       let id = sku?.id;
@@ -99,10 +114,10 @@ export function confirmItems(current, candidates, date, meal) {
           packageSize:pack.size, packageUnit:pack.measure, pack:pack.pack,pricePerUnit:null,priceBasis:''});
       }
       if (sku && stockQty === null) throw Error('份量与库存单位无法换算，请核对包装规格');
-      localStockChange(next,{date,foodId:id,delta:(stockQty ?? c.amount)*(c.action==='add'?1:-1),reason:'确认智能候选'});
+      localStockChange(next,{date,foodId:id,delta:(stockQty ?? amount)*(c.action==='add'?1:-1),reason:'确认智能候选'});
     } else {
       if (c.action === 'eat' && sku && stockQty === null) throw Error('无法换算扣库数量，请调整单位或选择自定义食物');
-      const entry = addFood(next,{date,meal,name:sku?.name ?? c.name,portion:`${c.amount} ${c.unit}`,
+      const entry = addFood(next,{date,meal,name:sku?.name ?? c.name,portion:`${amount} ${unit}`,
         ...nutrition,foodId:sku?.id,stockQty,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
       entry.source = 'confirmed-assistant';
       entry.uncertainty = c.uncertainty;

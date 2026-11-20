@@ -10,21 +10,32 @@ const nutrients = object(Object.fromEntries(nutrientKeys.map(k => [k, optional(n
 export const units = ['g','mL','包','个','份','盒','瓶','袋'];
 const unit = choice(...units);
 const item = object({
-  sku:optional(string(80,1)), name:string(80,1), action:choice('eat','plan','add','remove'),
+  sku:optional(string(80,1)), name:string(80,1), action:choice('eat','plan','add','remove','label'),
   amount:number(100000,0.001), unit, packageSize:optional(number(100000,0.001)),
   packageUnit:optional(choice('g','mL')), basisAmount:number(100000,0.001), basisUnit:unit,
-  nutrients, uncertainty:string(240,1)
+  nutrients, uncertainty:string(240,1),
+  weighing:optional(object({before:number(100000,0.001),after:optional(number(100000)),tare:optional(number(100000))}))
 });
 export const resultSchema = object({note:string(400), items:list(item,8)});
+export const activitySchema=object({note:string(400),activity:optional(object({
+ name:string(80,1),km:optional(number(1000)),minutes:optional(number(1440)),kcal:optional(number(20000)),
+ energyKind:choice('activity','total'),quality:choice('estimated','device'),includedInBase:choice('yes','no'),
+ uncertainty:string(240)
+}))});
+export const purchaseSchema=object({note:string(400),total:optional(number(1e7)),items:list(object({
+ ...item.properties,itemCost:optional(number(1e7))
+}),8)});
 const catalogItem = object({
   id:string(80,1), name:string(80,1), unit:string(32), standard:string(100),
   basis:string(20), qty:optional(number(1e8)), price:optional(number(1e7)),
   priceBasis:string(100), nutrients:optional(nutrients)
 });
 export const inputSchema = object({
-  mode:choice('entry','photo','plan'), text:string(600), catalog:list(catalogItem,16),
+  mode:choice('entry','photo','plan','activity','purchase'), text:string(600), catalog:list(catalogItem,16),
   summary:optional(object({totals:optional(nutrients), calorieTarget:number(8000),
-    proteinMin:number(1000), fatMin:number(1000), cycleDays:number(31,1), cycleTarget:number(30000)})),
+    proteinMin:number(1000), fatMin:number(1000), cycleDays:number(31,1), cycleTarget:number(30000),
+    cycleDeficit:optional(number(100000,-100000)),closedDays:number(31),preferences:string(300),
+    recent:list(object({date:string(10,10),kcal:optional(number(100000)),protein:optional(number(10000))}),3)})),
   photo:optional(string(720000))
 });
 
@@ -60,5 +71,5 @@ export function validInput(data) {
     if (!data.photo?.startsWith('data:image/jpeg;base64,/9j/') ||
         !/^[A-Za-z0-9+/]+={0,2}$/.test(data.photo.slice(23))) return false;
   } else if (data.photo !== null) return false;
-  return (data.mode !== 'entry' || !!data.text.trim()) && (data.mode === 'plan' ? !!data.summary : data.summary === null);
+  return (!['entry','activity','purchase'].includes(data.mode) || !!data.text.trim()) && (data.mode === 'plan' ? !!data.summary : data.summary === null);
 }
