@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.openai.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f7f4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Airplane 健康模块：离线记录饮食、体重、运动与库存。">
+  <link rel="manifest" href="../manifest.webmanifest">
+  <link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
+  <title>Airplane · 健康</title>
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="./app.css">
+<link rel="stylesheet" href="../shared.css">
+</head>
+<body data-module="health">
+  <div data-shell class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="brand-row"><span class="brand-mark" data-shell-icon="plane"></span><h1>Airplane</h1></div>
+        <div class="month-switcher day-picker">
+          <button type="button" data-day-step="-1" class="month-step month-step-prev" data-shell-icon="chevron" aria-label="前一天"></button>
+          <label class="day-picker-value"><span class="sr-only">查看日期</span><input id="report-date" type="date" data-short-date></label>
+          <button type="button" data-day-step="1" class="month-step" data-shell-icon="chevron" aria-label="后一天"></button>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <a class="icon-button" href="../assistant/" data-open-ai data-shell-icon="sparkles" aria-label="AI 助手" title="AI 助手"></a>
+        <a class="icon-button" data-module-link data-shell-icon="wallet" href="../index.html" title="财务" aria-label="财务"></a>
+        <button class="icon-button" id="health-settings" data-shell-icon="settings" type="button" aria-label="打开设置"></button>
+      </div>
+    </header>
+    <main>
+      <section class="view" id="view-overview" aria-label="健康概览">
+        <section class="card hero health-hero" aria-label="今日能量">
+          <div class="hero-label">已记录热量 <span id="today-status" class="hero-tag">—</span></div>
+          <div class="big-money hero-count"><span id="hero-calories">—</span><span class="unit">kcal</span></div>
+          <div class="progress-track"><div class="progress-fill" id="cal-progress"></div></div>
+          <div class="hero-foot"><span id="hero-goal">—</span><span id="hero-remaining">—</span></div>
+        </section>
+        <div class="metric-grid stat-grid">
+          <article class="metric stat"><span class="stat-label">蛋白质</span><strong id="protein-stat">—</strong><small id="protein-goal">目标 ≥150g</small></article>
+          <article class="metric stat"><span class="stat-label">脂肪</span><strong id="fat-stat">—</strong><small id="fat-goal">目标 ≥45g</small></article>
+          <article class="metric stat"><span class="stat-label">碳水</span><strong id="carbs-stat">—</strong><small>按活动量调整</small></article>
+          <article class="metric stat"><span class="stat-label">钠</span><strong id="sodium-stat">—</strong><small><span id="sodium-goal">—</span></small></article>
+        </div>
+        <div class="metric-grid stat-grid weight-grid">
+          <article class="metric stat"><span class="stat-label">最新晨重</span><strong id="weight-stat">—</strong><small id="weight-date">暂无记录</small></article>
+          <article class="metric stat"><span class="stat-label">最近7次均重</span><strong id="weight-average">—</strong><small id="weight-trend">—</small></article>
+        </div>
+        <a href="#trends" class="card panel health-trend-link" aria-label="体重趋势">
+          <span class="panel-title"><strong>体重趋势</strong><span data-shell-icon="chevron"></span></span>
+          <svg id="weight-chart" viewBox="0 0 540 185" aria-hidden="true"></svg>
+        </a>
+        <section class="card panel"><div class="panel-title"><div><h2 id="cycle-title">六天减脂周期</h2><p id="cycle-range">—</p></div><strong class="cycle-total" id="cycle-deficit">—</strong></div>
+          <div class="progress-track cycle-track"><div class="progress-fill" id="cycle-progress"></div></div>
+          <div class="cycle-meta"><span id="cycle-pct">—</span><span id="cycle-equivalent">—</span></div>
+          <p class="panel-note" id="cycle-note">—</p>
+        </section>
+        <section class="health-ledger" aria-labelledby="health-ledger-title">
+          <div class="section-head"><h2 id="health-ledger-title">记录</h2><span id="health-history-period" class="muted"></span><button type="button" class="text-button" id="health-show-month" hidden>查看整月</button></div>
+          <div id="local-events"></div>
+        </section>
+      </section>
+      <section class="view hidden" id="view-inventory" aria-label="食物库存"><div class="section-title-row"><div><h1>现有库存</h1></div></div>
+        <div class="notice notice-light">显示主账导入时的库存，加上本应用内确认的库存变化。不会因“计划”自动减少。</div>
+        <label class="search-label">筛选食材<input id="inventory-search" type="search" placeholder="鸡胸 / 水饺 / 牛奶 / 芹菜"></label>
+        <div id="stock-alerts"></div><div id="inventory-list" class="inventory-list"></div>
+        <details class="card form-panel" id="sku-panel"><summary>维护食品与营养标签</summary><form id="sku-form">
+          <input name="id" type="hidden"><label>食品名称<input name="name" required></label>
+          <div class="form-grid"><label>库存单位<select name="unit" data-units></select></label><label>营养基准单位<select name="basisUnit" data-units></select></label>
+          <label>营养基准数量<input name="basisAmount" value="100" type="number" min="0.001" step="any" required></label><label>标签食材状态<select name="stage"><option value="raw">生重或原包装</option><option value="cooked">熟重</option></select></label>
+          <label>库存食材状态<select name="stockStage"><option value="raw">生重或原包装</option><option value="cooked">熟重</option></select></label><label>每库存单位的价格 ¥<input name="price" type="number" min="0" step="any"></label><label>低库存提醒线<input name="minimum" type="number" min="0" step="any"></label>
+          <label>每包装净含量<input name="packageSize" type="number" min="0" step="any"></label><label>净含量单位<select name="packageUnit"><option>g</option><option>mL</option></select></label></div>
+          <div class="form-grid" data-nutrients></div><div class="form-grid"><label>来源<input name="source" placeholder="包装营养标签 / 外食估算"></label><label>数据质量<select name="quality"><option value="label">标签或实测</option><option value="estimated">估算</option><option value="unknown">待补</option></select></label></div>
+          <button type="submit" class="btn btn-primary full">保存食品</button><button type="button" class="btn btn-text" id="new-sku">新食品</button>
+        </form></details>
+        <details class="card form-panel" id="batch-panel"><summary>按批次入库</summary><form id="batch-form">
+          <label>食品<select name="foodId" data-stock-options required></select></label><div class="form-grid"><label>记录日期<input name="date" type="date" required></label><label>数量（库存单位）<input name="quantity" type="number" min="0.001" step="any" required></label><label>该批采购金额 ¥<input name="cost" type="number" min="0" step="0.01"></label><label>到期日期<input name="expires" type="date"></label><label>同批生重 g<input name="raw" type="number" min="0" step="any"></label><label>同批熟重 g<input name="cooked" type="number" min="0" step="any"></label></div>
+          <button type="submit" class="btn btn-primary full">确认批次入库</button>
+        </form></details>
+        <details class="card form-panel"><summary>分装</summary><form id="split-form">
+          <label>原批次<select name="batchId" data-batch-options required></select></label><div class="form-grid"><label>记录日期<input name="date" type="date" required></label><label>份数<input name="count" type="number" min="1" max="100" step="1" required></label><label>每份数量（库存单位）<input name="quantity" type="number" min="0.001" step="any" required></label></div>
+          <button type="submit" class="btn btn-primary full">确认分装</button>
+        </form></details>
+        <details class="card form-panel"><summary>补货清单</summary>
+          <form id="shopping-form"><div class="form-grid"><label>食品<select name="foodId" data-stock-options required></select></label><label>补货数量（库存单位）<input name="quantity" type="number" min="0.000001" step="any" required></label></div><button type="submit" class="btn btn-primary">加入或更新清单</button></form>
+          <div class="button-row"><button type="button" class="btn btn-secondary" data-low-stock>加入低库存食品</button><button type="button" class="btn btn-secondary" data-to-purchase>用勾选项填写采购单</button></div>
+          <div id="shopping-list"></div>
+        </details>
+        <section id="purchase-recovery" class="card panel" hidden aria-live="polite">
+          <h2>待处理的采购更正</h2><p>请完成财务与库存的同步，或放弃尚未写入财务的更正。</p>
+          <div class="button-row"><button type="button" class="btn btn-primary" data-resume>继续同步</button><button type="button" class="btn btn-secondary" data-abandon>放弃更正</button></div>
+        </section>
+        <details class="card form-panel" id="purchase-panel"><summary>一张订单，多项采购</summary><form id="purchase-form">
+          <div class="form-grid"><label>订单日期<input type="date" name="date" required></label><label>时间<input type="time" name="time"></label><label>订单总额 ¥<input type="number" name="total" min="0" step="0.01" required></label></div>
+          <label>订单备注<input name="note"></label><label>关联已有财务支出<select name="financeId"></select></label>
+          <div data-lines></div><button type="button" data-add-line class="btn btn-secondary">再加一项食品</button>
+          <label class="checkbox"><input type="checkbox" name="createExpense"> 入库后打开财务表单，确认新增支出</label>
+          <button type="submit" class="btn btn-primary full">确认采购入库</button><button type="button" class="btn btn-text" data-close-edit hidden>结束编辑</button>
+        </form></details>
+        <section class="card panel"><h2>采购记录</h2><div id="purchases-list"></div></section>
+        <section class="card panel"><h2>批次与流水</h2><div id="batch-list"></div><div id="stock-history"></div></section>
+        <details class="card form-panel"><summary>登记入库、丢弃或盘点 <span class="summary-icon">＋</span></summary><form id="stock-form"><label>选择库存食品<select name="foodId" id="stock-food-select" required></select></label><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>库存变化量（增加填正数，消耗填负数）<input name="delta" type="number" step="0.01" required></label></div><label class="checkbox"><input name="count" type="checkbox"> 输入的是盘点总数量</label><label>原因<input name="reason" placeholder="新采购 / 丢弃 / 清点纠正"></label><button type="submit" class="btn btn-primary full">确认修改库存</button></form></details>
+      </section>
+      <section class="view hidden" id="view-trends" aria-label="健康趋势">
+        <a href="#" id="health-trend-back" class="text-button health-trend-back"><span data-shell-icon="chevron"></span>返回首页</a>
+        <h1>体重趋势</h1>
+        <section class="card panel"><svg id="weight-detail-chart" viewBox="0 0 540 185" role="img" aria-label="晨重折线图"></svg></section>
+        <section class="card panel"><h2>最近 14 天</h2><div id="trend-days"></div></section>
+      </section>
+    </main>
+    <nav class="tabbar tabbar-grouped" aria-label="主导航">
+      <div class="tab-group"><button type="button" class="tab active" data-tab="overview"><span data-shell-icon="home"></span><small>首页</small></button></div>
+      <button type="button" class="add-button" id="add-health" aria-label="记一笔健康" data-shell-icon="plus"></button>
+      <div class="tab-group"><button type="button" class="tab" data-tab="inventory"><span data-shell-icon="bag"></span><small>库存</small></button></div>
+    </nav>
+    <dialog class="modal bottom-sheet health-sheet" id="health-entry" aria-labelledby="health-entry-title">
+      <div class="modal-grabber" aria-hidden="true"></div>
+      <div class="modal-head"><button type="button" class="cancel" data-sheet-close>关闭</button><h2 id="health-entry-title">记一笔</h2><span></span></div>
+      <div class="segmented health-types"><button type="button" data-entry="food">饮食</button><button type="button" data-entry="weight">体重</button><button type="button" data-entry="activity">运动</button></div>
+<div class="card entry-fields" data-entry-panel="food"><form id="food-form">
+            <p id="food-editing" class="muted" hidden>正在更正历史记录</p>
+            <details id="meal-templates" hidden><summary>套用常吃的一餐</summary>
+            <div class="form-grid"><label>餐食模板<select id="meal-template"></select></label><button type="button" id="use-template" class="btn btn-secondary">保存模板为记录</button></div>
+            </details>
+
+            <div class="form-grid"><label>日期<input type="date" name="date" required></label><label>时间<input type="time" name="time"></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div>
+            <label>从库存食品选择（可选）<select name="foodId" id="food-select"><option value="">自定义食物</option></select></label>
+            <label>食品名称<input name="name" required placeholder="如：熟鸡胸、面包、外卖"></label>
+            <div class="form-grid"><label>份量描述<input name="portion" placeholder="如：246g / 1整包"></label><label>份量（按食品单位）<input type="number" name="amount" min="0" step="any" inputmode="decimal" placeholder="可选"></label></div>
+            <div class="form-grid"><label>进食状态<select name="status"><option value="actual">已吃（计入）</option><option value="plan">计划</option><option value="cancelled">取消</option></select></label></div>
+            <p class="muted form-hint" id="food-summary" hidden></p>
+            <button class="btn btn-primary full" type="submit">确认保存这条饮食</button><button id="cancel-food-edit" type="button" class="btn btn-text" hidden>结束编辑</button>
+            <details class="entry-options"><summary>营养、成本与库存详情</summary>
+            <div class="form-grid"><label>热量 kcal<input name="kcal" type="number" step="0.01" min="0"></label><label>蛋白质 g<input name="protein" type="number" step="0.01" min="0"></label><label>碳水 g<input name="carbs" type="number" step="0.01" min="0"></label><label>脂肪 g<input name="fat" type="number" step="0.01" min="0"></label><label>钠 mg<input name="sodium" type="number" step="any" min="0"></label><label>成本 ¥（可选）<input name="cost" type="number" step="0.01" min="0" placeholder="未知可留空"></label></div>
+            <label>库存扣减数量（原单位）<input name="stockQty" type="number" min="0" step="any" placeholder="可选"></label>
+            <div class="form-grid"><label>消耗批次<select name="batchId" id="food-batch"></select></label><label>数据来源<select name="quality"><option value="label">标签或实测</option><option value="estimated">估算</option><option value="unknown">待补数据</option></select></label></div>
+            <label>估算依据或备注<input name="uncertainty"></label>
+            </details>
+            <details><summary>包装扣重 / 生熟换算</summary><div class="form-grid">
+              <label>称重前毛重 g<input name="before" type="number" min="0" step="any"></label><label>称重后毛重 g<input name="after" type="number" min="0" step="any"></label>
+              <label>空包装重 g<input name="tare" type="number" min="0" step="any"></label>
+              <label>称重状态<select name="measuredStage"><option value="raw">与标签一致 / 生重</option><option value="cooked">熟重</option></select></label>
+              <label>同批生重 g<input name="raw" type="number" min="0" step="any"></label><label>同批熟重 g<input name="cooked" type="number" min="0" step="any"></label>
+              <button id="apply-weight" type="button" class="btn btn-secondary">计算份量</button>
+            </div></details>
+          </form></div>
+        <div class="card entry-fields" data-entry-panel="weight" hidden><form id="weight-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>时间<input type="time" name="time"></label><label>体重 kg<input type="number" name="kg" min="20" max="500" step="0.01" inputmode="decimal" required placeholder="75.0"></label></div><label class="checkbox"><input type="checkbox" name="isMorning" checked> 晨重（计入7次均重）</label><button type="submit" class="btn btn-primary full">保存体重</button></form></div>
+        <div class="card entry-fields" data-entry-panel="activity" hidden><form id="activity-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>时间<input type="time" name="time"></label><label>运动类型<input name="name" required placeholder="通勤骑行 / 夜骑 / 步行"></label><label>距离 km<input name="km" type="number" min="0" step="0.01" placeholder="可选"></label><label>活动热量 kcal<input name="kcal" type="number" min="0" step="0.1"></label><label>时长（分钟）<input type="number" name="minutes" min="0" step="any"></label><label>消耗口径<select name="energyKind"><option value="activity">单次活动</option><option value="total">设备全天总消耗</option></select></label><label>数据来源<select name="quality"><option value="estimated">手动估算</option><option value="device">手表或运动设备</option></select></label></div><label class="checkbox"><input type="checkbox" name="includedInBase" checked> 已包含普通日TDEE（通勤通常勾选，防重复）</label><button type="submit" class="btn btn-primary full">保存运动</button></form></div>
+
+      <button type="button" class="danger-button" id="delete-health-entry" hidden>删除这条记录</button>
+      <div class="card panel" id="confirm-delete-health" hidden>
+        <p>删除后会重新计算当天数据和库存。</p>
+        <div class="button-row"><button type="button" class="btn btn-secondary" id="cancel-delete-health">取消</button><button type="button" class="btn btn-danger" id="apply-delete-health">确认删除</button></div>
+      </div>
+    </dialog>
+    <dialog class="modal bottom-sheet health-sheet" id="health-settings-sheet" aria-labelledby="health-settings-sheet-title">
+      <div class="modal-grabber" aria-hidden="true"></div>
+      <div class="modal-head"><button type="button" class="cancel" data-sheet-close>关闭</button><h2 id="health-settings-sheet-title">设置</h2><span></span></div>
+        <details class="card form-panel"><summary>导入旧健康账本（可选）</summary>
+          <p class="form-hint">手头有 <code>health_tracker_*.json</code> 时可以导入。文件只在本机读取。</p>
+          <input type="file" id="import-file" accept=".json,application/json" hidden>
+          <button type="button" id="choose-import" class="btn btn-secondary">选择旧账本</button>
+        </details>
+        <section class="card panel"><h2>备份与恢复</h2><p class="muted">备份包括导入的历史数据、你在本模块新增的饮食、体重和运动、库存变化及设置。</p><div class="button-row"><button id="export-button" class="btn btn-secondary">导出健康备份JSON</button><input type="file" id="restore-file" accept=".json,application/json" hidden><button id="choose-restore" class="btn btn-secondary">恢复健康备份</button></div></section>
+        <section class="card panel" id="import-preview" hidden aria-labelledby="import-preview-title">
+          <h2 id="import-preview-title">导入预览</h2><p data-import-summary></p>
+          <p class="form-hint">确认后会替换当前健康账本，并在本机保留恢复前快照。</p>
+          <div class="button-row"><button type="button" id="cancel-health-import" class="btn btn-secondary">取消导入</button><button type="button" id="apply-health-import" class="btn btn-primary">确认导入</button></div>
+        </section>
+        <section class="card panel" id="combined-backup"><h2>统一备份与恢复</h2>
+          <label class="checkbox"><input type="checkbox" name="finance" checked> 财务账本</label><label class="checkbox"><input type="checkbox" name="health" checked> 健康账本</label>
+          <div class="button-row"><button class="btn btn-secondary" data-export>导出所选账本</button><button class="btn btn-secondary" data-snapshot>导出恢复前快照</button></div>
+          <label>选择统一备份以预览恢复<input type="file" accept=".json,application/json"></label><output aria-live="polite"></output>
+        </section>
+        <section class="card panel"><h2>计算参数</h2><form id="settings-form"><div class="form-grid"><label>每日热量参考 kcal<input type="number" name="calorieTarget" min="500" max="8000" required></label><label>普通日TDEE kcal<input type="number" name="baselineTdee" min="1000" max="8000" required></label><label>每周期目标缺口 kcal<input type="number" name="cycleTarget" min="100" max="30000" required></label><label>周期天数<input type="number" name="cycleDays" min="1" max="31" required></label><label>蛋白质下限 g<input type="number" name="proteinMin" min="0" step="any" required></label><label>蛋白质上限 g<input type="number" name="proteinMax" min="0" step="any" required></label><label>脂肪下限 g<input type="number" name="fatMin" min="0" step="any" required></label><label>钠参考 mg<input type="number" name="sodiumTarget" min="0" step="any" required></label><label>周期锚点<input type="date" name="cycleAnchor" required></label></div><label>饮食偏好 / 规划规则<input name="preferences" maxlength="300" placeholder="常做的菜、忌口、可用时间"></label><button class="btn btn-secondary" type="submit">保存计算参数</button></form></section>
+        <details class="card form-panel"><summary>餐食模板</summary>
+          <form id="template-settings"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>餐次<select id="template-meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div>
+          <label>模板名称<input name="name" maxlength="80" placeholder="留空时使用餐次"></label>
+          <button type="submit" id="save-template" class="btn btn-secondary">保存所选餐次为模板</button></form>
+        </details>
+        <section class="card panel"><h2>数据状态</h2><div id="import-status" class="muted">尚未导入历史数据</div></section>
+        <div class="section-head"><h2>安装与保护</h2></div>
+        <section class="card settings-section">
+          <button id="check-update" class="setting-row" type="button"><span class="mini-icon" data-shell-icon="download"></span><span class="setting-copy"><span class="setting-title">程序更新</span><span class="setting-sub">检查本地 PWA 更新</span></span><span class="chevron" data-shell-icon="chevron"></span></button>
+          <a class="setting-row" href="../assistant/#api-key" data-ai-settings><span class="mini-icon" data-shell-icon="sparkles"></span><span class="setting-copy"><span class="setting-title">管理 API Key</span><span class="setting-sub">使用自己的 OpenAI Key</span></span><span class="chevron" data-shell-icon="chevron"></span></a>
+        </section>
+
+    </dialog>
+
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="../boot.mjs"></script>
+</body>
+</html>

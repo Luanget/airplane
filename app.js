@@ -1,32 +1,27 @@
+import {bindDayPicker,displayDay,localDate as localISO,localClock,normalizeClock,syncCalendarFields} from './calendar.mjs';
+import {bindSheetSwipe,shellGlyphs} from './shell.mjs';
+import {readState as readHealthState} from './health/storage.mjs';
+import {purchaseForTransaction,purchaseTransactionId} from './health/purchases.mjs';
+import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,DEFAULT_CATEGORIES,freshData,replaceFinance,validateFinanceBackup} from './finance-storage.mjs';
+import {checkForAppUpdate} from './updates.mjs';
 
 // STORAGE_KEY is intentionally permanent. Never rename it in a normal app update.
 // Keeping one stable key lets new program versions reuse the user's existing ledger.
-const STORAGE_KEY = 'airplane-pwa-v1';
-const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
-const DRAFT_KEY = 'airplane-transaction-draft-v1';
-const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
+const financeStore = window.airplaneAccount.finance;
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.7.23';
+const APP_VERSION = '0.9.0';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
-  plane: '<path d="M3 14.5 21 3l-6.2 18-4.1-6.2L3 14.5Z"/><path d="m10.7 14.8 4.1-4.1"/>',
+  ...shellGlyphs,
   calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/>',
-  home: '<path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10M9 20v-6h6v6"/>',
-  list: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
-  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21h-4v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V3h4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1H21v4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
   shield: '<path d="M12 3 20 6v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6l8-3Z"/><path d="m8.5 12 2.3 2.3 4.8-5"/>',
-  wallet: '<path d="M4 7h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3h12v4"/><path d="M16 12h5v4h-5a2 2 0 1 1 0-4Z"/>',
   food: '<path d="M7 3v8M4 3v5a3 3 0 0 0 6 0V3M7 11v10M16 3c3 2 4 5 4 9h-4V3Zm0 9v9"/>',
   car: '<path d="m5 11 2-5h10l2 5"/><path d="M4 11h16v7H4z"/><circle cx="7" cy="18" r="1.5"/><circle cx="17" cy="18" r="1.5"/>',
-  bag: '<path d="M5 8h14l-1 13H6L5 8Z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/>',
   game: '<path d="M8 8h8a5 5 0 0 1 4.7 6.7l-1.1 3.1a2 2 0 0 1-3.2.8L14 16h-4l-2.4 2.6a2 2 0 0 1-3.2-.8l-1.1-3.1A5 5 0 0 1 8 8Z"/><path d="M7 12v4M5 14h4M16 13h.01M18 15h.01"/>',
   house: '<path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10M9 20v-6h6v6"/>',
   book: '<path d="M4 5a4 4 0 0 1 4-2h4v17H8a4 4 0 0 0-4 2V5Z"/><path d="M20 5a4 4 0 0 0-4-2h-4v17h4a4 4 0 0 1 4 2V5Z"/>',
-  health: '<path d="M12 21s-8-4.8-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.2-8 11-8 11Z"/><path d="M9 12h6M12 9v6"/>',
   travel: '<rect x="4" y="7" width="16" height="13" rx="3"/><path d="M9 7V5a3 3 0 0 1 6 0v2M8 11v5M16 11v5"/>',
   gift: '<rect x="3" y="9" width="18" height="12" rx="2"/><path d="M12 9v12M3 13h18M7.5 9C5 9 4 7.5 5 6c1.2-1.8 4.2.3 7 3M16.5 9C19 9 20 7.5 19 6c-1.2-1.8-4.2.3-7 3"/>',
   more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
@@ -57,23 +52,10 @@ const ICONS = {
   upload: '<path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 19h16"/>',
   file: '<path d="M6 2h8l4 4v16H6z"/><path d="M14 2v5h5"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
-  chevron: '<path d="m9 6 6 6-6 6"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   edit: '<path d="M4 20h4l11-11-4-4L4 16v4Z"/><path d="m13 7 4 4"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>'
 };
-
-const DEFAULT_CATEGORIES = [
-  ['餐饮','expense','food','#F29B69'],['交通','expense','car','#6FA8DC'],['购物','expense','bag','#AA82E3'],['娱乐','expense','game','#E77BA6'],
-  ['日用','expense','house','#E8B45F'],['学习','expense','book','#5F9FE5'],['医疗','expense','health','#65BFA3'],['旅行','expense','travel','#6EAED7'],
-  ['人情','expense','gift','#E78378'],['其他','expense','more','#9AA09A'],
-  ['工资','income','briefcase','#4CB487'],['兼职','income','laptop','#5C9FD6'],['奖学金','income','award','#C8A34C'],['奖金','income','coins','#E7A24A'],
-  ['理财','income','trend','#7797DB'],['红包/转账','income','gift','#E47B8C'],['退款','income','refund','#6CB8A3'],['其他','income','more','#9AA09A']
-].map((c,i)=>({id:`default-${i+1}`,name:c[0],type:c[1],icon:c[2],color:c[3],custom:true,hidden:false,order:i,budgetExcludedDefault:c[1]==='expense'?false:undefined}));
-
-function freshData(){
-  return {version:VERSION, transactions:[], categories:structuredClone(DEFAULT_CATEGORIES), budgets:{}, balanceAdjustments:[], prefs:{initialBalance:null}};
-}
 
 function normalizeData(parsed){
   // Schema migrations are additive: never replace transactions, budgets, categories,
@@ -114,16 +96,18 @@ function dataNeedsMigration(parsed){
 function parseStoredData(raw){
   if(!raw) return null;
   const parsed=JSON.parse(raw);
+  const recognized=Array.isArray(parsed?.transactions) || Array.isArray(parsed?.categories)
+    || Array.isArray(parsed?.balanceAdjustments) || (parsed?.budgets && typeof parsed.budgets==='object')
+    || (parsed?.prefs && typeof parsed.prefs==='object');
+  if (!recognized || (parsed.transactions!==undefined && !Array.isArray(parsed.transactions))) throw new Error('unrecognized ledger');
   const needsMigration=dataNeedsMigration(parsed);
   return {value:normalizeData(parsed),needsMigration};
 }
 
+let observedFinanceRaw=null;
 function writeStorageCopies(value){
-  const raw=JSON.stringify(value);
-  localStorage.setItem(STORAGE_KEY,raw);
-  // A second on-device copy protects against a future buggy migration accidentally
-  // damaging the primary key. It is not a substitute for exported JSON backups.
-  localStorage.setItem(RECOVERY_KEY,raw);
+  replaceFinance(financeStore,value,observedFinanceRaw);
+  observedFinanceRaw=JSON.stringify(value);
 }
 
 function runWhenIdle(task, timeout=1800){
@@ -135,16 +119,17 @@ function runWhenIdle(task, timeout=1800){
 }
 
 function ensureRecoveryCopyAfterLaunch(value){
-  if(localStorage.getItem(RECOVERY_KEY))return;
+  if(financeStore.getItem(RECOVERY_KEY))return;
   runWhenIdle(()=>{
     try{
-      if(!localStorage.getItem(RECOVERY_KEY))localStorage.setItem(RECOVERY_KEY,JSON.stringify(value));
+      if(!financeStore.getItem(RECOVERY_KEY))financeStore.setItem(RECOVERY_KEY,JSON.stringify(value));
     }catch(e){console.warn('Deferred recovery copy failed',e);}
   });
 }
 
 function loadData(){
-  const primaryRaw=localStorage.getItem(STORAGE_KEY);
+  const primaryRaw=financeStore.getItem(STORAGE_KEY);
+  observedFinanceRaw=primaryRaw;
   try {
     const parsed=parseStoredData(primaryRaw);
     if(parsed){
@@ -160,12 +145,14 @@ function loadData(){
     console.warn('Primary Airplane data is invalid; trying local recovery copy',e);
   }
 
-  const recoveryRaw=localStorage.getItem(RECOVERY_KEY);
+  const recoveryRaw=financeStore.getItem(RECOVERY_KEY);
   try {
     const recovered=parseStoredData(recoveryRaw);
     if(recovered){
-      localStorage.setItem(STORAGE_KEY,JSON.stringify(recovered.value));
-      if(recovered.needsMigration)localStorage.setItem(RECOVERY_KEY,JSON.stringify(recovered.value));
+      const restoredRaw=JSON.stringify(recovered.value);
+      financeStore.setItem(STORAGE_KEY,restoredRaw);
+      observedFinanceRaw=restoredRaw;
+      if(recovered.needsMigration)financeStore.setItem(RECOVERY_KEY,JSON.stringify(recovered.value));
       console.warn('Airplane restored data from the on-device recovery copy');
       return recovered.value;
     }
@@ -175,32 +162,45 @@ function loadData(){
 
   // Only a genuinely new origin/device, with neither a primary nor recovery copy,
   // starts with empty data. A program update by itself never reaches this path.
+  if(primaryRaw!==null || recoveryRaw!==null){
+    recoveryRequired=true;
+    return freshData();
+  }
   const created=freshData();
   writeStorageCopies(created);
   return created;
 }
 
 let dataRevision=0;
-function saveData(){ dataRevision++; monthTxCache.clear(); balanceCache.revision=-1; writeStorageCopies(data); }
+function saveData(){
+  dataRevision++;monthTxCache.clear();balanceCache.revision=-1;
+  try{writeStorageCopies(data);return true;}
+  catch(err){
+    try{
+      const raw=financeStore.getItem(STORAGE_KEY);
+      const saved=parseStoredData(raw);
+      if(saved){data=saved.value;observedFinanceRaw=raw;}
+    }catch{}
+    closeModal({runDismiss:false});render();
+    toast(err.message||'账本保存失败，请重新打开后重试');
+    return false;
+  }
+}
 
+let recoveryRequired=false;
 let data = loadData();
-let ui = {tab:'home', selectedMonth:monthKey(new Date()), recordFilter:'all'};
+let ui = {tab:'home', selectedMonth:monthKey(new Date()), recordFilter:'all',day:localISO(),dayOnly:false};
 let storageProtection = {supported:!!(navigator.storage?.persist && navigator.storage?.persisted), checked:false, persisted:false};
 function uid(prefix='id'){ return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`; }
 function pad(n){ return String(n).padStart(2,'0'); }
-function localISO(d=new Date()){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 function monthKey(d=new Date()){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}`; }
 function parseMonth(m){ const [y,mo]=m.split('-').map(Number); return {y,mo}; }
 function daysInMonth(m){ const {y,mo}=parseMonth(m); return new Date(y,mo,0).getDate(); }
 function monthLabel(m){ const {y,mo}=parseMonth(m); return `${y}年${mo}月`; }
 function isCurrentMonth(m){ return m===monthKey(new Date()); }
 function defaultTransactionDateForSelectedMonth(){
-  const today=new Date();
-  const current=monthKey(today);
-  if(ui.selectedMonth>=current)return localISO(today);
-  const {y,mo}=parseMonth(ui.selectedMonth);
-  const day=Math.min(today.getDate(),daysInMonth(ui.selectedMonth));
-  return `${y}-${pad(mo)}-${pad(day)}`;
+  const today=localISO();
+  return ui.day<=today?ui.day:today;
 }
 function amount(n){ return `¥${Number(n||0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`; }
 function pct(n){ return `${Math.round(Math.max(0,n)*100)}%`; }
@@ -259,7 +259,7 @@ function currentBalance(){
 }
 function hasInitialBalance(){ return data.prefs?.initialBalance !== null && data.prefs?.initialBalance !== undefined; }
 function categoryById(id){ return data.categories.find(c=>c.id===id); }
-function dateDisplay(iso){ const d=new Date(`${iso}T12:00:00`); return `${d.getMonth()+1}月${d.getDate()}日`; }
+const dateDisplay=displayDay;
 function weekday(iso){ return ['周日','周一','周二','周三','周四','周五','周六'][new Date(`${iso}T12:00:00`).getDay()]; }
 function txSnapshotCategory(t){
   const c=categoryById(t.categoryId);
@@ -274,7 +274,7 @@ function txRow(t, swipe=false){
   const row=`<div class="tx-row tx-row-interactive" data-open-tx="${escapeHTML(t.id||'')}" role="button" tabindex="0">
     <div class="category-symbol" style="color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</div>
     <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}${t.type==='income'&&t.budgetSync?'<span class="tx-budget-badge">预算+</span>':''}${t.type==='expense'&&t.budgetExcluded===true?'<span class="tx-budget-badge excluded">预算外</span>':''}</div><div class="tx-sub">${escapeHTML(t.note||fallbackDate)}</div></div>
-    <div><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(t.time||'')}</div></div>
+    <div><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(normalizeClock(t.time))}</div></div>
   </div>`;
   if(!swipe) return row;
   return `<div class="tx-swipe" data-swipe-tx="${escapeHTML(t.id||'')}"><button class="tx-delete-action" data-delete-tx="${escapeHTML(t.id||'')}" type="button">删除</button>${row}</div>`;
@@ -362,8 +362,11 @@ async function ensurePersistentStorage(showToast=false){
 }
 
 function render(){
-  document.getElementById('monthButton').innerHTML = `${monthLabel(ui.selectedMonth)} ${icon('chevron')}`;
-  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===ui.tab));
+  writeFinanceDay(ui.day);
+  document.querySelectorAll('[data-tab]').forEach(b=>{
+    const active=b.dataset.tab===ui.tab;b.classList.toggle('active',active);
+    if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');
+  });
   const app=document.getElementById('app');
   try{
     app.innerHTML = ui.tab==='stats' ? renderStats() : renderHome();
@@ -435,8 +438,9 @@ function renderHome(){
 
 function renderLedgerSection(){
   let tx=[...txForMonth(ui.selectedMonth)];
+  if(ui.dayOnly)tx=tx.filter(t=>t.date===ui.day);
   if(ui.recordFilter!=='all') tx=tx.filter(t=>t.type===ui.recordFilter);
-  tx.sort((a,b)=>(b.date+(b.time||'')).localeCompare(a.date+(a.time||'')));
+  tx.sort((a,b)=>(b.date+normalizeClock(b.time)).localeCompare(a.date+normalizeClock(a.time)));
   const groups=Object.groupBy ? Object.groupBy(tx,t=>t.date) : tx.reduce((g,t)=>((g[t.date]??=[]).push(t),g),{});
   const body=Object.keys(groups).sort().reverse().map(date=>{
     const rows=groups[date];
@@ -449,8 +453,8 @@ function renderLedgerSection(){
     return `<div class="day-group"><div class="day-head"><span>${dateDisplay(date)} ${weekday(date)}</span><span class="${cls}">${summary}</span></div><section class="card transaction-list">${rows.map(t=>txRow(t,true)).join('')}</section></div>`;
   }).join('');
   return `<section class="ledger-section">
-    <div class="section-head ledger-head"><h2>账单</h2><span class="muted ledger-month">${monthLabel(ui.selectedMonth)}</span></div>
-    <div class="filters ledger-filters"><button class="filter ${ui.recordFilter==='all'?'active':''}" data-filter="all">全部</button><button class="filter ${ui.recordFilter==='income'?'active':''}" data-filter="income">收入</button><button class="filter ${ui.recordFilter==='expense'?'active':''}" data-filter="expense">支出</button></div>
+    <div class="section-head ledger-head"><h2>账单</h2><button class="text-button" data-action="choose-month" aria-label="选择月份">${monthLabel(ui.selectedMonth)} ${icon('chevron')}</button></div>
+    <div class="filters ledger-filters">${ui.dayOnly?'<button class="filter" data-action="show-month">查看整月</button>':''}<button class="filter ${ui.recordFilter==='all'?'active':''}" data-filter="all">全部</button><button class="filter ${ui.recordFilter==='income'?'active':''}" data-filter="income">收入</button><button class="filter ${ui.recordFilter==='expense'?'active':''}" data-filter="expense">支出</button></div>
     ${body||`<section class="card empty"><div class="empty-icon">${icon('list')}</div><h3>这里还没有${ui.recordFilter==='income'?'收入':ui.recordFilter==='expense'?'支出':'账单'}记录</h3><p>点击下方绿色 ＋ 记下第一笔。</p></section>`}
   </section>`;
 }
@@ -484,10 +488,10 @@ function renderStats(){
       budgetResult=`<section class="card"><div class="eyebrow">计划状态</div><div class="budget-amount">月份尚未开始</div><div class="helper" style="margin-top:8px">已设置预算 ${amount(m.budget)}</div></section>`;
     }
   }
-  return `<div class="stack month-swipe-view" data-month-swipe-view="stats"><div class="section-head"><h2>统计</h2><span class="muted" style="font-size:12px">${monthLabel(ui.selectedMonth)}</span></div>
+  return `<div class="stack month-swipe-view" data-month-swipe-view="stats"><div class="section-head"><h2>统计</h2><button class="text-button" data-action="choose-month" aria-label="选择月份">${monthLabel(ui.selectedMonth)} ${icon('chevron')}</button></div>
     <div class="summary-grid"><div class="summary-card"><small>收入</small><strong class="positive">${amount(m.income)}</strong></div><div class="summary-card"><small>总支出</small><strong class="negative">${amount(m.expense)}</strong></div><div class="summary-card"><small>日常预算支出</small><strong>${amount(m.budgetExpense)}</strong></div><div class="summary-card"><small>结余</small><strong>${amount(m.income-m.expense)}</strong></div></div>
     <section class="card chart-card"><h3>支出分类</h3>${expenses.length?`<div class="donut-wrap"><div class="donut" style="background:conic-gradient(${gradient})"></div><div class="legend">${legend}</div></div>`:`<div class="empty"><p>有支出记录后显示分类占比。</p></div>`}</section>
-    <section class="card chart-card"><h3>每日支出趋势</h3><div class="bars">${dayValues.map((v,i)=>`<button class="bar ${i+1===nowDay?'today':''}" data-day-bar="${i+1}" data-day-value="${v}" style="height:${Math.max(v/max*100,v?3:0)}%" type="button" aria-label="${i+1}日支出 ${amount(v)}"></button>`).join('')}</div><div class="chart-axis"><span>1日</span><span>${Math.ceil(dayValues.length/2)}日</span><span>${dayValues.length}日</span></div><div class="bar-detail" id="barDetail">点按柱子查看当天金额</div></section>
+    <section class="card chart-card"><h3>每日支出趋势</h3><div class="bars">${dayValues.map((v,i)=>`<button class="bar ${i+1===nowDay?'today':''}" data-day-bar="${i+1}" data-day-value="${v}" style="height:${Math.max(v/max*100,v?3:0)}%" type="button" aria-label="${displayDay(ui.selectedMonth+'-'+pad(i+1))}支出 ${amount(v)}"></button>`).join('')}</div><div class="chart-axis"><span>1日</span><span>${Math.ceil(dayValues.length/2)}日</span><span>${dayValues.length}日</span></div><div class="bar-detail" id="barDetail">点按柱子查看当天金额</div></section>
     ${budgetResult}
   </div>`;
 }
@@ -506,12 +510,13 @@ function settingsContent(){
       <button class="setting-row" data-action="export-json"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">完整备份</span><span class="setting-sub">导出 JSON，可完整恢复预算、分类和账单</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="export-csv"><span class="mini-icon">${icon('file')}</span><span class="setting-copy"><span class="setting-title">导出明细 CSV</span><span class="setting-sub">方便在 Excel / Numbers 中查看</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="import"><span class="mini-icon">${icon('upload')}</span><span class="setting-copy"><span class="setting-title">恢复备份</span><span class="setting-sub">严格校验 Airplane JSON，恢复前自动留存当前快照</span></span><span class="chevron">${icon('chevron')}</span></button>
-      ${localStorage.getItem(PRE_RESTORE_KEY)?`<button class="setting-row" data-action="restore-pre-snapshot"><span class="mini-icon">${icon('refund')}</span><span class="setting-copy"><span class="setting-title">恢复前快照</span><span class="setting-sub">找回最近一次导入备份前的本机账本</span></span><span class="chevron">${icon('chevron')}</span></button>`:''}
+      ${financeStore.getItem(PRE_RESTORE_KEY)?`<button class="setting-row" data-action="restore-pre-snapshot"><span class="mini-icon">${icon('refund')}</span><span class="setting-copy"><span class="setting-title">恢复前快照</span><span class="setting-sub">找回最近一次导入备份前的本机账本</span></span><span class="chevron">${icon('chevron')}</span></button>`:''}
     </section>
     <div class="section-head"><h2>安装与保护</h2></div>
     <section class="card settings-section">
       <button class="setting-row" data-action="storage-persist"><span class="mini-icon">${icon('shield')}</span><span class="setting-copy"><span class="setting-title">本地数据保护</span><span class="setting-sub ${protection.cls}">${protection.label}</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="check-update"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">程序更新</span><span class="setting-sub">当前 ${APP_VERSION} · 启动优先本地，可在这里手动检查</span></span><span class="chevron">${icon('chevron')}</span></button>
+      <a class="setting-row" href="./assistant/${window.airplaneAccount.demo?'?demo=1':''}#api-key"><span class="mini-icon">${icon('sparkles')}</span><span class="setting-copy"><span class="setting-title">管理 API Key</span><span class="setting-sub">使用自己的 OpenAI Key</span></span><span class="chevron">${icon('chevron')}</span></a>
     </section>
     <section class="card"><div class="helper">主屏幕 Airplane 与 Safari 网页在 iOS 上属于不同的本地数据空间。长期使用请固定从主屏幕 Airplane 进入；程序更新只替换程序文件，不会重建余额、预算、分类或账单。人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。</div></section>
     <button class="danger-button" data-action="reset">清空本机全部数据</button>
@@ -519,8 +524,7 @@ function settingsContent(){
 }
 
 function openSettingsModal(){
-  openModal(`${modalHead('设置','完成')}<div class="settings-modal-body">${settingsContent()}</div>`);
-  document.getElementById('modalSave').onclick=()=>closeModal({runDismiss:false});
+  openModal(`${modalHead('设置',null,'关闭')}<div class="settings-modal-body">${settingsContent()}</div>`);
   bindSettingsEvents();
 }
 
@@ -533,11 +537,13 @@ function bindSettingsEvents(){
   document.querySelector('[data-action="import"]')?.addEventListener('click',()=>document.getElementById('importInput').click());
   document.querySelector('[data-action="restore-pre-snapshot"]')?.addEventListener('click',restorePreRestoreSnapshot);
   document.querySelector('[data-action="storage-persist"]')?.addEventListener('click',()=>ensurePersistentStorage(true));
-  document.querySelector('[data-action="check-update"]')?.addEventListener('click',()=>checkForAppUpdate(true));
+  document.querySelector('[data-action="check-update"]')?.addEventListener('click',()=>{closeModal({runDismiss:false});checkForAppUpdate(true);});
   document.querySelector('[data-action="reset"]')?.addEventListener('click',resetAll);
 }
 
 function bindViewEvents(){
+  document.querySelector('[data-action="choose-month"]')?.addEventListener('click',openMonthModal);
+  document.querySelector('[data-action="show-month"]')?.addEventListener('click',()=>{ui.dayOnly=false;render();});
   document.querySelectorAll('[data-action="budget"]').forEach(b=>b.onclick=()=>openBudgetModal());
   document.querySelectorAll('[data-action="balance"]').forEach(b=>b.onclick=()=>openBalanceModal());
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{ui.recordFilter=b.dataset.filter;render();});
@@ -550,7 +556,7 @@ function bindViewEvents(){
   document.querySelectorAll('[data-day-bar]').forEach(bar=>bar.addEventListener('click',()=>{
     const detail=document.getElementById('barDetail');if(!detail)return;
     document.querySelectorAll('[data-day-bar]').forEach(b=>b.classList.toggle('selected',b===bar));
-    detail.textContent=`${Number(bar.dataset.dayBar)}日 · ${amount(Number(bar.dataset.dayValue||0))}`;
+    detail.textContent=`${displayDay(ui.selectedMonth+'-'+pad(bar.dataset.dayBar))} · ${amount(Number(bar.dataset.dayValue||0))}`;
   }));
   bindTransactionSwipes();
   bindMonthSwipe();
@@ -586,11 +592,12 @@ function openModal(content, options={}){
   modalBeforeDismissHandler=options.beforeDismiss||null;
   lockPageForModal();
   root.innerHTML=`<div class="modal-backdrop"><div class="modal" role="dialog" aria-modal="true"><div class="modal-grabber" aria-label="下拉关闭"></div>${content}</div></div>`;
+  syncCalendarFields(root);
   const backdrop=root.querySelector('.modal-backdrop');
   const modal=root.querySelector('.modal');
   backdrop.addEventListener('click',e=>{if(e.target===backdrop)closeModal({reason:'backdrop'});});
   root.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closeModal({reason:'cancel'}));
-  bindSheetSwipe(modal,backdrop);
+  bindSheetSwipe(modal,backdrop,()=>closeModal({reason:'swipe'}));
 }
 function closeModal({runDismiss=true,reason='dismiss'}={}){
   const root=document.getElementById('modalRoot');
@@ -606,97 +613,6 @@ function closeModal({runDismiss=true,reason='dismiss'}={}){
 }
 function modalHead(title,saveLabel='保存',cancelLabel='取消'){ const right=saveLabel===null?'<span></span>':`<button class="save" id="modalSave">${saveLabel}</button>`; return `<div class="modal-head"><button class="cancel" data-close>${cancelLabel}</button><h2>${title}</h2>${right}</div>`; }
 
-function bindSheetSwipe(modal,backdrop){
-  const grabber=modal.querySelector('.modal-grabber');
-  let startX=0,startY=0,lastY=0,startAt=0,tracking=false,dragging=false,forceHandle=false;
-  const pointXY=p=>({x:Number.isFinite(p?.screenX)?p.screenX:p?.clientX||0,y:Number.isFinite(p?.screenY)?p.screenY:p?.clientY||0});
-  const reset=()=>{
-    tracking=false;dragging=false;forceHandle=false;
-    modal.style.transition='transform .18s ease-out';
-    backdrop.style.transition='background .18s ease-out';
-    modal.style.transform='';backdrop.style.background='';
-    setTimeout(()=>{modal.style.transition='';backdrop.style.transition='';},190);
-  };
-  const beginDrag=()=>{
-    if(dragging)return true;
-    if(!forceHandle && modal.scrollTop>1)return false;
-    const active=document.activeElement;
-    if(active&&modal.contains(active)&&active.matches('input,textarea,select')) active.blur();
-    dragging=true;startAt=performance.now();
-    modal.style.transition='none';backdrop.style.transition='none';
-    return true;
-  };
-  const begin=(point,target,force=false)=>{
-    if(target?.closest?.('.drag-handle'))return false;
-    // Arm the gesture from the whole sheet, including controls. Nothing is
-    // prevented on touchstart, so a normal tap still behaves like a tap. Only
-    // after a clearly downward movement do we take over and dismiss the sheet.
-    const p=pointXY(point);startX=p.x;startY=lastY=p.y;tracking=true;dragging=false;forceHandle=force;
-    if(force)beginDrag();
-    return true;
-  };
-  const move=point=>{
-    if(!tracking)return false;
-    const p=pointXY(point);lastY=p.y;
-
-    if(!dragging && !forceHandle && modal.scrollTop>1){
-      // Let native scrolling consume the gesture until the sheet reaches its
-      // top edge. Rebase the origin continuously so dismissal can hand off
-      // smoothly if the user keeps pulling downward after reaching the top.
-      startX=p.x;startY=lastY=p.y;
-      return false;
-    }
-
-    const dy=lastY-startY,dx=p.x-startX;
-    if(!dragging){
-      // A small movement remains a normal tap/scroll. Once the gesture is
-      // clearly downward and mostly vertical, the sheet itself follows it.
-      if(dy<10 || dy<Math.abs(dx)*1.15)return false;
-      if(!beginDrag())return false;
-    }
-    const down=Math.max(0,dy);
-    modal.style.transform=`translateY(${down}px)`;
-    backdrop.style.background=`rgba(15,18,15,${Math.max(.08,.38-down/700)})`;
-    return true;
-  };
-  const finish=()=>{
-    if(!tracking)return;
-    if(!dragging){tracking=false;forceHandle=false;return;}
-    tracking=false;dragging=false;
-    const dy=Math.max(0,lastY-startY);
-    const velocity=dy/Math.max(1,performance.now()-startAt);
-    if(dy>Math.min(92,modal.clientHeight*.13)||velocity>.56){
-      modal.style.transition='transform .16s ease-in';
-      modal.style.transform='translateY(110%)';
-      setTimeout(()=>{if(closeModal({reason:'swipe'})===false)reset();},140);
-    }else reset();
-  };
-
-  // The whole sheet can be pulled down, not only the grabber. We do not call
-  // preventDefault until the gesture is clearly downward and the sheet is at
-  // scrollTop 0, so normal scrolling and taps remain natural.
-  modal.addEventListener('touchstart',e=>{
-    if(e.touches.length!==1)return;
-    const force=!!e.target.closest?.('.modal-grabber');
-    if(begin(e.touches[0],e.target,force)&&force)e.preventDefault();
-  },{passive:false});
-  modal.addEventListener('touchmove',e=>{
-    if(e.touches.length!==1||!tracking)return;
-    if(move(e.touches[0]))e.preventDefault();
-  },{passive:false});
-  modal.addEventListener('touchend',finish,{passive:true});
-  modal.addEventListener('touchcancel',()=>{if(dragging)reset();else{tracking=false;forceHandle=false;}},{passive:true});
-
-  // Desktop/pen testing keeps the explicit grabber affordance.
-  grabber?.addEventListener('pointerdown',e=>{
-    if(e.pointerType==='touch')return;
-    if(begin(e,e.target,true)){grabber.setPointerCapture?.(e.pointerId);e.preventDefault();}
-  });
-  grabber?.addEventListener('pointermove',e=>{if(e.pointerType!=='touch'&&tracking){move(e);e.preventDefault();}});
-  grabber?.addEventListener('pointerup',e=>{if(e.pointerType!=='touch')finish();});
-  grabber?.addEventListener('pointercancel',e=>{if(e.pointerType!=='touch')reset();});
-}
-
 function openMonthModal(){
   let {y,mo}=parseMonth(ui.selectedMonth);
   const draw=()=>{
@@ -705,12 +621,17 @@ function openMonthModal(){
     document.getElementById('pickerNextYear').onclick=()=>{y++;draw();};
     document.querySelectorAll('[data-month-value]').forEach(b=>b.onclick=()=>{mo=Number(b.dataset.monthValue);draw();});
     document.getElementById('pickerCurrentMonth').onclick=()=>{const n=new Date();y=n.getFullYear();mo=n.getMonth()+1;draw();};
-    document.getElementById('modalSave').onclick=()=>{ui.selectedMonth=`${y}-${pad(mo)}`;closeModal({runDismiss:false});render();window.scrollTo({top:0,behavior:'smooth'});};
+    document.getElementById('modalSave').onclick=()=>{selectMonth(`${y}-${pad(mo)}`);closeModal({runDismiss:false});render();window.scrollTo({top:0,behavior:'smooth'});};
   };
   draw();
 }
+function selectMonth(month){
+  ui.selectedMonth=month;
+  ui.day=isCurrentMonth(month)?localISO():month+'-'+pad(Math.min(new Date().getDate(),daysInMonth(month)));
+  ui.dayOnly=false;
+}
 function shiftMonth(delta,{smooth=true}={}){
-  const {y,mo}=parseMonth(ui.selectedMonth);const d=new Date(y,mo-1+delta,1);ui.selectedMonth=monthKey(d);render();window.scrollTo({top:0,behavior:smooth?'smooth':'auto'});
+  const {y,mo}=parseMonth(ui.selectedMonth);const d=new Date(y,mo-1+delta,1);selectMonth(monthKey(d));render();window.scrollTo({top:0,behavior:smooth?'smooth':'auto'});
 }
 function bindMonthSwipe(){
   const view=document.querySelector('[data-month-swipe-view]');if(!view)return;
@@ -748,7 +669,7 @@ function openBudgetModal(){
   const existing=budgetFor(ui.selectedMonth);
   openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}总支出预算</label>${moneyInputMarkup('budgetInput',existing||'','例如 2000','budget-op')}<div class="helper">支持 + − × ÷。${syncBudget>0?`当前总预算中有 ${amount(syncBudget)} 来自“收入同步增加预算”；这里编辑的是总预算，保存时会自动保留这部分收入加成。`:'每个月可以单独设置和修改。收入默认开启“同步增加预算”，单笔不需要同步时可以关闭。'} 当前月的普通预算会按剩余天数动态分配；当天同步增加的收入会完整加到当天额度，不在当天摊给后续日期。</div></section>`);
   const readValue=bindMoneyExpressionInput('budgetInput','budget-op');
-  document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok||v<=0){toast('预算需要大于 0');return;}if(v+0.005<syncBudget){toast(`总预算不能低于已同步增加的 ${amount(syncBudget)}`);return;}data.budgets[ui.selectedMonth]=Math.max(0,Math.round((v-syncBudget)*100)/100);saveData();closeModal({runDismiss:false});render();toast('月预算已保存');};
+  document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok||v<=0){toast('预算需要大于 0');return;}if(v+0.005<syncBudget){toast(`总预算不能低于已同步增加的 ${amount(syncBudget)}`);return;}data.budgets[ui.selectedMonth]=Math.max(0,Math.round((v-syncBudget)*100)/100);if(!saveData())return;closeModal({runDismiss:false});render();toast('月预算已保存');};
 }
 
 function openBalanceModal(){
@@ -757,12 +678,12 @@ function openBalanceModal(){
   if(!initialized){
     openModal(`${modalHead('设置初始余额')}<section class="card input-card"><label>开始使用 Airplane 时已有的总余额</label>${moneyInputMarkup('balanceInput','','例如 10000','balance-op')}<div class="helper">支持 + − × ÷。初始余额只用于建立起点。之后收入会增加余额、支出会减少余额；两者都不会改变你手动设置的月预算。</div></section>`);
     const readValue=bindMoneyExpressionInput('balanceInput','balance-op');
-    document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok){toast('请输入有效余额或算式');return;}data.prefs.initialBalance=Math.round(v*100)/100;saveData();closeModal({runDismiss:false});render();toast('初始余额已保存');};
+    document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok){toast('请输入有效余额或算式');return;}data.prefs.initialBalance=Math.round(v*100)/100;if(!saveData())return;closeModal({runDismiss:false});render();toast('初始余额已保存');};
     return;
   }
   openModal(`${modalHead('调整当前总余额')}<section class="card input-card"><label>Airplane 当前总余额</label><div class="budget-amount">${amount(current)}</div><label style="margin-top:8px">调整为</label>${moneyInputMarkup('balanceInput',current.toFixed(2),'例如 10000','balance-op')}<div class="helper">支持 + − × ÷。适合补记遗漏造成的余额偏差。余额调整不计入收入、支出，也不会占用月预算。</div></section>`);
   const readValue=bindMoneyExpressionInput('balanceInput','balance-op');
-  document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),target=parsed.value;if(!parsed.ok){toast('请输入有效余额或算式');return;}const delta=Math.round((target-current)*100)/100;if(Math.abs(delta)>=0.01)data.balanceAdjustments.push({id:uid('bal'),delta,targetBalance:Math.round(target*100)/100,createdAt:new Date().toISOString()});saveData();closeModal({runDismiss:false});render();toast(Math.abs(delta)>=0.01?'当前总余额已调整':'余额没有变化');};
+  document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),target=parsed.value;if(!parsed.ok){toast('请输入有效余额或算式');return;}const delta=Math.round((target-current)*100)/100;if(Math.abs(delta)>=0.01)data.balanceAdjustments.push({id:uid('bal'),delta,targetBalance:Math.round(target*100)/100,createdAt:new Date().toISOString()});if(!saveData())return;closeModal({runDismiss:false});render();toast(Math.abs(delta)>=0.01?'当前总余额已调整':'余额没有变化');};
 }
 
 function openBalanceHistoryModal(){
@@ -773,14 +694,15 @@ function openBalanceHistoryModal(){
     const items=(data.balanceAdjustments||[]).slice().sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
     body.innerHTML=items.length?`<section class="card balance-history-list">${items.map(a=>{
       const delta=Number(a.delta||0);let when='时间未知';
-      try{when=new Date(a.createdAt).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});}catch{}
+      const stamp=new Date(a.createdAt);
+      if(Number.isFinite(stamp.getTime()))when=displayDay(localISO(stamp))+' '+localClock(stamp);
       return `<div class="balance-history-row"><div><strong class="${delta>=0?'positive':'negative'}">${delta>=0?'+':'-'}${amount(Math.abs(delta))}</strong><small>${escapeHTML(when)}${Number.isFinite(Number(a.targetBalance))?` · 调整后 ${amount(a.targetBalance)}`:''}</small></div><button class="history-delete" data-delete-balance="${escapeHTML(a.id||'')}" type="button" aria-label="删除这次余额调整">${icon('trash')}</button></div>`;
     }).join('')}</section><div class="helper balance-history-help">删除一次调整会同步改变当前总余额，但不会影响收入、支出和月预算。</div>`:`<section class="card empty"><div class="empty-icon">${icon('refund')}</div><h3>暂无余额调整</h3><p>以后通过“调整当前余额”产生的修正会记录在这里。</p></section>`;
     body.querySelectorAll('[data-delete-balance]').forEach(button=>button.onclick=()=>{
       const id=button.dataset.deleteBalance,index=data.balanceAdjustments.findIndex(a=>a.id===id);if(index<0)return;
       const removed=data.balanceAdjustments[index];
       if(!confirm(`删除这次 ${Number(removed.delta||0)>=0?'增加':'减少'} ${amount(Math.abs(Number(removed.delta||0)))} 的余额调整？`))return;
-      data.balanceAdjustments.splice(index,1);saveData();render();draw();toast('余额调整已删除',{actionLabel:'撤销',duration:3600,onAction:()=>{data.balanceAdjustments.splice(Math.min(index,data.balanceAdjustments.length),0,removed);saveData();render();draw();toast('已恢复余额调整');}});
+      data.balanceAdjustments.splice(index,1);if(!saveData())return;render();draw();toast('余额调整已删除',{actionLabel:'撤销',duration:3600,onAction:()=>{data.balanceAdjustments.splice(Math.min(index,data.balanceAdjustments.length),0,removed);if(!saveData())return;render();draw();toast('已恢复余额调整');}});
     });
   };
   document.getElementById('modalSave').onclick=()=>closeModal({runDismiss:false});
@@ -794,13 +716,13 @@ function preferredCategoryId(type){
 }
 function loadTransactionDraft(){
   try{
-    const d=JSON.parse(localStorage.getItem(DRAFT_KEY)||'null');
-    if(!d||!d.savedAt||Date.now()-d.savedAt>DRAFT_TTL_MS){localStorage.removeItem(DRAFT_KEY);return null;}
+    const d=JSON.parse(financeStore.getItem(DRAFT_KEY)||'null');
+    if(!d||!d.savedAt||Date.now()-d.savedAt>DRAFT_TTL_MS){financeStore.removeItem(DRAFT_KEY);return null;}
     return d;
-  }catch{localStorage.removeItem(DRAFT_KEY);return null;}
+  }catch{financeStore.removeItem(DRAFT_KEY);return null;}
 }
-function saveTransactionDraft(d){ localStorage.setItem(DRAFT_KEY,JSON.stringify({...d,savedAt:Date.now()})); }
-function clearTransactionDraft(){ localStorage.removeItem(DRAFT_KEY); }
+function saveTransactionDraft(d){ financeStore.setItem(DRAFT_KEY,JSON.stringify({...d,savedAt:Date.now()})); }
+function clearTransactionDraft(){ financeStore.removeItem(DRAFT_KEY); }
 
 function normalizeAmountExpression(raw=''){
   return String(raw)
@@ -958,13 +880,14 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   let selected=restored?.selectedCategoryId||existing?.categoryId||preferredCategoryId(type);
   let budgetSync=existing?existing.budgetSync===true:(suppliedDraft?.budgetSync??true);
   let budgetExcluded=!!(restored?.budgetExcluded??existing?.budgetExcluded??(type==='expense'&&categoryById(selected)?.budgetExcludedDefault===true));
-  const currentTime=new Date().toTimeString().slice(0,5);
-  const initial={amount:restored?.amount??(existing?Number(existing.amount).toFixed(2):''),date:restored?.date||existing?.date||defaultTransactionDateForSelectedMonth(),time:restored?.time||existing?.time||currentTime,note:restored?.note??existing?.note??''};
+  const date=restored?.date||existing?.date||defaultTransactionDateForSelectedMonth();
+  const defaultTime=date===localISO()?localClock():'';
+  const initial={amount:restored?.amount??(existing?Number(existing.amount).toFixed(2):''),date,time:normalizeClock(restored?.time??(existing?existing.time:defaultTime)),note:restored?.note??existing?.note??''};
   let dirty=!!restored;
-  const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,budgetSync:!!existing.budgetSync,budgetExcluded:existing.budgetExcluded===true,amount:Number(existing.amount),date:existing.date||initial.date,time:existing.time||initial.time,note:existing.note??''}:null;
-  const captureDraft=()=>({type,selectedCategoryId:selected,budgetSync,budgetExcluded,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value||currentTime,note:document.getElementById('txNote')?.value||''});
-  const persistDraft=()=>{if(!existing&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="budgetIncludeToggle" class="budget-sync-toggle ${budgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${budgetExcluded?'false':'true'}"><span><strong>计入日常预算</strong><small>关闭后仍计入总支出并减少余额，但不占用月预算和每日额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label>日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label>时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||budgetExcluded!==editBaseline.budgetExcluded||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirm('放弃本次修改？');},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,budgetSync:!!existing.budgetSync,budgetExcluded:existing.budgetExcluded===true,amount:Number(existing.amount),date:existing.date||initial.date,time:normalizeClock(existing.time),note:existing.note??''}:null;
+  const captureDraft=()=>({type,selectedCategoryId:selected,budgetSync,budgetExcluded,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value??'',note:document.getElementById('txNote')?.value||''});
+  const persistDraft=()=>{if(!existing&&!suppliedDraft?.purchaseId&&dirty)saveTransactionDraft(captureDraft());};
+  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="budgetIncludeToggle" class="budget-sync-toggle ${budgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${budgetExcluded?'false':'true'}"><span><strong>计入日常预算</strong><small>关闭后仍计入总支出并减少余额，但不占用月预算和每日额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label for="txDate">日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label for="txTime">时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||budgetExcluded!==editBaseline.budgetExcluded||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirm('放弃本次修改？');},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
   const updateAmountPreview=()=>{
@@ -1027,28 +950,82 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     const draft={...captureDraft(),savedAt:Date.now()};dirty=true;
     // Editing an existing record must never leak into the draft used by the next
     // brand-new transaction. Keep edit state only in memory while organizing.
-    if(!existing)saveTransactionDraft(draft);
-    openCategoryManager(type,{fromTransaction:true,draft,existing,onReturn:(returnType)=>openTransactionModal(existing,{...draft,type:returnType,selectedCategoryId:(returnType===type?selected:preferredCategoryId(returnType))})});
+    if(!existing&&!suppliedDraft?.purchaseId)saveTransactionDraft(draft);
+    openCategoryManager(type,{fromTransaction:true,draft,existing,onReturn:(returnType)=>openTransactionModal(existing,{...suppliedDraft,...draft,type:returnType,selectedCategoryId:(returnType===type?selected:preferredCategoryId(returnType))})});
   };
   renderChooser();
-  const submit=()=>{
+  let submitting=false;
+  const submit=async(syncStock=false)=>{
+    if(submitting)return;
+    if (observedFinanceRaw!==financeStore.getItem(STORAGE_KEY)){toast('账本已在其他页面更新，请刷新');return;}
     const parsedAmount=parseAmountExpression(document.getElementById('txAmount').value); const value=parsedAmount.value; const c=categoryById(selected);
     if(!parsedAmount.ok||!value||value<=0){toast('请输入有效金额或算式');return;} if(!c){toast('请选择分类');return;}
     const chosenDate=document.getElementById('txDate').value||localISO();
     if(chosenDate>localISO()){toast('记账日期不能晚于今天');return;}
-    const record={...(existing||{}),id:existing?.id||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,budgetExcluded:type==='expense'&&budgetExcluded,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:document.getElementById('txTime').value||currentTime,createdAt:existing?.createdAt||new Date().toISOString()};
-    if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;} else data.transactions.push(record);
-    if(type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
-    clearTransactionDraft();saveData();ui.selectedMonth=record.date.slice(0,7);closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
+    if(suppliedDraft?.purchaseId&&(type!=='expense'||Math.round(value*100)!==suppliedDraft.purchaseCents||chosenDate!==suppliedDraft.date)){
+      toast('采购关联需要相同的支出金额和日期');return;
+    }
+    if(syncStock&&type!=='expense'){toast('请先填写食品采购支出');return;}
+    const record={...(existing||{}),id:existing?.id||suppliedDraft?.purchaseId||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,budgetExcluded:type==='expense'&&budgetExcluded,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:normalizeClock(document.getElementById('txTime').value),createdAt:existing?.createdAt||new Date().toISOString()};
+    if(existing||suppliedDraft?.purchaseOrderId){
+      const sourceButton=document.getElementById('txSubmit');
+      submitting=true;
+      try{
+        const health=await readHealthState();
+        if(sourceButton!==document.getElementById('txSubmit'))return;
+        if (observedFinanceRaw!==financeStore.getItem(STORAGE_KEY)){toast('账本已在其他页面更新，请刷新');return;}
+        if(suppliedDraft?.purchaseOrderId){
+          const order=health.local.purchases?.find(p=>p.id===suppliedDraft.purchaseOrderId&&p.status!=='cancelled');
+          if(!order||order.totalCents!==Math.round(record.amount*100)||order.date!==record.date){
+            toast('采购订单已更新，请从库存重新打开');return;
+          }
+        }
+        if(existing){
+          const order=purchaseForTransaction(health,existing.id);
+          if(order&&(syncStock||record.amount!==Number(existing.amount)||record.date!==existing.date||record.time!==normalizeClock(existing.time)||record.type!==existing.type)){
+            openLinkedPurchase(order);return;
+          }
+        }
+      }catch(err){toast('无法核对关联采购，请稍后重试');return;}
+      finally{submitting=false;}
+    }
+    if(existing){const i=data.transactions.findIndex(t=>t.id===existing.id);data.transactions[i]=record;}
+    else if(data.transactions.some(t=>t.id===record.id)){toast('这张采购订单已记账');return;}
+    else data.transactions.push(record);
+    if(record.type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
+    if(!saveData())return;clearTransactionDraft();ui.day=record.date;ui.selectedMonth=record.date.slice(0,7);closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
+    if(syncStock){
+      const url=new URL('./health/',location.href);
+      if(window.airplaneAccount.demo)url.searchParams.set('demo','1');
+      url.searchParams.set('financeTx',record.id);
+      location.href=url.href;
+    }
   };
-  document.getElementById('txSubmit').onclick=submit;
+  document.getElementById('txSubmit').onclick=()=>submit();
+  if(!suppliedDraft?.purchaseId){
+    const sync=document.createElement('button');
+    sync.type='button';sync.className='secondary-button';sync.textContent='保存食品支出并同步入库';
+    sync.onclick=()=>submit(true);
+    document.getElementById('txSubmit').after(sync);
+  }
   document.getElementById('txDelete')?.addEventListener('click',()=>{closeModal({runDismiss:false});deleteTransaction(existing.id);});
 }
 
-function deleteTransaction(id){
+function openLinkedPurchase(order){
+  const url=new URL('./health/',location.href);
+  if(window.airplaneAccount.demo)url.searchParams.set('demo','1');
+  url.searchParams.set('editPurchase',order.id);
+  location.href=url.href;
+}
+async function deleteTransaction(id){
+  try{
+    const order=purchaseForTransaction(await readHealthState(),id);
+    if(order){openLinkedPurchase(order);return;}
+    if(observedFinanceRaw!==financeStore.getItem(STORAGE_KEY)){toast('账本已在其他页面更新，请刷新');return;}
+  }catch{toast('无法核对关联采购，请稍后重试');return;}
   const index=data.transactions.findIndex(x=>x.id===id);if(index<0)return;
-  const removed=data.transactions[index];data.transactions.splice(index,1);saveData();render();
-  toast('记录已删除',{actionLabel:'撤销',duration:3600,onAction:()=>{if(data.transactions.some(t=>t.id===removed.id))return;data.transactions.splice(Math.min(index,data.transactions.length),0,removed);saveData();render();toast('已恢复记录');}});
+  const removed=data.transactions[index];data.transactions.splice(index,1);if(!saveData())return;render();
+  toast('记录已删除',{actionLabel:'撤销',duration:3600,onAction:()=>{if(data.transactions.some(t=>t.id===removed.id))return;data.transactions.splice(Math.min(index,data.transactions.length),0,removed);if(!saveData())return;render();toast('已恢复记录');}});
 }
 
 function bindTransactionSwipes(){
@@ -1078,7 +1055,7 @@ function openCategoryManager(initialType='expense',options={}){
     document.getElementById('catIncome').onclick=()=>{type='income';draw();};
     const list=data.categories.filter(c=>c.type===type).sort((a,b)=>a.order-b.order);
     document.getElementById('categoryManageList').innerHTML=list.map(c=>`<div class="category-manage-row" data-category-row="${c.id}"><button class="drag-handle" data-drag-cat="${c.id}" type="button" aria-label="拖动${escapeHTML(c.name)}排序"><span></span><span></span><span></span></button><span class="category-symbol" style="width:38px;height:38px;color:${c.color};background:${tint(c.color)}">${icon(c.icon)}</span><span class="name">${escapeHTML(c.name)}${type==='expense'&&c.budgetExcludedDefault===true?'<em class="category-budget-default-badge">默认预算外</em>':''}</span><span class="category-row-actions"><button class="pill action-pill" data-toggle-cat="${c.id}">${c.hidden?'显示':'隐藏'}</button><button class="pill action-pill" data-edit-cat="${c.id}">编辑</button><button class="pill action-pill negative" data-remove-cat="${c.id}">删除</button></span></div>`).join('');
-    document.querySelectorAll('[data-toggle-cat]').forEach(b=>b.onclick=()=>{const c=categoryById(b.dataset.toggleCat);if(!c)return;if(!c.hidden&&data.categories.filter(x=>x.type===type&&!x.hidden).length<=1){toast('至少保留一个可用分类');return;}c.hidden=!c.hidden;saveData();draw();});
+    document.querySelectorAll('[data-toggle-cat]').forEach(b=>b.onclick=()=>{const c=categoryById(b.dataset.toggleCat);if(!c)return;if(!c.hidden&&data.categories.filter(x=>x.type===type&&!x.hidden).length<=1){toast('至少保留一个可用分类');return;}c.hidden=!c.hidden;if(!saveData())return;draw();});
     document.querySelectorAll('[data-edit-cat]').forEach(b=>b.onclick=()=>openCategoryEditor(type,categoryById(b.dataset.editCat),{cancelLabel:'返回',onBack:()=>draw(),onDone:saved=>draw(saved?.id)}));
     document.querySelectorAll('[data-remove-cat]').forEach(b=>b.onclick=()=>removeCategory(b.dataset.removeCat,type,()=>draw()));
     document.getElementById('addCategory').onclick=()=>openCategoryEditor(type,null,{cancelLabel:'返回',onBack:()=>draw(),onDone:saved=>draw(saved?.id)});
@@ -1096,7 +1073,7 @@ function openCategoryManager(initialType='expense',options={}){
 function bindCategoryReorder(type){
   const container=document.getElementById('categoryManageList');if(!container)return;
   const rows=()=>[...container.querySelectorAll('[data-category-row]')];
-  const saveOrder=()=>{rows().forEach((r,i)=>{const c=categoryById(r.dataset.categoryRow);if(c)c.order=i;});saveData();};
+  const saveOrder=()=>{rows().forEach((r,i)=>{const c=categoryById(r.dataset.categoryRow);if(c)c.order=i;});if(!saveData())return;};
   const capture=()=>new Map(rows().map(r=>[r,r.getBoundingClientRect()]));
   const animateReflow=(before,dragged)=>{
     rows().forEach(r=>{
@@ -1164,7 +1141,7 @@ function openCategoryEditor(type,existing=null,options={}){
     const name=document.getElementById('catName').value.trim(); if(!name){toast('请输入分类名称');return;}
     let saved=existing;
     if(existing){existing.name=name;existing.icon=selectedIcon;existing.color=selectedColor;if(type==='expense')existing.budgetExcludedDefault=defaultBudgetExcluded;} else {const order=Math.max(-1,...data.categories.filter(c=>c.type===type).map(c=>c.order))+1;saved={id:uid('cat'),name,type,icon:selectedIcon,color:selectedColor,custom:true,hidden:false,order,budgetExcludedDefault:type==='expense'?defaultBudgetExcluded:undefined};data.categories.push(saved);}
-    saveData();closeModal({runDismiss:false});options.onDone?.(saved);toast(existing?'分类已修改':'分类已添加');
+    if(!saveData())return;closeModal({runDismiss:false});options.onDone?.(saved);toast(existing?'分类已修改':'分类已添加');
   };
 }
 
@@ -1178,45 +1155,31 @@ function removeCategory(id,type,onDone){
   data.categories=data.categories.filter(x=>x.id!==id);
   if(data.prefs.lastExpenseCategoryId===id)data.prefs.lastExpenseCategoryId=null;
   if(data.prefs.lastIncomeCategoryId===id)data.prefs.lastIncomeCategoryId=null;
-  saveData();onDone?.();toast('分类已删除，历史账单已保留');
+  if(!saveData())return;onDone?.();toast('分类已删除，历史账单已保留');
 }
 function downloadBlob(filename,content,type){ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
 function makeBackup(payload=data,extra={}){return {app:'Airplane',format:'airplane-backup',schemaVersion:SCHEMA_VERSION,exportedAt:new Date().toISOString(),...extra,data:payload};}
 function exportJSON(){ downloadBlob(`Airplane-backup-${localISO()}.json`,JSON.stringify(makeBackup(),null,2),'application/json');toast('完整备份已导出'); }
-function validatedBackupData(parsed){
-  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('not an object');
-  let payload=null;
-  // Current backups carry an explicit Airplane marker. A recognizable legacy
-  // raw ledger is also accepted, but arbitrary JSON such as {} is rejected.
-  if(parsed.app==='Airplane'&&parsed.data&&typeof parsed.data==='object'&&!Array.isArray(parsed.data))payload=parsed.data;
-  else if(Array.isArray(parsed.transactions)&&Array.isArray(parsed.categories)&&parsed.budgets&&typeof parsed.budgets==='object'&&!Array.isArray(parsed.budgets))payload=parsed;
-  else throw new Error('not an Airplane backup');
-  if(!Array.isArray(payload.transactions)||!Array.isArray(payload.categories)||payload.categories.length<1)throw new Error('missing ledger arrays');
-  if(!payload.budgets||typeof payload.budgets!=='object'||Array.isArray(payload.budgets))throw new Error('invalid budgets');
-  if(!payload.categories.every(c=>c&&typeof c==='object'&&typeof c.id==='string'&&c.id&&typeof c.name==='string'&&c.name&&['income','expense'].includes(c.type)))throw new Error('invalid categories');
-  if(!payload.transactions.every(t=>t&&typeof t==='object'&&['income','expense'].includes(t.type)&&Number.isFinite(Number(t.amount))&&Number(t.amount)>0&&typeof t.date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(t.date)))throw new Error('invalid transactions');
-  if(!Object.values(payload.budgets).every(v=>Number.isFinite(Number(v))&&Number(v)>=0))throw new Error('invalid budget values');
-  return normalizeData(structuredClone(payload));
-}
+function validatedBackupData(parsed){return normalizeData(validateFinanceBackup(parsed));}
 function savePreRestoreSnapshot(){
-  localStorage.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(structuredClone(data),{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
+  financeStore.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(structuredClone(data),{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
 }
 function restorePreRestoreSnapshot(){
   try{
-    const raw=localStorage.getItem(PRE_RESTORE_KEY);if(!raw){toast('当前没有可恢复的快照');return;}
+    const raw=financeStore.getItem(PRE_RESTORE_KEY);if(!raw){toast('当前没有可恢复的快照');return;}
     const incoming=validatedBackupData(JSON.parse(raw));
     if(!confirm('恢复“恢复前快照”会替换当前账本。当前账本也会先保存为新的恢复前快照。继续吗？'))return;
     const current=structuredClone(data);
     data=incoming;clearTransactionDraft();
-    localStorage.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(current,{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
-    saveData();closeModal({runDismiss:false});render();toast('已恢复上一次导入前的账本');
+    financeStore.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(current,{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
+    if(!saveData())return;closeModal({runDismiss:false});render();toast('已恢复上一次导入前的账本');
   }catch(err){console.warn('Airplane pre-restore snapshot is invalid',err);toast('恢复前快照已损坏，无法恢复');}
 }
 function exportCSV(){
   const rows=[['日期','时间','类型','金额','分类','计入日常预算','同步增加预算','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.type==='expense'?(t.budgetExcluded===true?'否':'是'):'',t.type==='income'&&t.budgetSync?'是':'否',t.note||''])];
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\r\n');downloadBlob(`Airplane-records-${localISO()}.csv`,csv,'text/csv;charset=utf-8');toast('CSV 已导出');
 }
-function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; clearTransactionDraft();data=freshData();saveData();ui.selectedMonth=monthKey(new Date());render();toast('本机数据已清空'); }
+function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; clearTransactionDraft();data=freshData();if(!saveData())return;selectMonth(monthKey());render();toast('本机数据已清空'); }
 function toast(msg,options={}){
   document.querySelector('.toast')?.remove();
   if(activeUndo){clearTimeout(activeUndo);activeUndo=null;}
@@ -1229,11 +1192,11 @@ function toast(msg,options={}){
 }
 
 // Global navigation
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;render();window.scrollTo({top:0,behavior:'smooth'});});
+document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;render();window.scrollTo({top:0,behavior:'smooth'});});
 document.getElementById('addButton').onclick=()=>openTransactionModal();
-document.getElementById('monthButton').onclick=openMonthModal;
-document.getElementById('prevMonthButton')?.addEventListener('click',()=>shiftMonth(-1));
-document.getElementById('nextMonthButton')?.addEventListener('click',()=>shiftMonth(1));
+const writeFinanceDay=bindDayPicker(document.querySelector('.day-picker'),date=>{
+  ui.day=date;ui.selectedMonth=date.slice(0,7);ui.dayOnly=true;render();
+});
 document.getElementById('settingsButton').onclick=openSettingsModal;
 document.getElementById('importInput').addEventListener('change', async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
@@ -1241,162 +1204,49 @@ document.getElementById('importInput').addEventListener('change', async e=>{
     const parsed=JSON.parse(await file.text());
     const incoming=validatedBackupData(parsed);
     if(!confirm('已确认这是有效的 Airplane 备份。恢复会替换当前设备上的账本，并自动保留一份“恢复前快照”。继续吗？'))return;
+    if(recoveryRequired){
+      const damaged={primary:financeStore.getItem(STORAGE_KEY),recovery:financeStore.getItem(RECOVERY_KEY)};
+      financeStore.setItem('airplane-damaged-before-restore-v1',JSON.stringify(damaged));
+      recoveryRequired=false;
+      clearTransactionDraft();writeStorageCopies(incoming);window.location.reload();return;
+    }
     savePreRestoreSnapshot();
-    clearTransactionDraft();data=incoming;saveData();render();toast('备份已恢复，原账本已保留为恢复前快照');
+    clearTransactionDraft();data=incoming;if(!saveData())return;render();toast('备份已恢复，原账本已保留为恢复前快照');
   }catch(err){console.warn('Airplane backup import rejected',err);toast('无法识别这个 Airplane 备份');}
 });
 
-let swReloading=false;
-let updateReloadFallbackTimer=null;
-let airplaneRegistration=null;
-let updateBannerShown=false;
-let updateReminderDismissed=false;
-let pendingUpdateWorker=null;
-const UPDATE_CHECK_KEY='airplane-last-update-check-v1';
-const UPDATE_ACTIVE_INTERVAL_MS=5*60*1000;
-const UPDATE_RESUME_INTERVAL_MS=2*60*1000;
-let updateIntervalTimer=null;
-const observedRegistrations=new WeakSet();
-
-function activateWaitingServiceWorker(){
-  const worker=airplaneRegistration?.waiting||pendingUpdateWorker;
-  if(!worker){
-    // A previous bridge worker may already have activated itself. In that case
-    // the update succeeded; do not report a false failure.
-    toast('新版已经生效或正在完成切换',{duration:2200});
-    return;
-  }
-  const activate=()=>{
-    swReloading=true;
-    toast('正在更新 Airplane…',{duration:1800});
-    worker.postMessage({type:'SKIP_WAITING'});
-    // iOS can occasionally miss/delay controllerchange even after the new
-    // worker reaches activated. Keep a bounded reload fallback so the fresh
-    // shell is actually loaded after the user explicitly chose to update.
-    clearTimeout(updateReloadFallbackTimer);
-    updateReloadFallbackTimer=setTimeout(()=>{
-      if(swReloading)window.location.reload();
-    },4500);
-  };
-  if(worker.state==='installed'||worker.state==='activating'){activate();return;}
-  if(worker.state==='activated'){toast('Airplane 已是新版本');return;}
-  const onState=()=>{
-    if(worker.state==='installed'){worker.removeEventListener('statechange',onState);activate();}
-    else if(worker.state==='redundant'){worker.removeEventListener('statechange',onState);toast('新版准备失败，请稍后在设置中重试');}
-  };
-  worker.addEventListener('statechange',onState);
-  toast('新版正在准备，完成后会继续更新…',{duration:2200});
+if(recoveryRequired){
+  document.querySelector('.tabbar').hidden=true;
+  document.querySelector('.topbar').hidden=true;
+  const app=document.querySelector('#app');
+  app.innerHTML='<section class="card recover-card"><h2>账本需要恢复</h2><p>本机的两份账本均无法解析。可以先保存原始副本，再选择一份有效的财务备份。</p><button id="save-damaged" class="secondary-button">导出原始副本</button><button id="import-repair" class="primary-button">选择财务备份</button></section>';
+  document.querySelector('#save-damaged').onclick=()=>downloadBlob('Airplane-damaged-backup.json',JSON.stringify({primary:financeStore.getItem(STORAGE_KEY),recovery:financeStore.getItem(RECOVERY_KEY)}),'application/json');
+  document.querySelector('#import-repair').onclick=()=>document.querySelector('#importInput').click();
+}else {
+  render();
 }
-
-function hideUpdateBanner(){
-  document.querySelector('.update-banner')?.remove();
-  updateBannerShown=false;
-}
-function showUpdateAvailable(worker=null,{force=false}={}){
-  if(worker)pendingUpdateWorker=worker;
-  if(updateReminderDismissed&&!force)return;
-  if(force)updateReminderDismissed=false;
-  if(updateBannerShown&&document.querySelector('.update-banner'))return;
-  updateBannerShown=true;
-  document.querySelector('.update-banner')?.remove();
-  const d=document.createElement('div');d.className='update-banner';
-  d.innerHTML=`<span><strong>Airplane 有新版本</strong><small>已在后台准备好</small></span><button class="update-banner-action" type="button">更新</button><button class="update-banner-close" type="button" aria-label="稍后更新">${icon('close')}</button>`;
-  document.body.appendChild(d);
-  d.querySelector('.update-banner-action').onclick=()=>{hideUpdateBanner();activateWaitingServiceWorker();};
-  d.querySelector('.update-banner-close').onclick=()=>{updateReminderDismissed=true;hideUpdateBanner();};
-}
-
-function observeServiceWorkerRegistration(registration){
-  if(!registration)return;
-  if(registration.waiting)showUpdateAvailable(registration.waiting);
-  if(observedRegistrations.has(registration))return;
-  observedRegistrations.add(registration);
-  registration.addEventListener('updatefound',()=>{
-    const worker=registration.installing;
-    if(!worker)return;
-    worker.addEventListener('statechange',()=>{
-      if(worker.state==='installed'&&navigator.serviceWorker.controller)showUpdateAvailable(worker);
-    });
-  });
-}
-
-async function checkForAppUpdate(showToast=false){
-  if(!('serviceWorker' in navigator)){if(showToast)toast('当前环境不支持程序更新');return;}
+function refreshFinanceLedger(){
+  if(recoveryRequired||document.querySelector('#modalRoot .modal'))return;
   try{
-    const registration=airplaneRegistration||await navigator.serviceWorker.getRegistration('./');
-    if(!registration){if(showToast)toast('更新服务尚未就绪');return;}
-    airplaneRegistration=registration;
-    observeServiceWorkerRegistration(registration);
-    await registration.update();
-    localStorage.setItem(UPDATE_CHECK_KEY,String(Date.now()));
-    if(registration.waiting){showUpdateAvailable(registration.waiting,{force:showToast});return;}
-    if(showToast){
-      if(registration.installing){toast('发现新版，正在后台准备…',{duration:2600});}
-      else toast('已检查，当前已是最新版本');
-    }
-  }catch(err){
-    console.warn('Airplane update check failed',err);
-    if(showToast)toast('暂时无法连接更新服务器，继续使用本地版本');
-  }
+    const raw=financeStore.getItem(STORAGE_KEY);
+    if(!raw||raw===observedFinanceRaw)return;
+    data=parseStoredData(raw).value;observedFinanceRaw=raw;
+    dataRevision++;monthTxCache.clear();balanceCache.revision=-1;render();
+  }catch{}
 }
-
-function lastUpdateCheckAt(){
-  return Number(localStorage.getItem(UPDATE_CHECK_KEY)||0);
-}
-function backgroundUpdateIfDue(minInterval=UPDATE_ACTIVE_INTERVAL_MS){
-  if(document.visibilityState!=='visible'||navigator.onLine===false)return;
-  if(Date.now()-lastUpdateCheckAt()<minInterval)return;
-  checkForAppUpdate(false);
-}
-function scheduleBackgroundUpdateCheck(){
-  // Startup is never blocked by the network: render from the local shell first,
-  // then always perform one fresh update check shortly after launch. Do not
-  // reuse the previous session's timestamp to suppress this first check.
-  setTimeout(()=>{
-    if(document.visibilityState==='visible'&&navigator.onLine!==false)checkForAppUpdate(false);
-  },6000);
-  if(updateIntervalTimer)clearInterval(updateIntervalTimer);
-  updateIntervalTimer=setInterval(()=>backgroundUpdateIfDue(UPDATE_ACTIVE_INTERVAL_MS),UPDATE_ACTIVE_INTERVAL_MS);
-}
-function bindForegroundUpdateChecks(){
-  document.addEventListener('visibilitychange',()=>{
-    if(document.visibilityState==='visible')setTimeout(()=>backgroundUpdateIfDue(UPDATE_RESUME_INTERVAL_MS),700);
-  });
-  // Reconnecting is a useful opportunity to discover a version that could not
-  // be checked while offline, without affecting normal launch performance.
-  window.addEventListener('online',()=>setTimeout(()=>backgroundUpdateIfDue(0),700));
-}
-
-async function registerAirplaneServiceWorker(){
-  if(!('serviceWorker' in navigator)) return;
-  try{
-    navigator.serviceWorker.addEventListener('controllerchange',()=>{
-      pendingUpdateWorker=null;hideUpdateBanner();
-      if(!swReloading)return;
-      clearTimeout(updateReloadFallbackTimer);
-      // Give the newly activated worker a brief moment to claim the client and
-      // finish cache cleanup, then reload through its fresh shell cache.
-      setTimeout(()=>window.location.reload(),120);
-    });
-    airplaneRegistration=await navigator.serviceWorker.getRegistration('./');
-    if(!airplaneRegistration){
-      airplaneRegistration=await navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'});
-    }
-    observeServiceWorkerRegistration(airplaneRegistration);
-    scheduleBackgroundUpdateCheck();
-  }catch(err){
-    console.warn('Airplane Service Worker setup failed',err);
-  }
-}
-
-window.addEventListener('load',()=>{
-  bindForegroundUpdateChecks();
-  // Keep the launch frame free of browser-management work. The already-active
-  // Service Worker serves the app from cache before this code runs; registration
-  // bookkeeping and update discovery can safely begin after the first paint.
-  setTimeout(registerAirplaneServiceWorker,700);
-});
-render();
+window.addEventListener('storage',refreshFinanceLedger);
+window.addEventListener('airplane:finance-saved',refreshFinanceLedger);
+if(window.airplanePendingPurchase)toast('有待处理的采购更正，请在健康库存页完成同步',{duration:5500});
+const purchaseQuery=new URL(location.href).searchParams.get('purchase');
+if(purchaseQuery&&!recoveryRequired)readHealthState().then(health=>{
+  const order=(health.local.purchases??[]).find(p=>p.id===purchaseQuery);
+  if(!order||order.status==='cancelled'||!order.totalCents){toast('没有可确认的采购支出');return;}
+  const id=purchaseTransactionId(order);
+  if(data.transactions.some(t=>t.id===id)){toast('这张采购订单已记账');return;}
+  if(order.financeId){toast('请先恢复已关联的财务支出');return;}
+  openTransactionModal(null,{type:'expense',selectedCategoryId:preferredCategoryId('expense'),
+    amount:(order.totalCents/100).toFixed(2),date:order.date,time:order.time??'',note:order.note||'食品采购',purchaseId:id,purchaseOrderId:order.id,purchaseCents:order.totalCents});
+}).catch(()=>toast('无法读取关联采购'));
 // Persistence status is important but not required to show the ledger. Query it
 // after launch instead of competing with the first interactive frame on iOS.
 runWhenIdle(()=>ensurePersistentStorage(),1600);

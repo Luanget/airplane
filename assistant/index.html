@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.openai.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f6f7f4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)">
+  <title>Airplane · 助手</title>
+  <link rel="manifest" href="../manifest.webmanifest">
+  <link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="../shared.css">
+  <link rel="stylesheet" href="./workspace.css">
+</head>
+<body>
+  <div class="assistant-shell">
+    <header class="topbar">
+      <div class="brand-row"><span class="brand-mark" data-shell-icon="sparkles"></span><h1>Airplane 助手</h1></div>
+      <div class="topbar-actions">
+        <a class="icon-button" href="../index.html" data-shell-icon="wallet" aria-label="财务" title="财务"></a>
+        <a class="icon-button" href="../health/" data-shell-icon="health" aria-label="健康" title="健康"></a>
+      </div>
+    </header>
+    <main class="assistant-workspace" id="airplane-chat">
+      <aside class="assistant-sidebar" aria-label="助手设置">
+        <section class="assistant-demo card" hidden>
+          <strong>演示账本</strong>
+          <p>使用示例数据和预设回复，不消耗 OpenAI 额度。点上方财务或健康可查看演示账本的变化。</p>
+        </section>
+        <details class="card assistant-panel" id="assistant-key-panel" hidden>
+          <summary>API Key</summary>
+          <form id="assistant-key" class="assistant-fields"></form>
+        </details>
+        <details class="card assistant-panel" id="assistant-skill">
+          <summary>Skill</summary>
+          <form class="assistant-fields">
+            <label>个人偏好<textarea name="skill" rows="3" maxlength="320" placeholder="例如：晚餐用常见食材，少油，优先高蛋白。"></textarea></label>
+            <div class="chat-actions"><button type="submit" class="secondary-button">保存 Skill</button><output role="status"></output></div>
+          </form>
+          <details class="assistant-prompt"><summary>查看内置提示词</summary><pre></pre></details>
+        </details>
+        <details class="card assistant-panel assistant-context">
+          <summary>本轮上下文</summary>
+          <p data-context-size></p>
+          <p>发送范围包括本轮消息、选中的照片、当天日期、Skill 和最近四条短消息。账本摘要另行确认。</p>
+        </details>
+      </aside>
+      <section class="assistant-conversation card" aria-label="助手对话">
+        <div class="assistant-toolbar">
+          <div class="assistant-toolbar-row">
+            <button type="button" class="assistant-thread-trigger" data-toggle-threads aria-expanded="false" aria-controls="assistant-history">
+              <span class="assistant-thread-icon" data-shell-icon="list"></span>
+              <span data-thread-title>对话记录</span>
+              <span class="assistant-thread-arrow" data-shell-icon="chevron"></span>
+            </button>
+            <button type="button" class="assistant-new-thread" data-new><span data-shell-icon="plus"></span>新对话</button>
+          </div>
+          <section id="assistant-history" class="assistant-history" aria-label="对话记录" hidden>
+            <label class="assistant-history-search" hidden>
+              <span class="sr-only">查找对话</span><input type="search" placeholder="查找对话" maxlength="80">
+            </label>
+            <ul data-thread-list></ul>
+            <p data-thread-empty hidden></p>
+          </section>
+        </div>
+        <div class="chat-thread">
+          <section class="assistant-start">
+            <h2>今天想记录什么？</h2>
+            <p>可以用一句话记收支、吃了什么、买了什么或盘点食材。</p>
+            <div class="assistant-examples" aria-label="示例">
+              <button type="button" class="secondary-button" data-example="昨天吃了什么" data-use-ledger>查昨天饮食</button>
+              <button type="button" class="secondary-button" data-example="查一下燕麦，然后盘点为 300 g" data-use-ledger>盘点库存</button>
+              <button type="button" class="secondary-button" data-example="用库存安排晚餐" data-use-ledger>安排晚餐</button>
+              <button type="button" class="secondary-button" data-example="午餐花了 28 元">记一笔账</button>
+              <button type="button" class="secondary-button" data-example="帮我修改 Skill，以后晚餐优先推荐高蛋白">修改 Skill</button>
+            </div>
+          </section>
+          <div class="chat-transcript" role="log" aria-label="对话" aria-live="polite"></div>
+          <section class="card assistant-read" id="assistant-consent" aria-labelledby="assistant-consent-title" hidden>
+            <h3 id="assistant-consent-title">首次发送给 OpenAI</h3>
+            <p>会发送本轮消息、所选照片、设备日期、个人 Skill 和近期对话。账本摘要仍需单独确认。</p>
+            <div class="chat-actions"><button type="button" class="secondary-button" data-cancel-send>返回编辑</button><button type="button" class="primary-button" data-approve-send>确认发送</button></div>
+          </section>
+          <section class="card assistant-read" aria-label="账本摘要" hidden>
+            <h3>发送账本摘要</h3><p data-read-label></p><pre data-read-preview></pre>
+            <div class="chat-actions"><button type="button" class="secondary-button" data-skip-read>取消本轮</button><button type="button" class="primary-button" data-share-read>发送摘要</button></div>
+          </section>
+          <form class="card chat-review" aria-label="核对候选" hidden></form>
+        </div>
+        <form class="chat-composer">
+          <label><span class="sr-only">消息</span><textarea name="text" rows="2" maxlength="1600" placeholder="可以补充日期、数量或金额……"></textarea></label>
+          <div class="chat-actions">
+            <label class="secondary-button chat-attach">添加照片<input name="image" type="file" accept="image/*"></label>
+            <span data-attachment></span><button type="button" class="text-button" data-remove-photo hidden>移除照片</button>
+            <button type="submit" class="primary-button">发送</button>
+          </div>
+          <label class="assistant-query"><input type="checkbox" name="allowRead"> 允许本轮查询账本<span>最多一次，确认摘要后才发送</span></label>
+          <output data-status aria-live="polite"></output>
+        </form>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="../ai/chat.mjs"></script>
+</body>
+</html>

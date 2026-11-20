@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.openai.com; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f6f7f4" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)" />
@@ -14,28 +15,38 @@
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
   <link rel="icon" href="./icons/icon-192.png" />
   <link rel="stylesheet" href="./styles.css" />
+<link rel="stylesheet" href="./shared.css">
 </head>
 <body>
-  <div class="app-shell">
+  <div data-shell class="app-shell">
     <header class="topbar">
       <div>
-        <div class="brand-row"><span class="brand-mark" data-icon="plane"></span><h1>Airplane</h1></div>
-        <div class="month-switcher"><button class="month-step month-step-prev" id="prevMonthButton" aria-label="上个月" data-icon="chevron"></button><button class="month-button" id="monthButton" aria-label="选择月份"></button><button class="month-step" id="nextMonthButton" aria-label="下个月" data-icon="chevron"></button></div>
+        <div class="brand-row"><span class="brand-mark" data-shell-icon="plane"></span><h1>Airplane</h1></div>
+        <div class="month-switcher day-picker">
+          <button type="button" data-day-step="-1" class="month-step month-step-prev" data-shell-icon="chevron" aria-label="前一天"></button>
+          <label class="day-picker-value"><span class="sr-only">查看日期</span><input id="finance-date" type="date" data-short-date></label>
+          <button type="button" data-day-step="1" class="month-step" data-shell-icon="chevron" aria-label="后一天"></button>
+        </div>
       </div>
-      <button class="icon-button" id="settingsButton" aria-label="打开设置" data-icon="settings"></button>
+      <div class="topbar-actions">
+        <a class="icon-button" href="./assistant/" data-open-ai data-shell-icon="sparkles" aria-label="AI 助手" title="AI 助手"></a>
+        <a class="icon-button" data-module-link data-shell-icon="health" href="./health/" aria-label="健康" title="健康"></a>
+        <button class="icon-button" id="settingsButton" aria-label="打开设置" data-shell-icon="settings"></button>
+      </div>
     </header>
 
     <main id="app" aria-live="polite"></main>
 
-    <nav class="tabbar" aria-label="主导航">
-      <button data-tab="home" class="tab active"><span data-icon="home"></span><small>首页</small></button>
-      <button id="addButton" class="add-button" aria-label="记一笔"><span data-icon="plus"></span></button>
-      <button data-tab="stats" class="tab"><span data-icon="chart"></span><small>统计</small></button>
+    <nav class="tabbar tabbar-grouped" aria-label="主导航">
+      <div class="tab-group"><button data-tab="home" class="tab active"><span data-shell-icon="home"></span><small>首页</small></button></div>
+      <button id="addButton" class="add-button" aria-label="记一笔" data-shell-icon="plus"></button>
+      <div class="tab-group"><button data-tab="stats" class="tab"><span data-shell-icon="chart"></span><small>统计</small></button>
+      </div>
     </nav>
   </div>
 
   <div id="modalRoot"></div>
   <input id="importInput" type="file" accept="application/json,.json" hidden />
-  <script src="./app.js" defer></script>
+  <script type="module" src="./boot.mjs"></script>
 </body>
 </html>

@@ -1,0 +1,55 @@
+import {MODEL,OPENAI_URL,modelRequest,parseResult,pendingLedgerRead} from './responses.mjs';
+import {readKey,importKey,forgetKey} from './keys.mjs';
+
+const keyFields=`  <p>导入自己的 OpenAI Key 后直接调用 ${MODEL}。Key 加密保存在本机。</p>
+  <label>OpenAI API Key<input name="key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="sk-…"></label>
+  <label>或选择仅包含 Key 的文本文件<input name="file" type="file" accept=".txt,text/plain"></label>
+  <output role="status"></output>
+  <div class="ai-actions"><button type="submit">保存 Key</button><button type="button" data-remove>移除本机 Key</button></div>`;
+
+export function bindKeyForm(form,onSaved=()=>{}) {
+ const out=form.querySelector('output');
+ form.onsubmit=async e=>{
+  e.preventDefault();
+  try{
+   const file=form.elements.file.files[0],typed=form.elements.key.value.trim();
+   if(file&&typed)throw Error('请选择一种导入方式');
+   if(file?.size>8192)throw Error('请选择仅包含一行 Key 的文本文件');
+   await importKey(file?await file.text():typed);
+   form.reset();out.textContent='已保存 Key';onSaved();
+  }catch(err){out.textContent=err.message;}
+ };
+ form.querySelector('[data-remove]').onclick=async()=>{
+  try{await forgetKey();form.reset();out.textContent='已移除本机 Key';}
+  catch{out.textContent='无法移除 Key，请检查浏览器存储';}
+ };
+ return out;
+}
+export function mountKeyForm(form) {
+ form.innerHTML=keyFields;
+ return bindKeyForm(form);
+}
+
+export async function recognize(input,options={}) {
+ if(!navigator.onLine)throw Error('目前离线，手动录入仍可用');
+ const key=await readKey();
+ if(!key)throw Error('请先点「API Key」导入自己的密钥');
+ const request=modelRequest(input,options);
+ const response=await fetch(OPENAI_URL,{method:'POST',cache:'no-store',credentials:'omit',
+  referrerPolicy:'no-referrer',redirect:'error',signal:AbortSignal.timeout(60000),
+  headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(request)});
+ if(!response.ok){
+  const errors={401:'OpenAI 未接受这个 Key，请重新导入',403:'当前 Key 或地区无法使用此模型',
+   404:'当前项目无法使用此模型',429:'OpenAI 的额度、余额或速率限制阻止了本次调用'};
+  throw Error(errors[response.status]??'OpenAI 暂时无法完成识别');
+ }
+ try{
+  const body=await response.json(),call=pendingLedgerRead(body);
+  if(call){
+   if(!options.allowRead||options.continuation)throw Error();
+   return {call};
+  }
+  return parseResult(body,input);
+ }
+ catch{throw Error('模型未返回可核对的候选，请补充输入后重试');}
+}

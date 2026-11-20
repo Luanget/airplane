@@ -1,84 +1,43 @@
-const SW_VERSION = "30";
-const CACHE = `airplane-shell-v${SW_VERSION}`;
+const SW_VERSION = '49';
+const scope = self.registration.scope;
+const prefix = 'airplane-shell:' + new URL(scope).pathname + ':';
+const CACHE = prefix + SW_VERSION;
 const SHELL = [
-  "./",
-  "./index.html",
-  "./styles.css",
-  "./app.js",
-  "./manifest.webmanifest",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
-  "./icons/icon-512-maskable.png",
-  "./icons/apple-touch-icon.png"
+  './index.html','./styles.css','./app.js','./shared.css','./updates.mjs',
+  './calendar.mjs','./boot.mjs','./legacy-export.mjs','./shell.mjs','./account.mjs','./vendor/nacl-fast.min.js','./manifest.webmanifest',
+  './health/index.html','./health/app.css','./health/app.mjs','./health/core.mjs',
+  './finance-storage.mjs','./health/backup.mjs','./health/inventory.mjs','./health/purchases.mjs','./health/purchase-sync.mjs','./health/shopping.mjs','./health/purchase-ui.mjs','./health/storage.mjs','./health/assistant.mjs','./health/candidates.mjs',
+  './assistant/index.html','./assistant/workspace.css','./ai/workspace.mjs','./ai/operations.mjs','./ai/demo.mjs','./ai/threads.mjs',
+  './health/contract.mjs','./health/food-history.mjs','./ai/client.mjs','./ai/chat.mjs','./ai/finance.mjs','./ai/keys.mjs','./ai/responses.mjs',
+  './icons/icon-192.png','./icons/icon-512.png','./icons/icon-512-maskable.png','./icons/apple-touch-icon.png'
 ];
-
-function canonicalURL(path){
-  return new URL(path, self.registration.scope).href;
-}
-
-async function precacheFreshShell(){
+const assets = new Set(SHELL.map(path => new URL(path, scope).href));
+self.addEventListener('install', e => e.waitUntil((async () => {
   const cache = await caches.open(CACHE);
-  await Promise.all(SHELL.map(async path => {
-    const canonical = canonicalURL(path);
-    const freshURL = new URL(canonical);
-    // A versioned query bypasses stale browser/CDN copies while the response is
-    // deliberately stored under the normal canonical URL used by the app.
-    freshURL.searchParams.set("__airplane_sw", SW_VERSION);
-    const response = await fetch(freshURL.href, {
-      cache: "no-store",
-      credentials: "same-origin"
-    });
-    if(!response || !response.ok){
-      throw new Error(`Failed to precache ${path}: ${response?.status || "network"}`);
+  // addAll commits atomically. The new worker waits for explicit activation.
+  await cache.addAll([...assets].map(url => new Request(url, {cache:'reload'})));
+})()));
+self.addEventListener('activate', e => e.waitUntil((async () => {
+  for (const key of await caches.keys()) {
+    if (key === CACHE) continue;
+    if (key.startsWith(prefix)) await caches.delete(key);
+    else if (/^airplane-shell-v\d+$/.test(key)) {
+      const old = await caches.open(key);
+      if (await old.match(new URL('./index.html', scope).href)) await caches.delete(key);
     }
-    await cache.put(canonical, response.clone());
-  }));
-}
-
-self.addEventListener("install", event => {
-  // Do not skip waiting automatically. The new program is first fetched fresh
-  // into its own cache, then waits for the user to tap “更新”.
-  event.waitUntil(precacheFreshShell());
-});
-
-self.addEventListener("activate", event => {
-  event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(
-        keys.filter(key => key.startsWith("airplane-") && key !== CACHE)
-            .map(key => caches.delete(key))
-      ))
-      .then(() => self.clients.claim())
-  );
-});
-
-async function cacheFirst(request, fallback){
-  const cache=await caches.open(CACHE);
-  const cached=(await cache.match(request)) || (fallback ? await cache.match(canonicalURL(fallback)) : undefined);
-  if(cached)return cached;
-  try{
-    const response=await fetch(request,{cache:"no-store"});
-    if(response&&response.ok)await cache.put(request,response.clone());
-    return response;
-  }catch(err){
-    return Response.error();
   }
-}
-
-self.addEventListener("fetch", event => {
-  const request=event.request;
-  if(request.method !== "GET") return;
-  const url=new URL(request.url);
-  if(url.origin !== self.location.origin) return;
-
-  // Launch remains cache-first and immediate. Because every new worker built
-  // its cache from version-busted network requests, this cache is also the
-  // program version that the user explicitly installed.
-  const isNavigation=request.mode === "navigate";
-  if(isNavigation) event.respondWith(cacheFirst(request,"./index.html"));
-  else event.respondWith(cacheFirst(request));
+  await self.clients.claim();
+})()));
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  url.search = '';
+  url.hash = '';
+  if (e.request.mode === 'navigate' && [scope, new URL('./health/',scope).href, new URL('./assistant/',scope).href].includes(url.href))
+    url.pathname += 'index.html';
+  if (!assets.has(url.href)) return;
+  e.respondWith(caches.open(CACHE).then(async cache => await cache.match(url.href) || fetch(e.request)));
 });
-
-self.addEventListener("message", event => {
-  if(event.data?.type === "SKIP_WAITING") self.skipWaiting();
+self.addEventListener('message', e => {
+  if (e.data?.type === 'SKIP_WAITING') e.waitUntil(self.skipWaiting());
 });

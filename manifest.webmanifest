@@ -1,7 +1,7 @@
 {
   "name": "Airplane",
   "short_name": "Airplane",
-  "description": "轻量、私密的日常预算与记账工具",
+  "description": "离线记录收支、预算、饮食与食物库存",
   "lang": "zh-CN",
   "start_url": "./",
   "scope": "./",
