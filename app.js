@@ -1,5 +1,5 @@
 import {bindDayPicker,displayDay,localDate as localISO,localClock,normalizeClock,syncCalendarFields} from './calendar.mjs';
-import {APP_VERSION,bindSheetSwipe,shellGlyphs} from './shell.mjs';
+import {APP_VERSION,bindSheetSwipe,confirmAction,shellGlyphs} from './shell.mjs';
 import {readState as readHealthState} from './health/storage.mjs';
 import {purchaseForTransaction,purchaseTransactionId} from './health/purchases.mjs';
 import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,DEFAULT_CATEGORIES,freshData,replaceFinance,validateFinanceBackup} from './finance-storage.mjs';
@@ -594,14 +594,15 @@ function openModal(content, options={}){
   syncCalendarFields(root);
   const backdrop=root.querySelector('.modal-backdrop');
   const modal=root.querySelector('.modal');
-  backdrop.addEventListener('click',e=>{if(e.target===backdrop)closeModal({reason:'backdrop'});});
   root.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closeModal({reason:'cancel'}));
-  bindSheetSwipe(modal,backdrop,()=>closeModal({reason:'swipe'}));
+  bindSheetSwipe(modal,backdrop,reason=>closeModal({reason}));
 }
-function closeModal({runDismiss=true,reason='dismiss'}={}){
+async function closeModal({runDismiss=true,reason='dismiss'}={}){
   const root=document.getElementById('modalRoot');
   const before=modalBeforeDismissHandler;
-  if(runDismiss&&before&&before(reason)===false)return false;
+  const sheet=root.firstElementChild;
+  if(runDismiss&&before&&await before(reason)===false)return false;
+  if(root.firstElementChild!==sheet)return false;
   const cb=modalDismissHandler;
   modalDismissHandler=null;
   modalBeforeDismissHandler=null;
@@ -697,10 +698,10 @@ function openBalanceHistoryModal(){
       if(Number.isFinite(stamp.getTime()))when=displayDay(localISO(stamp))+' '+localClock(stamp);
       return `<div class="balance-history-row"><div><strong class="${delta>=0?'positive':'negative'}">${delta>=0?'+':'-'}${amount(Math.abs(delta))}</strong><small>${escapeHTML(when)}${Number.isFinite(Number(a.targetBalance))?` · 调整后 ${amount(a.targetBalance)}`:''}</small></div><button class="history-delete" data-delete-balance="${escapeHTML(a.id||'')}" type="button" aria-label="删除这次余额调整">${icon('trash')}</button></div>`;
     }).join('')}</section><div class="helper balance-history-help">删除一次调整会同步改变当前总余额，但不会影响收入、支出和月预算。</div>`:`<section class="card empty"><div class="empty-icon">${icon('refund')}</div><h3>暂无余额调整</h3><p>以后通过“调整当前余额”产生的修正会记录在这里。</p></section>`;
-    body.querySelectorAll('[data-delete-balance]').forEach(button=>button.onclick=()=>{
+    body.querySelectorAll('[data-delete-balance]').forEach(button=>button.onclick=async()=>{
       const id=button.dataset.deleteBalance,index=data.balanceAdjustments.findIndex(a=>a.id===id);if(index<0)return;
       const removed=data.balanceAdjustments[index];
-      if(!confirm(`删除这次 ${Number(removed.delta||0)>=0?'增加':'减少'} ${amount(Math.abs(Number(removed.delta||0)))} 的余额调整？`))return;
+      if(!await confirmAction({title:'删除余额调整',message:`删除这次 ${Number(removed.delta||0)>=0?'增加':'减少'} ${amount(Math.abs(Number(removed.delta||0)))} 的余额调整？`,action:'确认删除',danger:true}))return;
       data.balanceAdjustments.splice(index,1);if(!saveData())return;render();draw();toast('余额调整已删除',{actionLabel:'撤销',duration:3600,onAction:()=>{data.balanceAdjustments.splice(Math.min(index,data.balanceAdjustments.length),0,removed);if(!saveData())return;render();draw();toast('已恢复余额调整');}});
     });
   };
@@ -886,7 +887,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,budgetSync:!!existing.budgetSync,budgetExcluded:existing.budgetExcluded===true,amount:Number(existing.amount),date:existing.date||initial.date,time:normalizeClock(existing.time),note:existing.note??''}:null;
   const captureDraft=()=>({type,selectedCategoryId:selected,budgetSync,budgetExcluded,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value??'',note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&!suppliedDraft?.purchaseId&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="budgetIncludeToggle" class="budget-sync-toggle ${budgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${budgetExcluded?'false':'true'}"><span><strong>计入日常预算</strong><small>关闭后仍计入总支出并减少余额，但不占用月预算和每日额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label for="txDate">日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label for="txTime">时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||budgetExcluded!==editBaseline.budgetExcluded||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirm('放弃本次修改？');},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="budgetIncludeToggle" class="budget-sync-toggle ${budgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${budgetExcluded?'false':'true'}"><span><strong>计入日常预算</strong><small>关闭后仍计入总支出并减少余额，但不占用月预算和每日额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label for="txDate">日期</label><input id="txDate" type="date" max="${localISO()}" value="${initial.date}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label for="txTime">时间</label><input id="txTime" type="time" value="${initial.time}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||budgetExcluded!==editBaseline.budgetExcluded||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirmAction({title:'放弃修改',message:'这笔记录还有未保存的修改。',action:'确认放弃',danger:true});},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
   const updateAmountPreview=()=>{
@@ -1144,13 +1145,13 @@ function openCategoryEditor(type,existing=null,options={}){
   };
 }
 
-function removeCategory(id,type,onDone){
+async function removeCategory(id,type,onDone){
   const c=categoryById(id); if(!c)return;
   const sameType=data.categories.filter(x=>x.type===type);
   const visible=sameType.filter(x=>!x.hidden);
   if(sameType.length<=1){toast('至少保留一个分类');return;}
   if(!c.hidden&&visible.length<=1){toast('至少保留一个可用分类');return;}
-  if(!confirm(`删除分类“${c.name}”？历史账单会继续保留原来的分类名称和图标。`)) return;
+  if(!await confirmAction({title:'删除分类',message:`删除分类“${c.name}”？历史账单会保留原来的分类名称和图标。`,action:'确认删除',danger:true}))return;
   data.categories=data.categories.filter(x=>x.id!==id);
   if(data.prefs.lastExpenseCategoryId===id)data.prefs.lastExpenseCategoryId=null;
   if(data.prefs.lastIncomeCategoryId===id)data.prefs.lastIncomeCategoryId=null;
@@ -1163,11 +1164,11 @@ function validatedBackupData(parsed){return normalizeData(validateFinanceBackup(
 function savePreRestoreSnapshot(){
   financeStore.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(structuredClone(data),{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
 }
-function restorePreRestoreSnapshot(){
+async function restorePreRestoreSnapshot(){
   try{
     const raw=financeStore.getItem(PRE_RESTORE_KEY);if(!raw){toast('当前没有可恢复的快照');return;}
     const incoming=validatedBackupData(JSON.parse(raw));
-    if(!confirm('恢复“恢复前快照”会替换当前账本。当前账本也会先保存为新的恢复前快照。继续吗？'))return;
+    if(!await confirmAction({title:'恢复快照',message:'这会替换当前财务账本，当前账本将保存为新的恢复前快照。',action:'确认恢复'}))return;
     const current=structuredClone(data);
     data=incoming;clearTransactionDraft();
     financeStore.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(current,{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
@@ -1178,7 +1179,11 @@ function exportCSV(){
   const rows=[['日期','时间','类型','金额','分类','计入日常预算','同步增加预算','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.type==='expense'?(t.budgetExcluded===true?'否':'是'):'',t.type==='income'&&t.budgetSync?'是':'否',t.note||''])];
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\r\n');downloadBlob(`Airplane-records-${localISO()}.csv`,csv,'text/csv;charset=utf-8');toast('CSV 已导出');
 }
-function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; clearTransactionDraft();data=freshData();if(!saveData())return;selectMonth(monthKey());render();toast('本机数据已清空'); }
+async function resetAll(){
+  const approved=await confirmAction({title:'清空财务账本',message:'这会清除本机财务账本中的余额、预算、分类和账单。',action:'清空财务数据',danger:true});
+  if(!approved)return;
+  clearTransactionDraft();data=freshData();if(!saveData())return;selectMonth(monthKey());render();toast('本机数据已清空');
+}
 function toast(msg,options={}){
   document.querySelector('.toast')?.remove();
   if(activeUndo){clearTimeout(activeUndo);activeUndo=null;}
@@ -1202,7 +1207,7 @@ document.getElementById('importInput').addEventListener('change', async e=>{
   try{
     const parsed=JSON.parse(await file.text());
     const incoming=validatedBackupData(parsed);
-    if(!confirm('已确认这是有效的 Airplane 备份。恢复会替换当前设备上的账本，并自动保留一份“恢复前快照”。继续吗？'))return;
+    if(!await confirmAction({title:'恢复财务备份',message:'将使用这份备份替换本机财务账本。当前账本会保存为恢复前快照。',action:'确认恢复'}))return;
     if(recoveryRequired){
       const damaged={primary:financeStore.getItem(STORAGE_KEY),recovery:financeStore.getItem(RECOVERY_KEY)};
       financeStore.setItem('airplane-damaged-before-restore-v1',JSON.stringify(damaged));

@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validateAppState,inventoryWithMoves,dayIntake,energyForDay,cycleForDate} from '../health/core.mjs';
 import {addBatch,saveSku} from '../health/inventory.mjs';
 import {summarizeFoodHistory,reviseFoodPortion} from '../health/food-history.mjs';
-import {HISTORY_OPTIONS,readLedger,shortHistory} from '../ai/workspace.mjs';
+import {readLedger} from '../ai/workspace.mjs';
+import {contextFor,HISTORY_OPTIONS} from '../ai/context.mjs';
+import {dataEdit,readAppData} from '../ai/data.mjs';
 import {healthDeletion} from '../ai/deletion.mjs';
 import {estimatedCost,displayUsage} from '../ai/usage.mjs';
 import {skillLibrary} from '../ai/skills.mjs';
@@ -25,8 +27,8 @@ test('default rules, legacy preferences and individual Skills remain independent
  const data=new Map([['airplane-ai-skill-v1','保留旧的个人偏好']]);
  const library=skillLibrary({getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value)});
  const defaults=library.list().filter(item=>item.preset);
- assert.equal(defaults.length,5);
- assert.equal(library.active().length,5);
+ assert.equal(defaults.length,6);
+ assert.equal(library.active().length,6);
  assert.equal(library.active().at(-1).text,'保留旧的个人偏好');
  assert.equal(data.size,1);
  const stock=defaults.find(item=>item.id==='l-stock');
@@ -313,15 +315,74 @@ test('assistant deletes a plan independently and restores only stock linked to t
  assert.deepEqual(parseResult(response,input),result);
 });
 
-test('recent chat uses the selected budget and retains full local messages',()=>{
- const turns=Array.from({length:5},(_,i)=>({role:'user',text:i+'营'.repeat(790)+'尾'}));
- const compact=shortHistory(turns);
- assert.equal(compact.map(row=>row.text.length).reduce((a,b)=>a+b),480);
- assert.equal(compact.at(-1).text.length,180);
- assert.match(compact.at(-1).text,/^4.*….*尾$/);
- assert.equal(turns[4].text.length,792);
- assert.deepEqual(shortHistory(turns,HISTORY_OPTIONS[0]),[]);
- assert.equal(shortHistory(turns,HISTORY_OPTIONS[2]).map(row=>row.text.length).reduce((a,b)=>a+b),900);
+test('old messages become a rolling summary and recent messages are retained in full',()=>{
+ const long=Array.from({length:50},(_,i)=>({role:'user',carry:true,text:i+'营'.repeat(400)+'尾'}));
+ const thread={messages:long};
+ const plan=contextFor(thread);
+ assert.ok(plan.history.length>20);
+ assert.deepEqual(plan.history.at(-1),{role:'user',text:long.at(-1).text});
+ assert.ok(plan.compact.history.length>0);
+ assert.equal(plan.compact.history[0].text,long[0].text);
+ assert.deepEqual(contextFor(thread,HISTORY_OPTIONS[0]).history,[]);
+ assert.equal(contextFor(thread,HISTORY_OPTIONS[2]).history.length,50);
+ const memo='保留的目标和待完成事项';
+ const next=contextFor({...thread,context:{summary:memo,through:plan.compact.through}});
+ assert.equal(next.summary,memo);
+ assert.equal(next.compact,null);
+ assert.equal(next.history[0].text,long[plan.compact.through].text);
+ assert.equal(thread.messages.length,50);
+ const input={mode:'chat',text:'整理这段对话',date,photo:null,history:plan.compact.history};
+ const req=modelRequest(input,{compacting:true,contextSummary:memo});
+ assert.equal(req.text.format.name,'airplane_context_summary');
+ assert.equal(req.tools,undefined);
+ assert.deepEqual(JSON.parse(req.input[0].content[0].text),{summary:memo,older:plan.compact.history});
+ assert.equal(JSON.parse(modelRequest(input,{contextSummary:memo}).input[0].content[0].text).contextSummary,memo);
+});
+
+test('app data changes preview against the specific dataset and preserve unrelated fields',async()=>{
+ const original=newState();
+ let state=original;
+ const workspace={
+  readHealth:async()=>state,
+  saveHealth:async(next,revision)=>{
+   assert.equal(revision,state.revision??0);
+   state={...next,revision:revision+1};
+  }
+ };
+ const appData=(dataset,id,action,changes)=>({dataset,id,action,changes:JSON.stringify(changes)});
+ const settings=await readAppData(workspace,null,{dataset:'health_settings',id:null,date:null,query:''});
+ assert.equal(settings.rows[0].baselineTdee,original.settings.baselineTdee);
+ const candidate=await dataEdit(workspace,null,appData('health_settings',null,'update',{cycleDays:6}),date);
+ assert.equal(candidate.previous.cycleDays,7);
+ assert.equal(candidate.updated.cycleDays,6);
+ assert.equal(state.settings.cycleDays,7);
+ await candidate.commit();
+ assert.equal(state.settings.cycleDays,6);
+ assert.equal(state.settings.calorieTarget,original.settings.calorieTarget);
+ await assert.rejects(dataEdit(workspace,null,appData('health_settings',null,'update',{cycleDays:5.5}),date),/cycleDays/);
+ await assert.rejects(dataEdit(workspace,null,{...appData('health_settings',null,'update',{}),changes:'{"__proto__":{"deleted":true}}'},date),/__proto__/);
+ const add=await dataEdit(workspace,null,appData('weights',null,'add',{kg:72.2,date,isMorning:true}),date);
+ await add.commit();
+ const event=state.local.weights[0];
+ const update=await dataEdit(workspace,null,appData('weights',event.id,'update',{kg:71.5}),date);
+ await update.commit();
+ assert.equal(state.local.weights.length,1);
+ assert.equal(state.local.weights[0].id,event.id);
+ assert.equal(state.local.weights[0].kg,71.5);
+ const del=await dataEdit(workspace,null,appData('weights',event.id,'delete',{}),date);
+ await del.commit();
+ assert.equal(state.local.weights.length,0);
+ const plan=await dataEdit(workspace,null,appData('foods',null,'add',{
+  date:addDays(date,1),name:'明天的计划',status:'plan',meal:'晚餐',nutrition:{kcal:200}
+ }),date);
+ await plan.commit();
+ const edit=await dataEdit(workspace,null,appData('foods',plan.updated.id,'update',{name:'改过的计划'}),date);
+ await edit.commit();
+ assert.equal(state.local.foods[0].status,'plan');
+ assert.equal(dayIntake(state,addDays(date,1)).totals.kcal,null);
+ const guide=await readAppData(workspace,null,{dataset:'guide',id:null,date:null,query:'foods'});
+ assert.deepEqual(guide.options.foodStatus,['actual','plan','cancelled']);
+
 });
 
 test('local USD estimates count regular, cached and written tokens once at model rates',()=>{

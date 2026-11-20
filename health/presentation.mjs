@@ -12,8 +12,8 @@ export function timelineGroup({meal}){
 export function eatingState(row){
  if(row.actual===true||row.status==='actual')return 'actual';
  const status=String(row.status??'');
- if(/取消|作废|失效|未吃|覆盖|superseded/i.test(status))return 'cancelled';
- return /计划|待定/.test(status)?'plan':'unknown';
+ if(status==='cancelled'||/取消|作废|失效|未吃|覆盖|superseded/i.test(status))return 'cancelled';
+ return status==='plan'||/计划|待定/.test(status)?'plan':'unknown';
 }
 
 export function stockName(row){

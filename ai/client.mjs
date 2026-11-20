@@ -124,7 +124,7 @@ export async function recognize(input,{signal,onReply,onTool,...options}={}) {
    if(!options.allowRead)throw Error();
    return {call};
   }
-  return parseResult(body,input);
+  return parseResult(body,input,options);
  }
  catch{throw Error('已收到 OpenAI 响应，但无法读取回复或候选格式。');}
 }

@@ -13,32 +13,7 @@ export function localWorkspace(){
   skills:skillLibrary(account.finance)
  };
 }
-const HISTORY_KEY='airplane-ai-history-v1';
-export const HISTORY_OPTIONS=[
- {id:'current',label:'仅本轮',messages:0,perMessage:0,chars:0},
- {id:'compact',label:'简短',messages:4,perMessage:180,chars:480},
- {id:'standard',label:'标准',messages:4,perMessage:320,chars:900}
-];
-export function readHistoryOption(storage){
- const stored=storage.getItem(HISTORY_KEY);
- return HISTORY_OPTIONS.find(option=>option.id===stored)??HISTORY_OPTIONS[1];
-}
-export function saveHistoryOption(storage,id){storage.setItem(HISTORY_KEY,id);}
-
-export function shortHistory(turns,{messages,perMessage,chars}=HISTORY_OPTIONS[1]){
- if(!messages)return [];
- let remaining=chars;
- return turns.slice(-messages).reverse().flatMap(({role,text})=>{
-  const max=Math.min(perMessage,remaining);
-  if(max<2)return [];
-  const head=Math.ceil((max-1)/2);
-  const tail=max-head-1;
-  const short=text.length<=max?text:text.slice(0,head)+'…'+text.slice(text.length-tail);
-  remaining-=short.length;
-  return short?[{role,text:short}]:[];
- }).reverse();
-}
-export const readLabels={stock:'匹配的食品库存',meal:'可用食材和今日营养',expenses:'今日收支合计',foods:'指定日期的饮食记录',expense_summary:'指定时段的支出汇总',weight:'本机晨重趋势',cycle:'当前减脂周期'};
+export const readLabels={app_data:'指定的本机数据',stock:'匹配的食品库存',meal:'可用食材和今日营养',expenses:'今日收支合计',foods:'指定日期的饮食记录',expense_summary:'指定时段的支出汇总',weight:'本机晨重趋势',cycle:'当前减脂周期'};
 export const expenseGroupLabels={category:'分类',day:'日期',month:'月份'};
 
 export async function readLedger(workspace,args,today){

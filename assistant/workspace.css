@@ -142,3 +142,5 @@
 .chat-review .delete-apply { background:var(--red); color:white }
 .assistant-plan-totals { border-top:1px solid var(--line); margin-top:10px; padding-top:5px }
 .chat-review .assistant-plan-totals p { margin:4px 0; font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums }
+
+.assistant-data-review { margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.5 }

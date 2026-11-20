@@ -63,9 +63,10 @@ const financeInput=object({mode:choice('finance'),text:string(600,1),date:string
 export const financeSchema=object({note:string(400),entry:optional(object({
   type,amount:number(100000000,0.01),categoryId:string(100,1),date:string(10,10),note:string(200)
 }))});
-const conversationTurn=object({role:choice('user','assistant'),text:string(1600,1)});
+const conversationTurn=object({role:choice('user','assistant'),text:string(32000,1)});
+export const contextSchema=object({summary:string(4000,1)});
 const chatInput=object({mode:choice('chat'),text:string(1600),date:string(10,10),
-  photo:optional(string(720000)),history:list(conversationTurn,8)});
+  photo:optional(string(720000)),history:list(conversationTurn,72)});
 const proposal=(mode,result)=>object({mode:choice(mode),date:optional(string(10,10)),result});
 const ledgerOperations=[
   proposal('finance',financeSchema),proposal('activity',activitySchema),
@@ -75,8 +76,14 @@ const ledgerOperations=[
   proposal('inventory',object({operation:choice('count','shopping'),name:string(80,1),quantity:number(100000),unit})),
   proposal('portions',object({name:string(80,1),quantities:{...list(number(100000,0.001)),minItems:1},unit}))
 ];
+const dataset=choice('health_settings','foods','weights','activities','inventory','batches','stock_moves',
+  'purchases','shopping','templates','legacy_days','legacy_energy','legacy_rules','transactions',
+  'categories','budgets','balances','finance_settings','skills','conversations','assistant_settings');
+export const appDataReadSchema=object({dataset:choice(...dataset.enum,'guide'),id:optional(string(240,1)),date:optional(string(10,10)),query:string()});
+export const appDataEditSchema=object({dataset,id:optional(string(240,1)),action:choice('add','update','delete'),changes:string()});
 export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
   {type:'null'},...ledgerOperations,
+  proposal('app_data_edit',appDataEditSchema),
   proposal('delete_record',object({kind:choice('food','plan','weight','activity','finance'),
     query:string(),meal:optional(choice('早餐','午餐','晚餐','加餐'))})),
   proposal('skill',object({name:optional(string(60,1)),text:string(800,1)})),
@@ -94,6 +101,7 @@ export function validFinanceEntry(entry,input) {
 }
 export function validInput(data) {
   if (data?.mode==='chat') return matches(chatInput,data)&&calendarDate(data.date)
+    && data.history.reduce((sum,row)=>sum+row.text.length,0)<=32000
     && (data.photo===null||jpegPhoto(data.photo)) && (!!data.text.trim()||!!data.photo);
   if (data?.mode==='finance') return matches(financeInput,data) && !!data.text.trim() && calendarDate(data.date);
   if (!matches(inputSchema,data)) return false;
