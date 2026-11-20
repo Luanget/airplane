@@ -1,6 +1,6 @@
 import {readState,saveState} from '../health/storage.mjs';
 import {readFinance} from '../finance-storage.mjs';
-import {dayIntake,inventoryWithMoves,validDate} from '../health/core.mjs';
+import {dayIntake,inventoryWithMoves,isStockReference,validDate} from '../health/core.mjs';
 import {summarizeFoodHistory} from '../health/food-history.mjs';
 import {foodHistoryReadSchema,ledgerReadSchema,matches} from '../health/contract.mjs';
 
@@ -45,7 +45,7 @@ export async function readLedger(workspace,args,today){
   return {date:today,income:total('income'),expense:total('expense'),count:tx.length};
  }
  const state=await workspace.readHealth(),query=args.query.trim().toLowerCase();
- const inventory=inventoryWithMoves(state).filter(s=>s.active&&(query?s.name?.toLowerCase().includes(query):args.scope==='stock'||s.qty>0))
+ const inventory=inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s)&&(args.scope==='stock'||s.qty>0)&&(!query||s.name?.toLowerCase().includes(query)))
   .sort((a,b)=>Number(b.name?.toLowerCase()===query)-Number(a.name?.toLowerCase()===query));
  const result={stock:inventory.map(s=>({name:s.name,qty:s.qty??null,unit:s.unit}))};
  if(args.scope==='stock')return result;

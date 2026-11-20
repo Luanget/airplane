@@ -1,7 +1,7 @@
 import {localClock,syncCalendarFields} from '../calendar.mjs';
 import {cents,newPurchaseId,recordPurchase} from './purchases.mjs';
 import {saveSku} from './inventory.mjs';
-import {inventoryWithMoves,recordEvent,numeric,validDate} from './core.mjs';
+import {inventoryWithMoves,isStockReference,recordEvent,numeric,validDate} from './core.mjs';
 import {confirmItems, resolveItem} from './candidates.mjs';
 import {matches, resultSchema, activitySchema, purchaseSchema, units, nutrientKeys} from './contract.mjs';
 
@@ -48,7 +48,7 @@ function editRow(container, original, state, mode) {
   legend.append(keep,' '+c.name); block.append(legend);
   const desc = document.createElement('p'); desc.textContent=c.uncertainty; block.append(desc);
   const grid = document.createElement('div'); grid.className='form-grid'; block.append(grid);
-  const stock = inventoryWithMoves(state).filter(s=>s.active);
+  const stock = inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s));
   if (!c.sku) {
     const exact=stock.filter(s=>s.name.trim()===c.name.trim());
     if (exact.length===1) c.sku=exact[0].id;

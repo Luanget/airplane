@@ -1,4 +1,4 @@
-import {allocateStock,batchBalances,inventoryWithMoves,makeId,numeric,NUTRIENTS,round,validDate,zero} from './core.mjs';
+import {allocateStock,batchBalances,inventoryWithMoves,isStockReference,makeId,numeric,NUTRIENTS,round,validDate,zero} from './core.mjs';
 
 export function measuredGrams({before='',after='',tare=''}) {
   const gross=numeric(before), leftover=numeric(after), packageWeight=numeric(tare);
@@ -25,10 +25,11 @@ export function saveSku(state,fields) {
   if (previous && previous.unit!==unit)throw Error('请用原库存单位。不同单位可新增食品');
   const nutrition=Object.fromEntries(NUTRIENTS.map(k=>[k,numeric(fields[k])]));
   if(Object.values(nutrition).some(v=>v!==null&&v<0))throw Error('营养数值不能为负');
+  const preservePrice=price===null&&previous?.priceBasis&&previous.priceBasis!==unit;
   const row={...previous,id:id||makeId('sku'),name:name.trim(),unit,basisUnit,basisAmount:quantity,stage,stockStage,
     packageSize,packageUnit:packageSize?fields.packageUnit:null,pack:packageSize?unit:null,
     nutritionBasis:'custom',standard:quantity+' '+basisUnit,qty:previous?previous.qty:0,
-    pricePerUnit:price,priceBasis:unit,minimum,source,quality,nutrition,active:true};
+    pricePerUnit:preservePrice?previous.pricePerUnit:price,priceBasis:preservePrice?previous.priceBasis:unit,minimum,source,quality,nutrition,active:true};
   if(previous)Object.assign(previous,row);else local.push(row);
   return row;
 }
@@ -61,7 +62,7 @@ export function splitBatch(state,{batchId,date,quantity,count}) {
 }
 
 export function stockAlerts(state,today) {
-  const low=inventoryWithMoves(state).filter(s=>s.active && s.minimum!=null && s.qty!==null && s.qty<=s.minimum);
+  const low=inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s)&&s.minimum!=null&&s.qty!==null&&s.qty<=s.minimum);
   const expiry=batchBalances(state).filter(b=>b.remaining>0 && b.expires &&
     new Date(b.expires+'T00:00:00Z')-new Date(today+'T00:00:00Z')<=3*86400000);
   return {low,expiry};

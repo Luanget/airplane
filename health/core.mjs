@@ -49,6 +49,28 @@ export function normalizeInventory(row,index){
    nutrition:{kcal:numeric(row.kcal),protein:numeric(row['P(g)']),carbs:numeric(row['C(g)']),fat:numeric(row['F(g)']),sodium:numeric(row['Na(mg)'])},
    note:String(row['备注']||''), active:row.active !== '否' && row.active !== false};
 }
+export function isStockReference(row){
+ return /仅(?:镜像|总量核对|库存容器)|不另计可用库存|不(?:可|得)与[^；。]*重复相加/.test(
+  [row.name,row.unitDescription,row.note].join(' '));
+}
+export function importedDietTargets(rules){
+ const rule=String((Array.isArray(rules)?rules:[]).find(row=>row?.key==='04_diet_targets_preferences')?.value??'').normalize('NFKC');
+ const kcal=numeric(rule.match(/普通日[约为\s]*(\d+(?:\.\d+)?)\s*kcal/i)?.[1]);
+ const protein=rule.match(/蛋白(?:质)?\s*(\d+(?:\.\d+)?)\s*[–—~～－-]\s*(\d+(?:\.\d+)?)\s*g/i);
+ const fat=numeric(rule.match(/脂肪[^0-9；;,。]*(\d+(?:\.\d+)?)(?:\s*[–—~～－-]\s*\d+(?:\.\d+)?)?\s*g/i)?.[1]);
+ return {
+  ...(kcal>=500&&kcal<=8000?{calorieTarget:kcal}:{}),
+  ...(protein&&+protein[1]>0&&+protein[1]<=+protein[2]&&+protein[2]<=1000?{proteinMin:+protein[1],proteinMax:+protein[2]}:{}),
+  ...(fat>0&&fat<=1000?{fatMin:fat}:{})
+ };
+}
+export function carbReference({calorieTarget,proteinMin,proteinMax,fatMin}){
+ const fat=Math.max(fatMin,calorieTarget/36);
+ const grams=protein=>(calorieTarget-fat*9-protein*4)/4;
+ const low=grams(proteinMax),high=grams(proteinMin);
+ if(!Number.isFinite(low)||!Number.isFinite(high)||low<0||low>high)return null;
+ return {low:Math.round(low/5)*5,high:Math.round(high/5)*5};
+}
 export function normalizeLedger(raw){
  if (!raw || !raw.tables || !Array.isArray(raw.tables.food_events) || !Array.isArray(raw.tables.weight_events) || !Array.isArray(raw.tables.food_inventory)) throw new Error('不是可识别的 health_tracker 主账 JSON（缺少必要表）');
  const result = newState();const t=raw.tables;
@@ -77,11 +99,13 @@ export function normalizeLedger(raw){
   }
   return null;
  };
+ const diet=importedDietTargets(result.legacy.rules);
  for (const [name,keys] of Object.entries({
    baselineTdee:['无运动基线TDEE','baselineTdee'],
    calorieTarget:['日摄入参考','日摄入参考(kcal)','每日摄入参考','每日摄入参考(kcal)','每日热量参考','热量目标','calorieTarget'],
+   proteinMin:['蛋白质下限','proteinMin'],proteinMax:['蛋白质上限','proteinMax'],fatMin:['脂肪下限','fatMin'],
    cycleTarget:['周期目标缺口','目标缺口(kcal)','cycleTarget', ...Object.keys(params).filter(k=>/^\d+天目标缺口/.test(k))]
- })) result.settings[name]=findSetting(...keys) ?? result.settings[name];
+ })) result.settings[name]=findSetting(...keys) ?? diet[name] ?? result.settings[name];
  const days=findSetting('周期天数','cycleDays');
  if (Number.isInteger(days) && days<=31) result.settings.cycleDays=days;
  const anchor=String(params['周期日期']||params['起始日期']||params.cycleAnchor||'').slice(0,10);if(validDate(anchor))result.settings.cycleAnchor=anchor;
@@ -155,7 +179,8 @@ export function mergedWeights(state){return events(state,'weights');}
 export function latestWeights(state){
  const lastByDate=new Map();
  for (const w of mergedWeights(state)){
-  if ((w.source==='legacy'&&allowWeight(w))||(w.source==='manual'&&w.isMorning)){lastByDate.set(w.date,w);}
+  const kg=numeric(w.kg);
+  if(kg>0&&((w.source==='legacy'&&allowWeight(w))||(w.source==='manual'&&w.isMorning)))lastByDate.set(w.date,{...w,kg});
  }
  return [...lastByDate.values()].sort((a,b)=>a.date.localeCompare(b.date));
 }

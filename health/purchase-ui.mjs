@@ -1,5 +1,5 @@
 import {readFinance} from '../finance-storage.mjs';
-import {inventoryWithMoves,numeric} from './core.mjs';
+import {inventoryWithMoves,isStockReference,numeric} from './core.mjs';
 import {cents,newPurchaseId,orderBatchId,purchaseForTransaction,purchaseTransactionId,recordPurchase,revisePurchase} from './purchases.mjs';
 import {projectedExpense,readPendingPurchase,updatePurchaseLedgers,resumePurchaseUpdate,abandonPurchaseUpdate} from './purchase-sync.mjs';
 import {settleShopping} from './shopping.mjs';
@@ -27,7 +27,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   const row=document.createElement('fieldset');row.className='form-grid';
   if(item.batchId)row.dataset.batchId=item.batchId;
   const sku=document.createElement('select');sku.name='foodId';
-  for(const food of inventoryWithMoves(getState()).filter(s=>s.active||s.id===item.foodId))
+  for(const food of inventoryWithMoves(getState()).filter(s=>s.active&&!isStockReference(s)||s.id===item.foodId))
    sku.add(new Option(food.name+' · '+food.unit,food.id));
   if(item.foodId)sku.value=item.foodId;
   const input=(name,type,value,required=false)=>{

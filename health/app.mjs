@@ -7,12 +7,14 @@ import {units} from './contract.mjs';
 import {manualStockQty,basis} from './candidates.mjs';
 import {shellGlyphs} from '../shell.mjs';
 import {checkForAppUpdate} from '../updates.mjs';
-import {newState,normalizeLedger,validateAppState,APP_SCHEMA,numeric,round,zero,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,addDays} from './core.mjs';
+import {newState,normalizeLedger,validateAppState,APP_SCHEMA,numeric,round,zero,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,addDays,isStockReference,importedDietTargets,carbReference} from './core.mjs';
 import {readState,saveState,exportState} from './storage.mjs';
+import {mealOrder,timelineGroup,stockName,stockUnit,stockGroups} from './presentation.mjs';
+import {renderWeightChart} from './weight-chart.mjs';
 const $=id=>document.getElementById(id);
 const E=s=>String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const fmt=(v,d=0)=> v===null||v===undefined?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:d,minimumFractionDigits:d});
-let state=newState(), selectedDate=dateNow(),tab='overview',historyDayOnly=false,toastHandle;
+let state=newState(), selectedDate=dateNow(),tab='overview',historyDayOnly=true,toastHandle;
 const editing={};
 const dirtyEntries=new Set();
 let activeEntryType='food';
@@ -74,6 +76,10 @@ function openSettings(){
  renderSettings();syncCalendarFields($('health-settings-sheet'));$('health-settings-sheet').showModal();
 }
 function progress(id,val){$(id).style.width=`${Math.max(0,Math.min(100,Number(val)||0))}%`;}
+function carbLabel(settings){
+ const target=carbReference(settings);
+ return target?(target.low===target.high?target.low:target.low+'–'+target.high)+' g':'';
+}
 function renderOverview(){
  const today=dateNow(),intake=dayIntake(state,selectedDate),cals=intake.totals.kcal,known=intake.reported;
  const goal=state.settings.calorieTarget,energy=energyForDay(state,selectedDate,today);
@@ -84,20 +90,12 @@ function renderOverview(){
  text('hero-remaining',cals!==null&&!intake.incomplete.includes('kcal')?(goal-cals>=0?`剩余 ${fmt(goal-cals,0)} kcal`:`超出 ${fmt(cals-goal,0)} kcal`):'摄入数据待补');progress('cal-progress',known?cals/goal*100:0);
  for (const [id,key,unit] of [['protein-stat','protein','g'],['fat-stat','fat','g'],['carbs-stat','carbs','g'],['sodium-stat','sodium','mg']])text(id,known?`${fmt(intake.totals[key],key==='sodium'?0:1)} ${unit}`:'—');
  text('protein-goal',`目标 ${state.settings.proteinMin}–${state.settings.proteinMax}g`);text('fat-goal',`目标 ≥${state.settings.fatMin}g`);text('sodium-goal',`参考 ${state.settings.sodiumTarget} mg`);
- const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,2)} kg`:'—');text('weight-date',weights.last?displayDay(weights.last.date):'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,2)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>0?'+':''}${fmt(weights.delta,2)} kg`:'需至少8次有效晨重');renderWeightChart(weights.points.slice(-14));
+ const carbs=carbLabel(state.settings);text('carbs-goal',carbs?'普通日约 '+carbs:'请核对营养目标');
+ const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,2)} kg`:'—');text('weight-date',weights.last?displayDay(weights.last.date):'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,2)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>0?'+':''}${fmt(weights.delta,2)} kg`:'需至少8次有效晨重');
+ renderWeightChart($('weight-chart'),$('weight-chart-value'),weights.points.slice(-14));
  text('cycle-title',state.settings.cycleDays===6?'六天减脂周期':state.settings.cycleDays+' 天减脂周期');
  const cycle=cycleForDate(state,selectedDate,today);text('cycle-range',`${displayDay(cycle.start)} — ${displayDay(cycle.end)} · ${cycle.closedDays}/${cycle.days}天已封账`);text('cycle-deficit',`${fmt(cycle.deficit)} kcal`);progress('cycle-progress',cycle.progress);text('cycle-pct',`目标完成 ${fmt(cycle.progress,1)}% / ${fmt(cycle.goal)} kcal`);text('cycle-equivalent',`理论脂肪当量 ${fmt(cycle.fatEquivalent,3)} kg`);text('cycle-note',cycle.unreported?`有 ${cycle.unreported} 天缺少有效进食记录，未按零摄入推算；消耗和外食热量均为估算。`:'已过日期根据现有记录自动封账。可补报更正，估算并不等于实测。');
  renderTimeline();
-}
-function renderWeightChart(points,svg=$('weight-chart')){
- if(!points.length){svg.innerHTML='<text x="270" y="94" text-anchor="middle" fill="var(--muted)" font-size="16">暂无有效晨重记录</text>';return;}
- const values=points.map(p=>p.kg),min=Math.floor(Math.min(...values)*2)/2-0.5,max=Math.ceil(Math.max(...values)*2)/2+0.5;
- const left=45,right=517,top=20,bottom=154,y=v=>bottom-(v-min)/(max-min)*(bottom-top),x=i=>left+((points.length===1?0.5:i/(points.length-1))*(right-left));
- const path=points.map((p,i)=>`${i?'L':'M'} ${x(i).toFixed(1)} ${y(p.kg).toFixed(1)}`).join(' ');
- const ticks=Array.from({length:4},(_,i)=>min+i*(max-min)/3);
- svg.innerHTML=ticks.map(t=>`<line x1="40" y1="${y(t)}" x2="526" y2="${y(t)}" stroke="var(--line)" stroke-dasharray="3 4"/><text x="4" y="${y(t)+4}" font-size="11" fill="var(--muted)">${fmt(t,1)}</text>`).join('')+`<path d="${path}" fill="none" stroke="var(--green)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`+
- points.map((p,i)=>`<circle cx="${x(i)}" cy="${y(p.kg)}" r="${i===points.length-1?5:3.3}" fill="var(--surface)" stroke="var(--green)" stroke-width="2"/>`).join('')+
- [0,Math.floor((points.length-1)/2),points.length-1].filter((v,i,a)=>a.indexOf(v)===i).map(i=>`<text x="${x(i)}" y="177" text-anchor="middle" fill="var(--muted)" font-size="11">${E(displayDay(points[i].date))}</text>`).join('');
 }
 function setDateDefaults(){document.querySelectorAll('form input[name=date]').forEach(el=>{if(!el.value)el.value=dateNow();});}
 const historyTypes={food:'foods',weight:'weights',activity:'activities'};
@@ -117,22 +115,31 @@ function renderTimeline(){
  }
  text('health-history-period',historyDayOnly?displayDay(selectedDate):month.slice(0,4)+'年'+Number(month.slice(5))+'月');
  $('health-show-month').hidden=!historyDayOnly;
- $('local-events').innerHTML=[...groups].map(([date,rows])=>
-  `<div class="day-group"><div class="day-head">${date?displayDay(date):'日期待补'}</div><div class="card transaction-list">${rows.map(timelineRow).join('')}</div></div>`
- ).join('')||'<div class="card event-empty health-ledger-empty">暂无记录</div>';
+ $('local-events').innerHTML=[...groups].map(([date,rows])=>{
+  const meals=new Map();
+  for(const row of rows){
+   const label=timelineGroup(row);
+   if(!meals.has(label))meals.set(label,[]);
+   meals.get(label).push(row);
+  }
+  const heading=historyDayOnly?'':`<div class="day-head">${date?displayDay(date):'日期待补'}</div>`;
+  return `<div class="day-group">${heading}${mealOrder.filter(label=>meals.has(label)).map(label=>
+   `<section class="meal-group" aria-label="${label}"><h3>${label}</h3><div class="card transaction-list">${meals.get(label).map(timelineRow).join('')}</div></section>`
+  ).join('')}</div>`;
+ }).join('')||'<div class="card event-empty health-ledger-empty">暂无记录</div>';
 }
 function timelineRow(row){
  const {type}=row,weight=type==='weight';
- const title=weight?(row.isMorning||row.trendStatus?'晨重':'称重'):row.name;
- const category={food:'饮食',weight:'体重',activity:'运动'}[type];
+ const title=weight?(row.isMorning||/^(是|纳入|暂定纳入)/.test(row.trendStatus??'')?'晨重':'称重'):row.name;
  const icon={food:'health',weight:'chart',activity:'activity'}[type];
- const status={plan:'计划',cancelled:'已取消',actual:'已吃'}[row.status]??row.status;
- const detail=weight?category:[category,type==='food'?row.meal:null,type==='food'?row.portion:null,status].filter(Boolean).join(' · ');
+ const status=type==='food'&&!row.actual&&row.status!=='actual'?
+  /^(?:计划|待定)/.test(row.status)?'计划':/^(?:已取消|取消|作废|未吃|失效)/.test(row.status)?'已取消':'待确认':'';
+ const detail=type==='food'?[String(row.portion??'').split(/[；;\n（(]/,1)[0],status].filter(Boolean).join(' · '):'';
  const kcal=row.nutrition?.kcal??row.kcal;
  const amount=weight?fmt(row.kg,2)+' kg':kcal==null?'':fmt(kcal)+' kcal';
  return `<button type="button" class="tx-row tx-row-interactive health-tx-row" data-edit-id="${E(row.id)}" data-type="${type}">
   <span class="category-symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shellGlyphs[icon]}</svg></span>
-  <span class="tx-main"><span class="tx-title">${E(title)}</span><span class="tx-sub">${E(detail)}</span></span>
+  <span class="tx-main"><span class="tx-title">${E(title)}</span>${detail?`<span class="tx-sub">${E(detail)}</span>`:''}</span>
   <span class="health-tx-value"><span class="tx-money">${E(amount)}</span><span class="tx-time">${normalizeClock(row.time)}</span></span>
  </button>`;
 }
@@ -143,6 +150,9 @@ function editEvent(type,id){
  editing[type]=id;
  form.reset();
  if(type==='food'){
+  const picker=form.elements.foodId,original=inventoryWithMoves(state).find(item=>item.id===row.foodId);
+  if(original&&![...picker.options].some(option=>option.value===original.id))
+   picker.add(new Option(original.name,original.id));
   fillForm(form,{...row,...row.nutrition,status:row.source==='legacy'?(row.actual?'actual':row.status.includes('计划')?'plan':'cancelled'):row.status});
   updateBatches();
   form.elements.batchId.value=row.batchId??'';
@@ -165,7 +175,7 @@ function fillForm(form,fields){
 function renderTrends(){
  const today=dateNow(), cycle=cycleForDate(state,today,today);
  const points=weightTrend(state).points;
- renderWeightChart(points.slice(-14),$('weight-detail-chart'));
+ renderWeightChart($('weight-detail-chart'),$('weight-detail-value'),points);
  const kilos=new Map(points.map(e=>[e.date,e.kg]));
  $('trend-days').innerHTML=`<p>本周期缺口 ${fmt(cycle.deficit)} kcal · 已结算 ${cycle.closedDays}/${cycle.days} 天</p>`+Array.from({length:14},(_,i)=>{
   const date=addDays(today,-i),intake=dayIntake(state,date),e=energyForDay(state,date,today);
@@ -173,14 +183,24 @@ function renderTrends(){
  }).join('');
 }
 function renderInventory(){
- const filter=$('inventory-search').value.trim().toLowerCase();const list=inventoryWithMoves(state).filter(i=>i.active && (i.name.toLowerCase().includes(filter)||i.id.toLowerCase().includes(filter)));
- list.sort((a,b)=>(Number(b.qty>0)-Number(a.qty>0))||a.name.localeCompare(b.name,'zh-CN'));
- $('inventory-list').innerHTML=list.map(i=>`<button type="button" class="inv-row inventory-food" data-sku-edit="${E(i.id)}" aria-label="${E(i.name)}">
-  <strong>${E(i.name)}</strong><span class="stock-qty ${i.qty!==null&&i.qty<=0?'low':''}">${i.qty===null?'待盘点':E(i.qty)+' '+E(i.unit)}</span>
- </button>`).join('')||'<div class="event-empty">没有匹配的库存食物</div>';
- const batches=batchBalances(state), byId=new Map(inventoryWithMoves(state).map(s=>[s.id,s]));
+ const filter=$('inventory-search').value.trim().toLowerCase(),stock=inventoryWithMoves(state);
+ const list=stock.filter(i=>i.active&&i.qty!==0&&!isStockReference(i)&&(i.name.toLowerCase().includes(filter)||i.id.toLowerCase().includes(filter)));
+ const groups=stockGroups(list),known=groups.filter(g=>g.rows.some(i=>i.qty!==null)),unknown=groups.filter(g=>g.rows.every(i=>i.qty===null));
+ function renderGroups(entries){
+  const button=(row,label,secondary='')=>`<button type="button" class="inv-row inventory-food" data-sku-edit="${E(row.id)}" aria-label="${E(label)}">
+   <span class="stock-name"><strong>${E(label)}</strong>${secondary?`<small>${E(secondary)}</small>`:''}</span>
+   ${row.qty===null?(secondary?'<span class="stock-qty">数量未知</span>':''):`<span class="stock-qty ${row.qty<0?'low':''}">${Number(row.qty.toFixed(3))} ${E(stockUnit(row.unit))}</span>`}</button>`;
+  return entries.map(({name,rows})=>rows.length===1?button(rows[0],name):
+   `<details class="stock-group"><summary><strong>${E(name)}</strong><small>${rows.length} 条记录</small></summary>
+    ${rows.map(row=>button(row,row.name,row.standard)).join('')}</details>`).join('');
+ }
+ $('inventory-list').innerHTML=renderGroups(known)||'<div class="event-empty">没有匹配的在库食品</div>';
+ $('unknown-stock').hidden=!unknown.length;
+ text('unknown-stock-title','数量未记录 · '+unknown.length+' 项');
+ $('unknown-stock-list').innerHTML=renderGroups(unknown);
+ const batches=batchBalances(state), byId=new Map(stock.map(s=>[s.id,s]));
  const alerts=stockAlerts(state,dateNow());
- const alertText=[...alerts.low.map(s=>s.name+' 库存偏低'),...alerts.expiry.map(b=>byId.get(b.foodId)?.name+' 到期 '+displayDay(b.expires))].join(' · ');
+ const alertText=[...alerts.low.filter(s=>s.qty>0).map(s=>stockName(s)+' 库存偏低'),...alerts.expiry.map(b=>byId.get(b.foodId)?.name+' 到期 '+displayDay(b.expires))].join(' · ');
  $('stock-alerts').textContent=alertText;$('stock-alerts').hidden=!alertText;
  $('batch-list').innerHTML=batches.filter(b=>b.remaining>0).map(b=>`<p>${E(byId.get(b.foodId)?.name)} · ${E(displayDay(b.date))} · ${fmt(b.remaining,3)} ${E(byId.get(b.foodId)?.unit)} · ${b.costCents===null?'成本未知':('批次成本 ¥'+fmt(b.costCents/100,2))}${b.parent?' · 分装':''}</p>`).join('');
  $('stock-history').innerHTML=state.local.stockMoves.slice(-40).reverse().map(m=>`<div class="event-row"><span>${E(displayDay(m.date))}${normalizeClock(m.time)?' '+normalizeClock(m.time):''} · ${E(byId.get(m.foodId)?.name)} · ${E(m.reason)}</span><strong>${m.delta>0?'+':''}${fmt(m.delta,3)}</strong></div>`).join('');
@@ -188,11 +208,19 @@ function renderInventory(){
 }
 function renderSettings(){
  const s=state.settings, form=$('settings-form');for(const k of settingKeys)form.elements[k].value=s[k];form.elements.preferences.value=s.preferences??'';
+ const imported=importedDietTargets(state.legacy.rules);
+ $('diet-reference').hidden=!Object.entries(imported).some(([key,value])=>s[key]!==value);
+ const proposed={...s,...imported};
+ text('diet-reference-text',`普通日 ${proposed.calorieTarget} kcal · 蛋白质 ${proposed.proteinMin}–${proposed.proteinMax} g · 脂肪至少 ${proposed.fatMin} g · 碳水约 ${carbLabel(proposed)||'待核对'}`);
  const l=state.legacy;text('import-status',state.importInfo?`已导入：${state.importInfo.sourceVersion} · ${state.importedAt?.slice(0,10)}\n饮食 ${l.foods.length} 条 / 体重 ${l.weights.length} 条 / 运动 ${l.activities.length} 条 / 库存 ${l.inventory.length} 项；当前应用新增饮食 ${state.local.foods.length} 条。`:'当前使用本机健康账本。');$('import-status').style.whiteSpace='pre-line';
 }
 function rebuildFoodSelection(){
- const inv=inventoryWithMoves(state).filter(i=>i.active).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN'));
+ const inv=inventoryWithMoves(state).filter(i=>i.active&&!isStockReference(i)).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN'));
  const opts=inv.map(i=>`<option value="${E(i.id)}">${E(i.name)} · ${E(i.standard)}</option>`).join('');
+ const catalog=$('inventory-catalog'),currentSku=$('sku-form').elements.id.value;
+ catalog.innerHTML='<option value="">新食品</option>'+inv.map(i=>
+  `<option value="${E(i.id)}">${E(stockName(i))} · ${i.qty===0?'已用完':i.qty===null?'数量未记录':E(stockUnit(i.unit))}</option>`).join('');
+ catalog.value=currentSku;
  for(const el of document.querySelectorAll('#food-select,#stock-food-select,[data-stock-options]')){
   const selected=el.value;
   el.innerHTML=(el.id==='food-select'?'<option value="">自定义食物</option>':'')+opts;
@@ -410,20 +438,38 @@ function attach(){
  bindForm('batch',(next,d)=>addBatch(next,{...d,expires:d.expires||null,raw:numeric(d.raw),cooked:numeric(d.cooked),
   costCents:numeric(d.cost)===null?null:Math.round(+d.cost*100)}),'批次已入库');
  bindForm('split',(next,d)=>splitBatch(next,d),'分装已完成');
+ $('sku-form').addEventListener('reset',()=>$('sku-form').querySelectorAll('option[data-legacy-unit]').forEach(option=>option.remove()));
  $('new-sku').onclick=()=>$('sku-form').reset();
  function revealSku(){
   $('inventory-tools').open=true;$('sku-panel').open=true;
   $('sku-panel').scrollIntoView({block:'start'});
  }
  $('add-stock-food').onclick=()=>{$('sku-form').reset();revealSku();};
- $('inventory-list').onclick=e=>{
-  const row=inventoryWithMoves(state).find(s=>s.id===e.target.closest('[data-sku-edit]')?.dataset.skuEdit);
-  if(!row)return;
+ function selectSku(id){
+  const row=inventoryWithMoves(state).find(s=>s.id===id);
   const [basisAmount,basisUnit]=basis(row);
   const form=$('sku-form');
   form.reset();
+  for(const [key,value] of [['unit',row.unit],['basisUnit',basisUnit]]){
+   const select=form.elements[key];
+   if(![...select.options].some(option=>option.value===value)){
+    const option=new Option(stockUnit(value),value);option.dataset.legacyUnit='';select.add(option);
+   }
+  }
   fillForm(form,{...row,...row.nutrition,price:row.priceBasis===row.unit?row.pricePerUnit:null,basisAmount,basisUnit});
+  $('inventory-catalog').value=id;
   revealSku();
+ }
+ function editStock(event){
+  const id=event.target.closest('[data-sku-edit]')?.dataset.skuEdit;
+  if(id)selectSku(id);
+ }
+ $('inventory-list').onclick=$('unknown-stock-list').onclick=editStock;
+ $('inventory-catalog').onchange=e=>{if(e.target.value)selectSku(e.target.value);else $('sku-form').reset();};
+ $('apply-diet-reference').onclick=async()=>{
+  const next=structuredClone(state);
+  Object.assign(next.settings,importedDietTargets(state.legacy.rules));
+  try{await commit(next,'已采用主账营养目标');}catch(err){toast(err.message);}
  };
  $('settings-form').onsubmit=async e=>{
   e.preventDefault();const fields=Object.fromEntries(new FormData(e.target)),next=structuredClone(state);

@@ -71,7 +71,24 @@ try {
   await page.goto(base+'health/?test=offline');
   assert.equal(await page.getByText('去导入',{exact:true}).count(),0);
   await page.locator('#health-settings').click();
-  const synthetic={tables:{food_events:[],weight_events:[],food_inventory:[{'食品ID':'fixture','名称':'合成库存','库存值':5,'库存单位':'包','标准份量':'每包','kcal':100}]}};
+  const fixtureDay=await page.locator('#report-date').inputValue();
+  const synthetic={tables:{
+    food_events:['早餐','午餐（外食）','晚餐（计划）'].map((meal,i)=>({
+      日期:fixtureDay,餐次:meal,'食物/饮品':'合成菜单'+i,'份量/重量':'1 份',状态:'计划'
+    })),
+    weight_events:[
+      {日期:'2020-01-01',数值:80,纳入趋势:'是'},
+      {日期:'2020-01-04',数值:79.7,纳入趋势:'是'}
+    ],
+    food_inventory:[
+      {'食品ID':'fixture','名称':'合成库存','库存值':5,'库存单位':'包','标准份量':'每包',kcal:100},
+      {'食品ID':'empty','名称':'空库存样品','库存值':0,'库存单位':'个'},
+      {'食品ID':'unknown','名称':'未知数量样品','库存值':null,'库存单位':'个'},
+      {'食品ID':'mirror','名称':'合计样品（仅总量核对）','库存值':5,'库存单位':'包（仅镜像）'},
+      {'食品ID':'variant-a','名称':'合成瓶','库存值':2,'库存单位':'瓶（型号 A）'},
+      {'食品ID':'variant-b','名称':'合成瓶','库存值':3,'库存单位':'瓶（型号 B）'}
+    ]
+  }};
   const importFile={name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(synthetic))};
   await page.locator('#import-file').setInputFiles(importFile);
   await page.getByRole('button',{name:'取消导入'}).click();
@@ -87,8 +104,24 @@ try {
   assert.equal(await revision(),importedRevision);
   await page.locator('#health-settings-sheet [data-sheet-close]').click();
   assert.equal(await page.locator('.tabbar button').count(),3);
+  const weightChart=page.getByRole('slider',{name:'查看近期晨重'});
+  await weightChart.waitFor();
+  assert.match(await weightChart.getAttribute('aria-valuetext'),/1月4日.*79\.70 kg/);
+  const plot=await weightChart.boundingBox();
+  await page.mouse.move(plot.x+plot.width*.92,plot.y+plot.height*.5);
+  await page.mouse.down();
+  await page.mouse.move(plot.x+plot.width*.12,plot.y+plot.height*.5,{steps:5});
+  await page.mouse.up();
+  assert.match(await weightChart.getAttribute('aria-valuetext'),/1月1日.*80\.00 kg/);
+  assert.match(page.url(),/health\/\?test=offline$/);
+  await page.getByRole('region',{name:'早餐',exact:true}).getByText('合成菜单0').waitFor();
+  await page.getByRole('region',{name:'午餐',exact:true}).getByText('合成菜单1').waitFor();
+  await page.getByRole('region',{name:'晚餐',exact:true}).getByText('合成菜单2').waitFor();
   await page.getByRole('link',{name:'体重趋势',exact:true}).click();
   await page.getByRole('heading',{name:'体重趋势',exact:true}).waitFor();
+  const detailChart=page.getByRole('slider',{name:'查看历史晨重'});
+  await detailChart.press('Home');
+  assert.match(await detailChart.getAttribute('aria-valuetext'),/1月1日.*80\.00 kg/);
   await page.getByRole('link',{name:'返回首页',exact:true}).click();
   await page.locator('#local-events').waitFor();
   await page.locator('#add-health').click();
@@ -111,6 +144,16 @@ try {
   assert.equal(await quantity(),4);
   await page.locator('[data-tab="inventory"]').click();
   await page.locator('#inventory-list').getByText('合成库存',{exact:true}).waitFor();
+  const inventory=page.locator('#inventory-list');
+  assert.equal(await inventory.getByText(/空库存样品|合计样品/).count(),0);
+  const merged=inventory.locator('details').filter({hasText:'合成瓶'});
+  assert.equal(await merged.count(),1);
+  await merged.locator('summary').click();
+  await merged.getByText('2 瓶',{exact:true}).waitFor();
+  await merged.getByText('3 瓶',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'未知数量样品'}).isVisible(),false);
+  await page.getByText('数量未记录 · 1 项',{exact:true}).click();
+  await page.getByRole('button',{name:'未知数量样品'}).waitFor();
   await page.reload();await page.locator('[data-tab="inventory"]').click();
   await page.locator('#inventory-list').getByText('合成库存',{exact:true}).waitFor();
   await page.locator('#health-settings').click();

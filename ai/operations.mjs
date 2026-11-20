@@ -1,5 +1,5 @@
 import {displayDay,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
-import {dayIntake,inventoryWithMoves,localStockChange,validDate} from '../health/core.mjs';
+import {dayIntake,inventoryWithMoves,isStockReference,localStockChange,validDate} from '../health/core.mjs';
 import {matchFoodRecords,reviseFoodPortion} from '../health/food-history.mjs';
 import {setShoppingItem} from '../health/shopping.mjs';
 import {cleanSkill,SKILL_LIMIT} from './workspace.mjs';
@@ -22,7 +22,7 @@ export function skillReview(container,current,suggested){
 export function inventoryReview(container,proposal,current,today){
  const {operation,name,quantity,unit}=proposal.result,shopping=operation==='shopping';
  heading(container,shopping?'更新补货清单':'盘点库存');
- const stock=inventoryWithMoves(current).filter(s=>s.active);
+ const stock=inventoryWithMoves(current).filter(s=>s.active&&!isStockReference(s));
  const item=field(container,'食品',document.createElement('select'));
  item.add(new Option('请选择已有食品',''));
  for(const row of stock)item.add(new Option(row.name+' · '+row.unit,row.id));

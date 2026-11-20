@@ -42,17 +42,18 @@
         <div class="metric-grid stat-grid">
           <article class="metric stat"><span class="stat-label">蛋白质</span><strong id="protein-stat">—</strong><small id="protein-goal">目标 ≥150g</small></article>
           <article class="metric stat"><span class="stat-label">脂肪</span><strong id="fat-stat">—</strong><small id="fat-goal">目标 ≥45g</small></article>
-          <article class="metric stat"><span class="stat-label">碳水</span><strong id="carbs-stat">—</strong><small>按活动量调整</small></article>
+          <article class="metric stat"><span class="stat-label">碳水</span><strong id="carbs-stat">—</strong><small id="carbs-goal">—</small></article>
           <article class="metric stat"><span class="stat-label">钠</span><strong id="sodium-stat">—</strong><small><span id="sodium-goal">—</span></small></article>
         </div>
         <div class="metric-grid stat-grid weight-grid">
           <article class="metric stat"><span class="stat-label">最新晨重</span><strong id="weight-stat">—</strong><small id="weight-date">暂无记录</small></article>
           <article class="metric stat"><span class="stat-label">最近7次均重</span><strong id="weight-average">—</strong><small id="weight-trend">—</small></article>
         </div>
-        <a href="#trends" class="card panel health-trend-link" aria-label="体重趋势">
-          <span class="panel-title"><strong>体重趋势</strong><span data-shell-icon="chevron"></span></span>
-          <svg id="weight-chart" viewBox="0 0 540 185" aria-hidden="true"></svg>
-        </a>
+        <section class="card panel weight-card">
+          <a href="#trends" class="panel-title health-trend-link" aria-label="体重趋势"><strong>体重趋势</strong><span data-shell-icon="chevron"></span></a>
+          <p id="weight-chart-value" class="weight-chart-value"></p>
+          <svg id="weight-chart" viewBox="0 0 350 132" role="slider" tabindex="0" aria-label="查看近期晨重" aria-valuemin="1" hidden></svg>
+        </section>
         <section class="card panel"><div class="panel-title"><div><h2 id="cycle-title">六天减脂周期</h2><p id="cycle-range">—</p></div><strong class="cycle-total" id="cycle-deficit">—</strong></div>
           <div class="progress-track cycle-track"><div class="progress-fill" id="cycle-progress"></div></div>
           <div class="cycle-meta"><span id="cycle-pct">—</span><span id="cycle-equivalent">—</span></div>
@@ -68,6 +69,7 @@
         <label class="search-label"><span class="sr-only">查找食品</span><input id="inventory-search" type="search" placeholder="查找食品"></label>
         <div id="stock-alerts" hidden></div>
         <div id="inventory-list" class="inventory-list"></div>
+        <details id="unknown-stock" class="card form-panel" hidden><summary id="unknown-stock-title">数量未记录</summary><div id="unknown-stock-list"></div></details>
         <section id="purchase-recovery" class="card panel" hidden aria-live="polite">
           <h2>待同步的账本更新</h2><p>请完成财务与健康账本的同步。财务尚未写入时，也可以放弃本次更新。</p>
           <div class="button-row"><button type="button" class="btn btn-primary" data-resume>继续同步</button><button type="button" class="btn btn-secondary" data-abandon>放弃更新</button></div>
@@ -88,6 +90,7 @@
         </details>
         <details class="card form-panel" id="inventory-tools"><summary>库存管理</summary>
         <details class="inventory-tool" id="sku-panel"><summary>维护食品与营养标签</summary><form id="sku-form">
+          <label>食品库<select id="inventory-catalog"></select></label>
           <input name="id" type="hidden"><label>食品名称<input name="name" required></label>
           <div class="form-grid"><label>库存单位<select name="unit" data-units></select></label><label>营养基准单位<select name="basisUnit" data-units></select></label>
           <label>营养基准数量<input name="basisAmount" value="100" type="number" min="0.001" step="any" required></label><label>标签食材状态<select name="stage"><option value="raw">生重或原包装</option><option value="cooked">熟重</option></select></label>
@@ -111,8 +114,11 @@
       <section class="view hidden" id="view-trends" aria-label="健康趋势">
         <a href="#" id="health-trend-back" class="text-button health-trend-back"><span data-shell-icon="chevron"></span>返回首页</a>
         <h1>体重趋势</h1>
-        <section class="card panel"><svg id="weight-detail-chart" viewBox="0 0 540 185" role="img" aria-label="晨重折线图"></svg></section>
-        <section class="card panel"><h2>最近 14 天</h2><div id="trend-days"></div></section>
+        <section class="card panel weight-card">
+          <p id="weight-detail-value" class="weight-chart-value"></p>
+          <svg id="weight-detail-chart" viewBox="0 0 350 132" role="slider" tabindex="0" aria-label="查看历史晨重" aria-valuemin="1" hidden></svg>
+        </section>
+        <details class="card form-panel"><summary>最近 14 天汇总</summary><div id="trend-days"></div></details>
       </section>
     </main>
     <nav class="tabbar tabbar-grouped" aria-label="主导航">
@@ -180,6 +186,9 @@
           <label>选择统一备份以预览恢复<input type="file" accept=".json,application/json"></label><output aria-live="polite"></output>
         </section>
         <section class="card panel"><h2>计算参数</h2><form id="settings-form"><div class="form-grid"><label>每日热量参考 kcal<input type="number" name="calorieTarget" min="500" max="8000" required></label><label>普通日TDEE kcal<input type="number" name="baselineTdee" min="1000" max="8000" required></label><label>每周期目标缺口 kcal<input type="number" name="cycleTarget" min="100" max="30000" required></label><label>周期天数<input type="number" name="cycleDays" min="1" max="31" required></label><label>蛋白质下限 g<input type="number" name="proteinMin" min="0" step="any" required></label><label>蛋白质上限 g<input type="number" name="proteinMax" min="0" step="any" required></label><label>脂肪下限 g<input type="number" name="fatMin" min="0" step="any" required></label><label>钠参考 mg<input type="number" name="sodiumTarget" min="0" step="any" required></label><label>周期锚点<input type="date" name="cycleAnchor" required></label></div><label>饮食偏好 / 规划规则<input name="preferences" maxlength="300" placeholder="常做的菜、忌口、可用时间"></label><button class="btn btn-secondary" type="submit">保存计算参数</button></form></section>
+        <section class="card panel" id="diet-reference" hidden><h2>主账中的营养目标</h2>
+          <p id="diet-reference-text"></p><button type="button" id="apply-diet-reference" class="btn btn-secondary">采用主账营养目标</button>
+        </section>
         <details class="card form-panel"><summary>餐食模板</summary>
           <form id="template-settings"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>餐次<select id="template-meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div>
           <label>模板名称<input name="name" maxlength="80" placeholder="留空时使用餐次"></label>
