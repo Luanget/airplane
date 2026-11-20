@@ -445,7 +445,15 @@ try {
       return route.fulfill({headers,json:{status:'completed',output:[{type:'function_call',name:'read_ledger',
         call_id:'batch-stock',arguments:'{"scope":"stock","query":"合成新食品"}'}]}});
     }
-    if(input.text.startsWith('这是连接测试'))return route.fulfill({headers,json:fixtureReply});
+    if(input.text.startsWith('这是连接测试'))return route.fulfill({headers,json:{...fixtureReply,id:'resp_fixture_cost',
+      usage:{input_tokens:1000,output_tokens:100,input_tokens_details:{cached_tokens:100,cache_write_tokens:200}}}});
+    if(input.text==='删除合成计划'||input.text==='删除合成午餐支出'){
+      assert.deepEqual(input.history,[]);
+      const finance=input.text.endsWith('支出');
+      return route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',
+        text:JSON.stringify({reply:'勾选要删除的原记录。',proposal:{mode:'delete_record',date:input.date,
+          result:{kind:finance?'finance':'plan',query:finance?'午餐':'合成餐点',meal:null}}})}]}]}});
+    }
     if(input.text==='模拟等待'){
       await new Promise(resolve=>{releaseDelayed=resolve;markDelayed();});
       await route.fulfill({headers,json:fixtureReply}).catch(()=>{});
@@ -525,7 +533,10 @@ try {
   await say('用我描述的合成蔬菜规划一餐');await review.waitFor();
   assert.equal(calls[1].history[0].text,'合成餐点');
   const planCard=review.locator('.assistant-plan-item');
-  await planCard.getByText(/120 g.*120 kcal/).waitFor();
+  await planCard.getByText(/120 g.*120 kcal.*蛋白 12 g.*碳水 12 g.*脂肪 3.6 g.*钠 12 mg/).waitFor();
+  await review.getByText(/^整餐.*钠 12 mg/).waitFor();
+  await review.getByText(/^若吃完/).waitFor();
+  await planCard.getByText('合成测试估值',{exact:true}).waitFor();
   assert.equal(await planCard.getByLabel('数量',{exact:true}).isVisible(),false);
   await planCard.getByText('调整份量与营养',{exact:true}).click();
   await planCard.getByLabel('数量',{exact:true}).waitFor();
@@ -595,6 +606,10 @@ try {
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByRole('button',{name:'发送连接测试'}).click();
   await access.getByText('GPT-6.1 Terra · 连接正常。',{exact:true}).waitFor();
+  await modelPanel.getByText('本机已用约 US$0.001455',{exact:true}).waitFor();
+  await access.getByRole('button',{name:'发送连接测试'}).click();
+  await access.getByText('GPT-6.1 Terra · 连接正常。',{exact:true}).waitFor();
+  await modelPanel.getByText('本机已用约 US$0.001455',{exact:true}).waitFor();
   await modelPanel.getByRole('button',{name:'Sol',exact:true}).click();
   expectedModel='gpt-6.2-sol';
   await closeAssistantSettings();
@@ -713,13 +728,42 @@ try {
   assert.deepEqual(await photographedPortions(),{qty:2,portions:[0.3,0.7]});
   console.log('PASS separate photos, individual retry, candidate confirmation and same-name one-off intake');
   await openAssistantSettings();
+  const contextPanel=assistantSettings.locator('.assistant-context');
+  await contextPanel.getByText('本轮上下文',{exact:true}).click();
+  await contextPanel.getByRole('button',{name:'仅本轮'}).click();
+  await contextPanel.getByText(/历史 0 条 · 0\/0 字/).waitFor();
+  await closeAssistantSettings();
+  const planBeforeDeletion=await foodCount();
+  await say('删除合成计划');
+  await review.getByText('核对要删除的饮食计划',{exact:true}).waitFor();
+  assert.equal(await review.getByRole('checkbox').count(),1);
+  await review.getByRole('button',{name:'确认删除'}).click();
+  await review.getByText('请先勾选要删除的记录',{exact:true}).waitFor();
+  assert.equal(await foodCount(),planBeforeDeletion);
+  await review.getByRole('checkbox',{name:/合成餐点/}).check();
+  await review.getByRole('button',{name:'确认删除'}).click();
+  await chat.getByText('已删除 1 条饮食计划。',{exact:true}).waitFor();
+  assert.equal(await foodCount(),planBeforeDeletion-1);
+
+  const beforeFinanceDeletion=JSON.parse(await ledger());
+  await say('删除合成午餐支出');
+  await review.getByText('核对要删除的收支记录',{exact:true}).waitFor();
+  await review.getByRole('checkbox',{name:/午餐.*¥28/}).check();
+  await review.getByRole('button',{name:'确认删除'}).click();
+  await chat.getByText('已删除 1 条收支记录。',{exact:true}).waitFor();
+  const afterFinanceDeletion=JSON.parse(await ledger());
+  assert.equal(afterFinanceDeletion.transactions.length,beforeFinanceDeletion.transactions.length-1);
+  assert.deepEqual(afterFinanceDeletion.budgets,beforeFinanceDeletion.budgets);
+  console.log('PASS selectable chat history, local USD accumulation, and confirmed plan and expense deletion');
+  const callsBeforeKeyRemoval=calls.length;
+  await openAssistantSettings();
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await closeAssistantSettings();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
   await access.waitFor();
-  assert.equal(calls.length,21);
+  assert.equal(calls.length,callsBeforeKeyRemoval);
   await closeAssistantSettings();
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();

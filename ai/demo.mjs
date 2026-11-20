@@ -70,6 +70,12 @@ export async function demoWorkspace(today){
    input.date.slice(0,4)+'-'+chineseDate[1].padStart(2,'0')+'-'+chineseDate[2].padStart(2,'0'):
    text.includes('前天')?addDays(input.date,-2):
    text.includes('昨天')?addDays(input.date,-1):text.includes('今天')?input.date:null);
+  if(/删除|删掉/.test(text)){
+   const kind=text.includes('计划')?'plan':text.includes('支出')?'finance':'food';
+   const meal=['早餐','午餐','晚餐','加餐'].find(label=>text.includes(label))??null;
+   return {reply:'请核对并勾选要删除的原记录。',proposal:{mode:'delete_record',date,
+    result:{kind,query:focus?.name??'',meal:kind==='finance'?null:meal}}};
+  }
   const dinnerItem=(row,amount)=>({name:row.name,sku:null,action:'plan',amount,unit:'g',
    packageSize:null,packageUnit:null,basisAmount:100,basisUnit:'g',
    nutrients:{kcal:null,protein:null,carbs:null,fat:null,sodium:null},

@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validateAppState,inventoryWithMoves,dayIntake,energyForDay,cycleForDate} from '../health/core.mjs';
 import {addBatch,saveSku} from '../health/inventory.mjs';
 import {summarizeFoodHistory,reviseFoodPortion} from '../health/food-history.mjs';
-import {readLedger} from '../ai/workspace.mjs';
+import {HISTORY_OPTIONS,readLedger,shortHistory} from '../ai/workspace.mjs';
+import {healthDeletion} from '../ai/deletion.mjs';
+import {estimatedCost,displayUsage} from '../ai/usage.mjs';
 import {skillLibrary} from '../ai/skills.mjs';
 import {confirmItems,resolveItem} from '../health/candidates.mjs';
 import {matches,resultSchema,validInput,assistantInput} from '../health/contract.mjs';
@@ -289,4 +291,46 @@ test('six-day boundary, next-day closing and missing days, with imported energy-
   assert.equal(energyForDay(next,date,'2030-01-03').tdee,2200);
   assert.equal(cycleForDate(next,date,'2030-01-03').unreported,1);
   assert.ok(!validDate('2030-02-30')); assert.ok(!validateAppState({...state,local:{foods:[]}}));
+});
+
+test('assistant deletes a plan independently and restores only stock linked to the deleted intake',()=>{
+ const state=newState(),sku=saveSku(state,{name:'测试食品',unit:'g',basisUnit:'g',basisAmount:100,kcal:100});
+ addBatch(state,{foodId:sku.id,date,quantity:500,costCents:1000});
+ const actual=addFood(state,{name:sku.name,date,foodId:sku.id,stockQty:120,kcal:120});
+ const plan=addFood(state,{name:sku.name,date,status:'plan',foodId:sku.id,stockQty:130,kcal:130});
+ const withoutPlan=healthDeletion(state,'foods',[plan.id]);
+ assert.equal(dayIntake(withoutPlan,date).totals.kcal,120);
+ assert.equal(inventoryWithMoves(withoutPlan)[0].qty,380);
+ const cleared=healthDeletion(withoutPlan,'foods',[actual.id]);
+ assert.equal(dayIntake(cleared,date).totals.kcal,null);
+ assert.equal(inventoryWithMoves(cleared)[0].qty,500);
+ assert.equal(cleared.local.foods.length,0);
+ assert.equal(state.local.foods.length,2);
+ assert.throws(()=>healthDeletion(cleared,'foods',[actual.id]),/原记录已变更/);
+ const input={mode:'chat',text:'删除那条计划',date,history:[],photo:null};
+ const result={reply:'请核对。',proposal:{mode:'delete_record',date,result:{kind:'plan',query:'测试食品',meal:null}}};
+ const response={status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}]};
+ assert.deepEqual(parseResult(response,input),result);
+});
+
+test('recent chat uses the selected budget and retains full local messages',()=>{
+ const turns=Array.from({length:5},(_,i)=>({role:'user',text:i+'营'.repeat(790)+'尾'}));
+ const compact=shortHistory(turns);
+ assert.equal(compact.map(row=>row.text.length).reduce((a,b)=>a+b),480);
+ assert.equal(compact.at(-1).text.length,180);
+ assert.match(compact.at(-1).text,/^4.*….*尾$/);
+ assert.equal(turns[4].text.length,792);
+ assert.deepEqual(shortHistory(turns,HISTORY_OPTIONS[0]),[]);
+ assert.equal(shortHistory(turns,HISTORY_OPTIONS[2]).map(row=>row.text.length).reduce((a,b)=>a+b),900);
+});
+
+test('local USD estimates count regular, cached and written tokens once at model rates',()=>{
+ const usage={input_tokens:1000,output_tokens:100,
+  input_tokens_details:{cached_tokens:100,cache_write_tokens:200,cache_write_tokens_details:{ttl_12h_tokens:50}}};
+ assert.equal(estimatedCost('gpt-6-luna',usage),152250000);
+ assert.equal(estimatedCost('gpt-6.1-terra',usage),1517500000);
+ assert.equal(estimatedCost('gpt-6.2-sol',{input_tokens:300000,output_tokens:10000}),1350000000000);
+ assert.equal(estimatedCost('gpt-6-luna',{input_tokens:5,output_tokens:1,input_tokens_details:{cached_tokens:10}}),null);
+ assert.equal(displayUsage(null),'');
+ assert.equal(displayUsage(152250000),'本机已用约 US$0.000152');
 });

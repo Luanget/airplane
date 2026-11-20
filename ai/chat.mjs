@@ -7,13 +7,15 @@ import {healthReview,jpeg} from '../health/assistant.mjs';
 import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
 import {financeReview} from './finance.mjs';
 import {chatInstructions} from './responses.mjs';
-import {localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
+import {localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels,HISTORY_OPTIONS,readHistoryOption,saveHistoryOption} from './workspace.mjs';
 import {foodEditReview,inventoryReview,portionReview,skillReview} from './operations.mjs';
 import {mountSkillSettings} from './skills.mjs';
 import {mountModelSettings,readChatModel} from './models.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 import {batchReview} from './batch.mjs';
+import {deleteReview} from './deletion.mjs';
+import {displayUsage,totalUsage} from './usage.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
 
 const demo=new URLSearchParams(location.search).get('demo')==='1';
@@ -34,7 +36,27 @@ let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null
 
 hydrateShell();
 const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
-$('#assistant-settings').onclick=()=>{settings.showModal();refreshModels();refreshSkills();};
+$('#assistant-settings').onclick=()=>{settings.showModal();refreshModels();refreshSkills();void refreshUsage();};
+async function refreshUsage(){
+ if(demo)return;
+ const node=$('[data-local-usage]');
+ try{
+  node.textContent=displayUsage(await totalUsage());
+  node.title='从此版本起，按本机收到的 token 用量估算。合计覆盖本机所有导入过的 Key。';
+  node.hidden=!node.textContent;
+ }catch{node.hidden=true;}
+}
+window.addEventListener('airplane-ai-usage',()=>{if(settings.open)void refreshUsage();});
+const historyOptions=$('[data-history-options]');
+historyOptions.replaceChildren(...HISTORY_OPTIONS.map(option=>{
+ const button=document.createElement('button');
+ button.type='button';button.textContent=option.label;
+ button.onclick=()=>{
+  try{saveHistoryOption(workspace.finance,option.id);updateContext();}
+  catch(err){report(err);}
+ };
+ return button;
+}));
 function onSettingsBackdrop(event){
  if(event.target!==settings)return false;
  const {left,top,right,bottom}=settings.getBoundingClientRect();
@@ -116,11 +138,13 @@ stop.onclick=()=>{
  activeRequest?.abort();
 };
 function updateContext(){
- const turns=shortHistory((book.current?.messages??[]).filter(m=>m?.carry&&['user','assistant'].includes(m.role)&&typeof m.text==='string'));
+ const budget=readHistoryOption(workspace.finance);
+ const turns=shortHistory((book.current?.messages??[]).filter(m=>m?.carry&&['user','assistant'].includes(m.role)&&typeof m.text==='string'),budget);
+ [...historyOptions.children].forEach((button,index)=>button.setAttribute('aria-pressed',String(budget===HISTORY_OPTIONS[index])));
  const chars=turns.reduce((n,row)=>n+row.text.length,0);
  const skills=workspace.skills.active();
  const skillChars=skills.reduce((total,skill)=>total+skill.text.length,0);
- $('[data-context-size]').textContent='历史 '+turns.length+' 条 · '+chars+'/900 字，已启用 '+skills.length+' 个 Skill · '+skillChars+' 字。';
+ $('[data-context-size]').textContent='历史 '+turns.length+' 条 · '+chars+'/'+budget.chars+' 字，已启用 '+skills.length+' 个 Skill · '+skillChars+' 字。';
  return {turns,skills};
 }
 function syncThreads(){
@@ -271,6 +295,9 @@ async function makeReview(proposal,flow,photoJob){
  if(mode==='batch'){
   confirm=await batchReview(review,result,workspace,today,book.current?.foodDate);
   label=willContinue?'确认全部并继续':'确认全部';
+ }else if(mode==='delete_record'){
+  confirm=await deleteReview(review,proposal,workspace,today,book.current?.foodDate);
+  label='确认删除';
  }else if(mode==='finance'){
   confirm=financeReview(review,result.entry,today,workspace.finance);
   label='确认记账';
@@ -307,6 +334,7 @@ async function makeReview(proposal,flow,photoJob){
  }
  const actions=document.createElement('div');actions.className='chat-actions';
  const apply=document.createElement('button');apply.type='submit';apply.className='primary-button';apply.textContent=label;
+ if(mode==='delete_record')apply.classList.add('delete-apply');
  const discard=document.createElement('button');discard.type='button';discard.className='secondary-button';discard.textContent='放弃';
  discard.onclick=()=>{
   if(photoJob)settlePhoto(photoJob,'已放弃候选。');

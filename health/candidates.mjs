@@ -55,9 +55,9 @@ export function resolveItem(state, c) {
   const [n, unit] = sku ? basis(sku) : [c.basisAmount,c.basisUnit];
   const pack = packageInfo(sku,c);
   const stockQty = sku ? convert(c.amount,c.unit,sku.unit,pack,sku) : null;
-  const labelAmount = convert(c.amount,c.unit,unit,pack,sku);
+  const labelAmount = n>0?convert(c.amount,c.unit,unit,pack,sku):null;
   // Fill missing SKU fields only when the model supplied a convertible estimate.
-  const modelAmount = convert(c.amount,c.unit,c.basisUnit,pack,sku);
+  const modelAmount = c.basisAmount>0?convert(c.amount,c.unit,c.basisUnit,pack,sku):null;
   const nutrition = Object.fromEntries(nutrientKeys.map(k => {
     if (sku?.nutrition[k] != null)
       return [k,labelAmount === null ? null : round(sku.nutrition[k]*labelAmount/n,2)];

@@ -1,4 +1,5 @@
 import {addConfirmedTransactions,freshData,readFinance,replaceFinance} from '../finance-storage.mjs';
+import {purchaseForTransaction} from './purchases.mjs';
 import {finishPurchaseUpdate,readPurchaseUpdate,readState,saveState,stagePurchaseUpdate} from './storage.mjs';
 
 export const readPendingPurchase=readPurchaseUpdate;
@@ -58,6 +59,21 @@ async function settle(account,job){
 }
 function locked(account,fn){
  return globalThis.navigator?.locks?.request('airplane-purchases:'+(account.id??'device'),fn)??fn();
+}
+export function deleteUnlinkedTransactions(account,ids,expected) {
+ return locked(account,async()=>{
+  if(await readPurchaseUpdate(account))throw Error('有待同步的账本更新，请先在库存页处理');
+  const state=await readState(account);
+  const {primary,payload}=readFinance(account.finance);
+  if(!payload||primary!==expected)throw Error('财务账本已变更，请重新核对');
+  for(const id of ids){
+   if(purchaseForTransaction(state,id))throw Error('这笔记录已关联采购，请到库存页撤销采购');
+   if(!payload.transactions.some(row=>row.id===id))throw Error('原记录已变更，请重新核对');
+  }
+  const selected=new Set(ids);
+  payload.transactions=payload.transactions.filter(row=>!selected.has(row.id));
+  replaceFinance(account.finance,payload,expected);
+ });
 }
 export async function updatePurchaseLedgers(account,state,expected,change){
  if(!change)return saveState(state,expected,account);

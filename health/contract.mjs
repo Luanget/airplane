@@ -76,7 +76,10 @@ const ledgerOperations=[
   proposal('portions',object({name:string(80,1),quantities:{...list(number(100000,0.001)),minItems:1},unit}))
 ];
 export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
-  {type:'null'},...ledgerOperations,proposal('skill',object({name:optional(string(60,1)),text:string(320,1)})),
+  {type:'null'},...ledgerOperations,
+  proposal('delete_record',object({kind:choice('food','plan','weight','activity','finance'),
+    query:string(),meal:optional(choice('早餐','午餐','晚餐','加餐'))})),
+  proposal('skill',object({name:optional(string(60,1)),text:string(800,1)})),
   proposal('batch',object({operations:{...list({anyOf:ledgerOperations}),minItems:1},next:choice('done','continue')}))
 ]}});
 export const ledgerReadSchema=object({scope:choice('stock','meal','expenses','weight','cycle'),query:string()});

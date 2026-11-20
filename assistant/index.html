@@ -96,6 +96,7 @@
           </summary>
           <div class="assistant-panel-body">
             <div class="segmented assistant-model-options" role="group" aria-label="选择模型" data-model-options></div>
+            <p data-local-usage hidden></p>
             <output role="status"></output>
           </div>
         </details>
@@ -120,8 +121,9 @@
         <details class="card assistant-panel assistant-context">
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="activity"></span><span class="setting-copy setting-title">本轮上下文</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
+            <div class="segmented assistant-model-options" role="group" aria-label="聊天历史范围" data-history-options></div>
             <p data-context-size></p>
-            <p>OpenAI 会收到本轮消息、选中的照片、当天日期、已启用的 Skill 和最近四条短消息。开启查询时，还会收到本轮所需的账本摘要。</p>
+            <p>范围只影响发送给模型的近期聊天。完整对话仍保存在本机。启用的 Skill 和本轮查询结果按需带入。</p>
           </div>
         </details>
       </div>
