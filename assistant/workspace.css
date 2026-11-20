@@ -44,13 +44,20 @@
  max-height:202px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin
 }
 .assistant-history ul { display:grid; gap:2px; list-style:none; margin:0; padding:0 }
-.assistant-history li button {
+.assistant-history li { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px }
+.assistant-history-item {
  width:100%; display:flex; align-items:center; gap:8px; min-height:44px; padding:8px 10px;
  border:1px solid transparent; border-radius:10px; text-align:left; font-size:14px
 }
-.assistant-history li button:hover { background:var(--surface) }
-.assistant-history li button[aria-current=true] { background:var(--surface); border-color:var(--line) }
-.assistant-history li button[aria-current=true]::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green); flex:none }
+.assistant-history-item:hover { background:var(--surface) }
+.assistant-history-item[aria-current=true] { background:var(--surface); border-color:var(--line) }
+.assistant-history-item[aria-current=true]::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green); flex:none }
+.assistant-history-delete { min-width:44px; min-height:44px; padding:4px 8px; border-radius:10px; color:var(--muted); font-size:13px }
+.assistant-history-delete:is(:hover,:focus-visible) { background:var(--red-soft); color:var(--red) }
+.assistant-delete-confirmation { padding:8px; border-top:1px solid var(--line) }
+.assistant-delete-confirmation p { margin:0 0 6px; color:var(--text); overflow-wrap:anywhere }
+.assistant-delete-confirmation .danger-button { width:auto; padding:8px 12px }
+.assistant-conversation .streaming-reply::after { content:''; display:inline-block; width:6px; height:6px; margin-inline-start:5px; border-radius:50%; background:var(--green) }
 .assistant-history strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600 }
 .assistant-history time { white-space:nowrap; margin-inline-start:auto; color:var(--muted); font-size:12px }
 .assistant-history p { margin:8px 10px; color:var(--muted); font-size:13px }

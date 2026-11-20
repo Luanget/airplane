@@ -182,7 +182,7 @@ try {
     if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
     assert.equal(route.request().headers().authorization,'Bearer '+testKey);
     const body=route.request().postDataJSON(),content=body.input[0].content;
-    assert.equal(body.store,false);assert.equal(body.text.format.strict,true);
+    assert.equal(body.store,false);assert.equal(body.stream,true);assert.equal(body.text.format.strict,true);
     const input=JSON.parse(content[0].text);
     assert.deepEqual(Object.keys(input).sort(),['date','history','text']);
     assert.ok(!content[0].text.includes('synthetic legacy entry'));
@@ -207,7 +207,7 @@ try {
         return route.fulfill({headers,json:{status:'completed',output:[{type:'function_call',name:'read_ledger',call_id:'read-1',id:'fc_fixture',status:'completed',
           arguments:'{"scope":"stock","query":"合成库存"}'}]}});
       }
-      assert.equal(body.tool_choice,'none');
+      assert.equal(body.tool_choice,'auto');
       assert.equal(body.input.at(-2).id,'fc_fixture');
       assert.deepEqual(JSON.parse(result.output),{stock:[{name:'合成库存',qty:4,unit:'包'}]});
       return route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',
@@ -317,10 +317,44 @@ try {
   await form.getByText('已停止等待 OpenAI 回复。',{exact:true}).waitFor();
   assert.equal(await form.getByRole('textbox',{name:'消息'}).inputValue(),'模拟等待');
   releaseDelayed();
+  await page.evaluate(()=>{
+    const fetchRequest=window.fetch.bind(window);
+    window.fetch=(url,options)=>{
+      if(url!=='https://api.openai.com/v1/responses')return fetchRequest(url,options);
+      const input=JSON.parse(JSON.parse(options.body).input[0].content[0].text);
+      if(input.text!=='模拟流式回复')return fetchRequest(url,options);
+      const encoder=new TextEncoder();
+      return Promise.resolve(new Response(new ReadableStream({start(controller){
+        const emit=event=>controller.enqueue(encoder.encode('data: '+JSON.stringify(event)+'\n\n'));
+        const delta=delta=>emit({type:'response.output_text.delta',output_index:0,content_index:0,delta});
+        const result={reply:'先显示，再完成。',proposal:{mode:'finance',date:null,result:{
+          note:'',entry:{type:'expense',amount:3,date:input.date,note:'合成流式收支',categoryId:'餐饮'}
+        }}};
+        delta('{"reply":"先显示');
+        window.finishFixtureStream=()=>{
+          delta(JSON.stringify(result).slice('{"reply":"先显示'.length));
+          emit({type:'response.completed',response:{status:'completed',output:[{type:'message',
+            content:[{type:'output_text',text:JSON.stringify(result)}]}]}});
+          controller.close();
+        };
+      }}),{headers:{'Content-Type':'text/event-stream'}}));
+    };
+  });
+  await say('模拟流式回复');
+  const partial=chat.locator('.streaming-reply');
+  await partial.getByText('先显示',{exact:true}).waitFor();
+  assert.equal(await review.isVisible(),false);
+  await page.evaluate(()=>window.finishFixtureStream());
+  await chat.getByText('先显示，再完成。',{exact:true}).waitFor();
+  await review.getByRole('button',{name:'确认记账'}).waitFor();
+  assert.equal(await partial.count(),0);
+  assert.equal(JSON.parse(await ledger()).transactions.at(-1).amount,28);
+  await review.getByRole('button',{name:'放弃'}).click();
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
   assert.equal(calls.length,11);
+  console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();
   console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');
 
@@ -461,6 +495,36 @@ try {
   await chat.getByText('已更正原饮食记录，并重新计算当日营养和关联库存。',{exact:true}).waitFor();
   const milk=await demoMilk();
   assert.deepEqual(milk.map(row=>[row.id,row.portion,row.nutrition.kcal]),[[original.id,'300 g',186]]);
+  await chat.getByRole('button',{name:'新对话',exact:true}).click();
+  await chat.getByRole('button',{name:'查库存和支出'}).click();
+  await form.getByRole('button',{name:'发送',exact:true}).click();
+  const summary=chat.getByRole('region',{name:'账本摘要'});
+  await summary.getByText(/燕麦 · 390 g/).waitFor();
+  assert.equal(await summary.getByText(/支出 12 元/).count(),0);
+  await summary.getByRole('button',{name:'发送摘要'}).click();
+  await summary.getByText(/支出 12 元/).waitFor();
+  assert.equal(await chat.getByText('查到 3 种食品，今天已支出 12 元。',{exact:true}).count(),0);
+  await summary.getByRole('button',{name:'发送摘要'}).click();
+  await chat.getByText('查到 3 种食品，今天已支出 12 元。',{exact:true}).waitFor();
+  await chat.getByText('查看本轮 2 次查询的数据',{exact:true}).waitFor();
+  await chat.locator('[data-toggle-threads]').click();
+  const deleteFoodChat=history.getByRole('button',{name:'删除对话 昨天吃了什么',exact:true});
+  await deleteFoodChat.click();
+  await history.getByRole('button',{name:'取消',exact:true}).click();
+  assert.equal(await deleteFoodChat.isVisible(),true);
+  await deleteFoodChat.click();
+  await history.getByRole('button',{name:'确认删除',exact:true}).click();
+  await page.reload();
+  await chat.locator('[data-toggle-threads]').click();
+  await history.getByRole('button',{name:/^查库存和今日支出/}).waitFor();
+  assert.equal(await deleteFoodChat.count(),0);
+  assert.deepEqual(await demoMilk(),milk);
+  await history.getByRole('button',{name:'删除对话 查库存和今日支出',exact:true}).click();
+  await history.getByRole('button',{name:'确认删除',exact:true}).click();
+  await history.getByText('还没有对话记录').waitFor();
+  assert.equal(await chat.getByText('查到 3 种食品，今天已支出 12 元。',{exact:true}).count(),0);
+  assert.deepEqual(await demoMilk(),milk);
+  console.log('PASS two separately approved ledger reads and local deletion of active and inactive chats');
   await page.getByRole('link',{name:'健康',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#hero-goal').textContent.includes('kcal'));
   await page.getByRole('button',{name:'前一天'}).click();

@@ -35,12 +35,21 @@ export async function demoWorkspace(today){
  }
  const workspace={account,finance,readHealth:()=>readState(account),saveHealth:(next,expected)=>saveState(next,expected,account),
   readSkill:()=>finance.getItem('skill')??'',saveSkill:value=>finance.setItem('skill',value)};
- async function respond(input,{allowRead,continuation}={}){
+ async function respond(input,{allowRead,continuation=[]}={}){
+  const latest=continuation.at(-1);
   const text=input.text;
   const focus=inventoryWithMoves(await workspace.readHealth()).find(s=>text.includes(s.name)),name=focus?.name??'燕麦';
   const quantity=Number(text.match(/(\d+(?:\.\d+)?)\s*(?:g|克)/i)?.[1]??300);
   const propose=(reply,mode,result)=>({reply,proposal:{mode,result,date:null}});
-  const call=(scope,query='')=>({call:{args:{scope,query},item:{call_id:'demo'}}});
+  const call=(scope,query='')=>({call:{args:{scope,query},item:{call_id:'demo-'+scope}}});
+  if(text.includes('查库存和今日支出')){
+   if(allowRead&&!latest)return call('stock');
+   if(latest?.scope==='stock')return call('expenses');
+   const stock=continuation.find(step=>step.scope==='stock')?.summary.stock;
+   const expense=latest?.summary.expense;
+   if(stock&&expense!==undefined)return {reply:'查到 '+stock.length+' 种食品，今天已支出 '+expense+' 元。',proposal:null};
+   return {reply:'可开启本轮账本查询，逐项查看库存和今日支出。',proposal:null};
+  }
   const chineseDate=text.match(/(\d{1,2})月(\d{1,2})日/);
   const date=text.match(/\d{4}-\d{2}-\d{2}/)?.[0]??(chineseDate?
    input.date.slice(0,4)+'-'+chineseDate[1].padStart(2,'0')+'-'+chineseDate[2].padStart(2,'0'):
@@ -51,8 +60,8 @@ export async function demoWorkspace(today){
     result:{name,amount:quantity,unit:'g',meal:null,time:null}}};
   }
   if(date&&/吃了(?:什么|啥)|喝了什么|饮食记录|查.*饮食/.test(text)){
-   if(allowRead&&!continuation)return {call:{args:{scope:'foods',date,query:focus?.name??''},item:{call_id:'demo-foods'}}};
-   const rows=continuation?.summary.foods;
+   if(allowRead&&!latest)return {call:{args:{scope:'foods',date,query:focus?.name??''},item:{call_id:'demo-foods'}}};
+   const rows=latest?.summary.foods;
    return {reply:rows?.length?'记录里有'+rows.map(row=>row.name+' '+row.portion).join('、')+'。':
     rows?'这一天没有匹配的实际饮食记录。':'请开启本轮账本查询。',proposal:null};
   }
@@ -62,25 +71,25 @@ export async function demoWorkspace(today){
    return propose('金额已提取。可以核对日期、分类和预算选项。','finance',{note:'',entry:{type,amount,date:today,note:'演示收支',categoryId:type==='income'?'工资':'餐饮'}});
   }
   if(/盘点|补货/.test(text)){
-   if(allowRead&&!continuation)return call('stock',name);
+   if(allowRead&&!latest)return call('stock',name);
    return propose('可以核对数量，再应用到演示账本。','inventory',{operation:text.includes('补货')?'shopping':'count',name,quantity,unit:'g'});
   }
   if(/晚餐|搭配|规划/.test(text)){
-   if(allowRead&&!continuation)return call('meal');
-   const candidates=(continuation?.summary.stock??[{name:'鸡胸肉'},{name:'燕麦'}]).filter(row=>row.name!=='牛奶');
+   if(allowRead&&!latest)return call('meal');
+   const candidates=(latest?.summary.stock??[{name:'鸡胸肉'},{name:'燕麦'}]).filter(row=>row.name!=='牛奶');
    const items=candidates.map((s,i)=>({name:s.name,sku:null,action:'plan',amount:i===0?60:180,unit:'g',
     packageSize:null,packageUnit:null,basisAmount:100,basisUnit:'g',nutrients:{kcal:null,protein:null,carbs:null,fat:null,sodium:null},
     uncertainty:'演示搭配，使用本地食品营养基础计算。',weighing:null}));
    return propose('这里是一份可以调整的晚餐计划。','plan',{note:'计划可稍后转为实际摄入。',items});
   }
   if(/查.*库存/.test(text)){
-   if(allowRead&&!continuation)return call('stock',focus?.name??'');
-   const rows=continuation?.summary.stock;
+   if(allowRead&&!latest)return call('stock',focus?.name??'');
+   const rows=latest?.summary.stock;
    return {reply:rows?.length?rows.map(row=>row.name+' '+(row.qty??'数量未知')+' '+row.unit).join('，'):'可开启本轮账本查询，查看演示库存。',proposal:null};
   }
   if(/今天.*(?:花|收支)|查.*支出/.test(text)){
-   if(allowRead&&!continuation)return call('expenses');
-   const sum=continuation?.summary;
+   if(allowRead&&!latest)return call('expenses');
+   const sum=latest?.summary;
    return {reply:sum?'今天在演示账本记了 '+sum.count+' 笔，支出 '+sum.expense+' 元，收入 '+sum.income+' 元。':'可开启本轮账本查询，读取演示日汇总。',proposal:null};
   }
   return {reply:'演示支持盘点、补货、晚餐计划、记账和修改 Skill。可以选一项示例试试。',proposal:null};

@@ -22,12 +22,13 @@ const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
 const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]'),stop=$('[data-stop-request]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
 const historySearch=historyPanel.querySelector('input');
+const historyConfirmation=$('[data-delete-confirm]'),historyDelete=$('[data-delete-apply]');
 const readPanel=$('[data-read-preview]').closest('section'),share=$('[data-share-read]'),skip=$('[data-skip-read]');
 const consentPanel=$('#assistant-consent'),approve=$('[data-approve-send]'),cancelSend=$('[data-cancel-send]');
 const consentKey='airplane-ai-send-consent-v1';
 const skillForm=$('#assistant-skill form'),skillOutput=skillForm.querySelector('output');
 const keyPanel=$('#assistant-key-panel');
-let busy=false,saving=false,prepared=null,pending=null,activeRequest=null;
+let busy=false,saving=false,prepared=null,pending=null,activeRequest=null,deletingThread=null;
 let firstSend=!demo&&localStorage.getItem(consentKey)!=='yes';
 
 hydrateShell();
@@ -56,12 +57,38 @@ function revealKeySettings(){
 }
 function tell(text){status.textContent=text;}
 function report(err){tell(err.name==='TypeError'?'无法完成请求，请检查网络或本机存储':err.message);}
-async function requestReply(input,options){
- if(demo)return respond(input,options);
+async function requestReply(input,options,userText){
+ const sent=userText?messageNode('user',userText):null;
+ const answer=messageNode('assistant','');
+ answer.classList.add('streaming-reply');answer.hidden=true;answer.setAttribute('aria-live','off');
+ start.hidden=true;
+ if(sent)transcript.append(sent);
+ transcript.append(answer);thread.scrollTop=thread.scrollHeight;
+ const onReply=text=>{
+  const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
+  if(answer.hidden)tell(demo?'正在接收演示回复…':'正在接收 OpenAI 回复…');
+  answer.hidden=false;answer.textContent=text;
+  if(follow)thread.scrollTop=thread.scrollHeight;
+ };
+ const onTool=()=>tell('正在准备本机账本查询…');
  const controller=new AbortController();
  activeRequest=controller;stop.hidden=false;stop.disabled=false;
- try{return await respond(input,{...options,signal:controller.signal});}
- finally{activeRequest=null;stop.hidden=true;}
+ try{
+  const result=await respond(input,{...options,signal:controller.signal,onReply,onTool});
+  if(demo&&result.reply){
+   let text='';
+   for(const part of result.reply.match(/[\s\S]{1,3}/gu)??[]){
+    if(controller.signal.aborted)throw Error('已停止等待演示回复。');
+    text+=part;onReply(text);
+    await new Promise(resolve=>setTimeout(resolve,40));
+   }
+   if(controller.signal.aborted)throw Error('已停止等待演示回复。');
+  }
+  return result;
+ }finally{
+  sent?.remove();answer.remove();start.hidden=!!book.current?.messages.length;
+  activeRequest=null;stop.hidden=true;
+ }
 }
 stop.onclick=()=>{stop.disabled=true;activeRequest?.abort();};
 function updateContext(){
@@ -81,7 +108,7 @@ function syncThreads(){
  const query=historySearch.value.trim().toLowerCase();
  const rows=threads.filter(row=>row.title.toLowerCase().includes(query)).map(row=>{
   const li=document.createElement('li'),button=document.createElement('button'),name=document.createElement('strong');
-  button.type='button';name.textContent=row.title;button.append(name);
+  button.type='button';button.className='assistant-history-item';name.textContent=row.title;button.append(name);
   if(row.id===active?.id)button.setAttribute('aria-current','true');
   const last=new Date(row.updatedAt);
   if(Number.isFinite(last.getTime())){
@@ -93,7 +120,16 @@ function syncThreads(){
    try{book.select(row.id);openHistory(false);tell('');renderThread();historyButton.focus();}
    catch(err){report(err);}
   };
-  li.append(button);return li;
+  const remove=document.createElement('button');
+  remove.type='button';remove.className='assistant-history-delete';remove.textContent='删除';
+  remove.setAttribute('aria-label','删除对话 '+row.title);
+  remove.onclick=()=>{
+   if(busy||saving)return;
+   deletingThread=row.id;historyConfirmation.hidden=false;
+   $('[data-delete-label]').textContent='删除「'+row.title+'」这段对话？';
+   historyConfirmation.scrollIntoView({block:'nearest'});
+  };
+  li.append(button,remove);return li;
  });
  empty.textContent=query?'没有符合的对话':'还没有对话记录';
  empty.hidden=rows.length>0;
@@ -101,17 +137,31 @@ function syncThreads(){
 }
 function openHistory(open){
  historyPanel.hidden=!open;historyButton.setAttribute('aria-expanded',String(open));
- if(!open)historySearch.value='';
+ if(!open){historySearch.value='';clearHistoryConfirmation();}
  syncThreads();
 }
+function clearHistoryConfirmation(){deletingThread=null;historyConfirmation.hidden=true;}
+$('[data-delete-cancel]').onclick=clearHistoryConfirmation;
+historyDelete.onclick=()=>{
+ if(!deletingThread||busy||saving)return;
+ const active=book.current?.id===deletingThread;
+ try{
+  book.remove(deletingThread);clearHistoryConfirmation();
+  if(active)renderThread();else syncThreads();
+  historyButton.focus();tell('已删除这段对话。');
+ }catch(err){report(err);}
+};
 historyButton.onclick=()=>openHistory(historyPanel.hidden);
 historySearch.oninput=syncThreads;
 historyPanel.addEventListener('keydown',event=>{
  if(event.key==='Escape'){event.stopPropagation();openHistory(false);historyButton.focus();}
 });
-function bubble(role,text,source){
+function messageNode(role,text){
  const p=document.createElement('p');p.className='chat-bubble '+role;p.textContent=text;
- transcript.append(p);
+ return p;
+}
+function bubble(role,text,source){
+ transcript.append(messageNode(role,text));
  if(typeof source?.label==='string'&&typeof source.text==='string'){
   const details=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');
   details.className='chat-source';title.textContent=source.label;body.textContent=source.text;
@@ -135,6 +185,7 @@ function lock(){
  send.disabled=waiting;newChat.disabled=busy||saving;historyButton.disabled=busy||saving;
  for(const button of historyList.querySelectorAll('button'))button.disabled=busy||saving;
  historySearch.disabled=busy||saving;
+ historyDelete.disabled=busy||saving;
  composer.elements.text.disabled=waiting;
  composer.elements.image.disabled=waiting;
  composer.elements.allowRead.disabled=waiting;
@@ -256,21 +307,32 @@ function describeSummary(scope,summary){
  }
  return rows.join('\n');
 }
-async function sendMessage(input,{skill,allowRead}){
-  tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
-  const response=await requestReply(input,{skill,allowRead});
-  append('user',[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' '));
-  composer.elements.text.value='';resetPhoto();
-  clearReview();
-  if(response.call){
-   if(!allowRead)throw Error('本轮未允许账本查询');
+function querySource(steps){
+ if(!steps.length)return null;
+ const first=steps[0];
+ const label=steps.length>1?'查看本轮 '+steps.length+' 次查询的数据':
+  first.scope==='foods'?'查看本次饮食记录 · '+first.summary.foods.length+' 条':'查看本次查询数据';
+ return {label,text:steps.map(({scope,summary})=>describeSummary(scope,summary)).join('\n\n')};
+}
+async function showResponse(response,{input,options,steps}){
+ if(response.call){
+   if(!options.allowRead)throw Error('本轮未允许账本查询');
    const {args,item}=response.call,summary=await readLedger(workspace,args,input.date);
-   pending={input,skill,item,summary,scope:args.scope};
+   pending={input,options,steps,item,summary,scope:args.scope};
    $('[data-read-label]').textContent='助手请求了：'+readLabels[args.scope]+'。';
    $('[data-read-preview]').textContent=describeSummary(args.scope,summary);
    readPanel.hidden=false;thread.scrollTop=thread.scrollHeight;
    tell('核对本轮账本摘要后继续。');
-  }else await complete(response,input.date);
+ }else await complete(response,input.date,querySource(steps));
+}
+async function sendMessage(input,options){
+ tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
+ const userText=[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' ');
+ const response=await requestReply(input,options,userText);
+ append('user',userText);
+ composer.elements.text.value='';resetPhoto();
+ clearReview();
+ await showResponse(response,{input,options,steps:[]});
 }
 composer.onsubmit=async e=>{
  e.preventDefault();if(busy||saving||pending||prepared)return;
@@ -310,19 +372,20 @@ approve.onclick=async()=>{
 cancelSend.onclick=()=>{clearConsent();tell('');lock();composer.elements.text.focus();};
 share.onclick=async()=>{
  if(!pending||busy)return;
- const {input,skill,item,summary,scope}=pending;
+ const {input,options,item,summary,scope}=pending;
+ const steps=[...pending.steps,{item,summary,scope}];
  busy=true;lock();tell(demo?'正在生成演示回复…':'账本摘要已发送，正在等待 OpenAI 回复…');
  try{
-  const response=await requestReply(input,{skill,continuation:{item,summary}});
+  const response=await requestReply(input,{...options,continuation:steps});
   if(scope==='foods'){
    try{book.setFoodDate(summary.date);}catch{}
   }
-  const label=scope==='foods'?'查看本次饮食记录 · '+summary.foods.length+' 条':'查看本次查询数据';
-  await complete(response,input.date,{label,text:describeSummary(scope,summary)});
+  await showResponse(response,{input,options,steps});
  }
  catch(err){report(err);}
  finally{busy=false;lock();}
 };
 skip.onclick=()=>{
- clearRead();append('assistant','已取消本轮账本摘要发送。',false);tell('');lock();
+ const source=querySource(pending?.steps??[]);
+ clearRead();tell('');append('assistant','已取消发送这次账本摘要。',false,source);lock();
 };

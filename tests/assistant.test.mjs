@@ -1,4 +1,5 @@
 import {modelRequest,pendingLedgerRead} from '../ai/responses.mjs';
+import {readResponseStream,ResponseStreamError} from '../ai/stream.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validateAppState,inventoryWithMoves,dayIntake,energyForDay,cycleForDate} from '../health/core.mjs';
@@ -71,10 +72,52 @@ test('one-day food lookup sends every matching record and its full selected fiel
  const parsed=pendingLedgerRead({status:'completed',output:[call]});
  assert.deepEqual(parsed.args,{scope:'foods',date,query:'牛奶'});
  const input={mode:'chat',text:'查饮食',date,photo:null,history:[]};
- const request=modelRequest(input,{continuation:{item:parsed.item,summary}});
+ const request=modelRequest(input,{allowRead:true,continuation:[{item:parsed.item,summary}]});
  assert.deepEqual(JSON.parse(request.input.at(-1).output),summary);
  assert.ok(!Object.hasOwn(request,'max_output_tokens'));
  await assert.rejects(readLedger({readHealth:async()=>state},{...parsed.args,date:addDays(date,1)},date));
+});
+test('a second ledger read keeps both approved results in call order',()=>{
+ const input={mode:'chat',text:'查库存和支出',date,photo:null,history:[]};
+ const steps=[
+  {item:{type:'function_call',name:'read_ledger',call_id:'stock',arguments:'{"scope":"stock","query":"牛奶"}'},
+   summary:{stock:[{name:'牛奶',qty:750,unit:'g'}]}},
+  {item:{type:'function_call',name:'read_ledger',call_id:'expenses',arguments:'{"scope":"expenses","query":""}'},
+   summary:{date,expense:12,income:0,count:1}}
+ ];
+ const request=modelRequest(input,{allowRead:true,continuation:steps});
+ assert.equal(request.tool_choice,'auto');
+ assert.equal(request.parallel_tool_calls,false);
+ assert.deepEqual(request.input.slice(1),steps.flatMap(({item,summary})=>
+  [item,{type:'function_call_output',call_id:item.call_id,output:JSON.stringify(summary)}]));
+});
+test('stream decodes split UTF-8 and JSON escapes and reveals only reply text before completion',async()=>{
+ const encoder=new TextEncoder(),preview=[];
+ let stream;
+ const response={body:new ReadableStream({start(controller){stream=controller;}})};
+ const frame=event=>{
+  const bytes=encoder.encode('data: '+JSON.stringify(event)+'\r\n\r\n');
+  for(let i=0;i<bytes.length;i+=2)stream.enqueue(bytes.slice(i,i+2));
+ };
+ let showFirst;
+ const first=new Promise(resolve=>{showFirst=resolve;});
+ const completed=readResponseStream(response,{onReply:text=>{preview.push(text);showFirst(text);}});
+ const delta=delta=>frame({type:'response.output_text.delta',output_index:0,content_index:0,delta});
+ delta('{"re');
+ delta('ply":"先显示\\uD83');
+ assert.equal(await first,'先显示');
+ delta('D\\uDE00\\n\\"好了\\"","proposal":{"note":"候选内容"}}');
+ const final={status:'completed',output:[]};
+ frame({type:'response.completed',response:final});
+ stream.close();
+ assert.deepEqual(await completed,final);
+ assert.deepEqual(preview,['先显示','先显示😀\n"好了"']);
+});
+test('a stream without a terminal response rejects even after emitting partial reply text',async()=>{
+ const preview=[];
+ const response=new Response('data: '+JSON.stringify({type:'response.output_text.delta',delta:'{"reply":"半条回复'})+'\n\n');
+ await assert.rejects(readResponseStream(response,{onReply:text=>preview.push(text)}),ResponseStreamError);
+ assert.deepEqual(preview,['半条回复']);
 });
 test('inventory lookup preserves all matches and full names',async()=>{
  const state=newState(),description='原标签'.repeat(20);

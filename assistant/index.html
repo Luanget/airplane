@@ -62,6 +62,10 @@
             </label>
             <ul data-thread-list></ul>
             <p data-thread-empty hidden></p>
+            <div class="assistant-delete-confirmation" data-delete-confirm hidden>
+              <p data-delete-label></p>
+              <div class="chat-actions"><button type="button" class="secondary-button" data-delete-cancel>取消</button><button type="button" class="danger-button" data-delete-apply>确认删除</button></div>
+            </div>
           </section>
         </div>
         <div class="chat-thread">
@@ -70,6 +74,7 @@
             <p>可以用一句话记收支、吃了什么、买了什么或盘点食材。</p>
             <div class="assistant-examples" aria-label="示例">
               <button type="button" class="secondary-button" data-example="昨天吃了什么" data-use-ledger>查昨天饮食</button>
+              <button type="button" class="secondary-button" data-example="查库存和今日支出" data-use-ledger>查库存和支出</button>
               <button type="button" class="secondary-button" data-example="查一下燕麦，然后盘点为 300 g" data-use-ledger>盘点库存</button>
               <button type="button" class="secondary-button" data-example="用库存安排晚餐" data-use-ledger>安排晚餐</button>
               <button type="button" class="secondary-button" data-example="午餐花了 28 元">记一笔账</button>
@@ -90,7 +95,7 @@
             <span data-attachment></span><button type="button" class="text-button" data-remove-photo hidden>移除照片</button>
             <button type="submit" class="primary-button">发送</button>
           </div>
-          <label class="assistant-query"><input type="checkbox" name="allowRead"> 允许本轮查询账本<span>最多一次，确认摘要后才发送</span></label>
+          <label class="assistant-query"><input type="checkbox" name="allowRead"> 允许本轮查询账本<span>每次核对摘要后才发送</span></label>
           <div class="assistant-request-status"><output data-status aria-live="polite"></output><button type="button" class="text-button" data-stop-request hidden>停止等待</button></div>
           <section class="assistant-send-confirmation" id="assistant-consent" aria-labelledby="assistant-consent-title" hidden>
             <h3 id="assistant-consent-title">首次发送给 OpenAI</h3>

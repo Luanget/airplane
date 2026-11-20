@@ -1,4 +1,5 @@
 import {MODEL,OPENAI_URL,modelRequest,parseResult,pendingLedgerRead} from './responses.mjs';
+import {readResponseStream,ResponseStreamError} from './stream.mjs';
 import {readKey,importKey,forgetKey} from './keys.mjs';
 import {localDate} from '../calendar.mjs';
 
@@ -63,28 +64,40 @@ function apiError(response,body){
  return Error(reason+'（HTTP '+response.status+(/^[A-Za-z0-9_-]{1,100}$/.test(id)?'，请求 ID '+id:'')+'）。');
 }
 
-export async function recognize(input,{signal,...options}={}) {
+export async function recognize(input,{signal,onReply,onTool,...options}={}) {
  if(!navigator.onLine)throw Error('目前离线，手动录入仍可用');
  const key=await readDeviceKey();
  if(!key)throw Error('请先点「API Key」导入自己的密钥');
- const request=modelRequest(input,options);
+ const request={...modelRequest(input,options),stream:true};
  const controller=new AbortController(),cancel=()=>controller.abort();
  if(signal?.aborted)cancel();
  signal?.addEventListener('abort',cancel,{once:true});
- let timedOut=false;
- const timeout=setTimeout(()=>{timedOut=true;cancel();},60000);
+ let timedOut=false,receivedEvent=false,timeout;
+ const waitForData=()=>{
+  clearTimeout(timeout);
+  timeout=setTimeout(()=>{timedOut=true;cancel();},60000);
+ };
+ waitForData();
  let response,body;
  try{
   response=await fetch(OPENAI_URL,{method:'POST',cache:'no-store',credentials:'omit',
    referrerPolicy:'no-referrer',redirect:'error',signal:controller.signal,
-   headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(request)});
-  body=await response.json().catch(err=>{
-   if(response.ok||controller.signal.aborted)throw err;
-   return null;
-  });
+   headers:{Authorization:'Bearer '+key,'Content-Type':'application/json',Accept:'text/event-stream'},body:JSON.stringify(request)});
+  if(response.ok&&response.headers.get('content-type')?.includes('text/event-stream')){
+   body=await readResponseStream(response,{onReply,onTool,onActivity:()=>{
+    receivedEvent=true;waitForData();
+   }});
+  }else{
+   body=await response.json().catch(err=>{
+    if(response.ok||controller.signal.aborted)throw err;
+    return null;
+   });
+  }
  }catch(err){
-  if(timedOut)throw Error('等待 OpenAI 响应超时。原消息仍在，可以重试。');
+  if(timedOut)throw Error(receivedEvent?'OpenAI 回复中断，60 秒没有收到新内容。原消息仍在，可以重试。':
+   '等待 OpenAI 开始回复超时。原消息仍在，可以重试。');
   if(signal?.aborted)throw Error('已停止等待 OpenAI 回复。');
+  if(err instanceof ResponseStreamError)throw err;
   if(err instanceof SyntaxError)throw Error('收到的 OpenAI 响应格式不正确，请重试。');
   throw Error('浏览器未能读取 OpenAI 响应。请检查当前网络能否访问 api.openai.com，并核对 API Key。');
  }finally{
@@ -96,7 +109,7 @@ export async function recognize(input,{signal,...options}={}) {
  try{
   const call=pendingLedgerRead(body);
   if(call){
-   if(!options.allowRead||options.continuation)throw Error();
+   if(!options.allowRead)throw Error();
    return {call};
   }
   return parseResult(body,input);
