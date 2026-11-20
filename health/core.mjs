@@ -266,7 +266,7 @@ export function addFood(state,fields,id) {
    const cents=parts.some(p=>p.costCents===null)?null:parts.reduce((sum,p)=>sum+p.costCents,0);
    entry.cost=explicitCost??(cents===null?null:cents/100);
    for(const part of parts)state.local.stockMoves.push({id:makeId('stock'),foodId,delta:-part.qty,batchId:part.batchId,
-     date,linkedFoodId:entry.id,reason:'实际摄入',costCents:part.costCents,createdAt});
+     date,...(entry.time?{time:entry.time}:{}),linkedFoodId:entry.id,reason:'实际摄入',costCents:part.costCents,createdAt});
    affected.add(foodId);
   }
   for(const affectedId of affected)assertBalances(state,affectedId);
@@ -295,7 +295,7 @@ export function deleteEvent(state,key,id) {
  if(state.legacy[key].some(e=>e.id===id))saveLegacyEdit(state,key,id,null);
  else state.local[key]=state.local[key].filter(e=>e.id!==id);
 }
-export function localStockChange(state,{foodId,delta,date,reason,batchId,count=false}){
+export function localStockChange(state,{foodId,delta,date,time,reason,batchId,count=false}){
  const item=inventoryWithMoves(state).find(x=>x.id===foodId);
  const value=numeric(delta);
  if(!item||!validDate(date)||value===null || count&&value<0)throw Error('请检查库存变更字段');
@@ -306,7 +306,9 @@ export function localStockChange(state,{foodId,delta,date,reason,batchId,count=f
  if(change===0&&!opening)throw Error('库存数量没有变化');
  const parts=change<0?allocateStock(state,foodId,-change,batchId,date).map(p=>({delta:-p.qty,batchId:p.batchId,costCents:p.costCents})): [{delta:change}];
  const actionId=makeId('movement');
- const moves=parts.map(p=>({...p,id:makeId('stock'),actionId,foodId,date,opening,reason:reason||(count?'盘点':'库存调整'),createdAt:new Date().toISOString()}));
+ const clock=normalizeClock(time);
+ const moves=parts.map(p=>({...p,id:makeId('stock'),actionId,foodId,date,...(clock?{time:clock}:{}),opening,
+  reason:reason||(count?'盘点':'库存调整'),createdAt:new Date().toISOString()}));
  state.local.stockMoves.push(...moves);
  try {assertBalances(state,foodId);}catch(err){state.local.stockMoves.splice(-moves.length);throw err;}
  return moves[0];

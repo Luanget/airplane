@@ -15,7 +15,8 @@ export function cents(value) {
 export function recordPurchase(state,order,transaction) {
  const {id,date,items,totalCents,financeId=null,note='',time}=order;
  const all=state.local.purchases??=[];
- const saved={id,date,items,totalCents,financeId,note,...(normalizeClock(time)?{time:normalizeClock(time)}:{})};
+ const clock=normalizeClock(time);
+ const saved={id,date,items,totalCents,financeId,note,...(clock?{time:clock}:{})};
  const existing=all.find(o=>o.id===id);
  if(existing) {
   if(JSON.stringify(existing)!==JSON.stringify(saved))throw Error('该订单已保存，请打开已有采购');
@@ -25,7 +26,7 @@ export function recordPurchase(state,order,transaction) {
  if(financeId&&(!transaction || transaction.id!==financeId || transaction.type!=='expense' || cents(transaction.amount)!==totalCents))
   throw Error('关联支出与订单总额不符');
  if(financeId&&purchaseForTransaction(state,financeId))throw Error('这笔支出已关联采购');
- items.forEach((r,i)=>addBatch(state,{...r,id:orderBatchId(saved,r,i),date,reason:'订单采购'}));
+ items.forEach((r,i)=>addBatch(state,{...r,id:orderBatchId(saved,r,i),date,time:clock,reason:'订单采购'}));
  all.push(saved);
  return saved;
 }
@@ -119,18 +120,20 @@ export function revisePurchase(current,id,fields) {
   const revised=mapped.get(batchId);
   if(!revised||revised.foodId!==batch.foodId){
    removeUnusedTree(next,batchId);
-   if(revised)addBatch(next,{...revised,id:batchId,date:updated.date,reason:'采购更正'});
+   if(revised)addBatch(next,{...revised,id:batchId,date:updated.date,time:updated.time,reason:'采购更正'});
    continue;
   }
   const usage=usageOf(next,batchId);
   if(usage.some(m=>m.date<updated.date))throw Error('采购日期晚于已有的消耗或分装日期');
   Object.assign(batch,{date:updated.date,quantity:revised.quantity,costCents:revised.costCents,expires:revised.expires});
   Object.assign(receipt,{date:updated.date,delta:revised.quantity});
+  if(updated.time)receipt.time=updated.time;
+  else delete receipt.time;
   recostBatch(next,batch,costMeals);
  }
  for(const row of items){
   changedFoods.add(row.foodId);
-  if(!originals.has(row.batchId))addBatch(next,{...row,id:row.batchId,date:updated.date,reason:'采购更正'});
+  if(!originals.has(row.batchId))addBatch(next,{...row,id:row.batchId,date:updated.date,time:updated.time,reason:'采购更正'});
  }
  for(const foodId of changedFoods)assertBalances(next,foodId);
  for(const meal of linkedFoods(next)){

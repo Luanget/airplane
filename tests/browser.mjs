@@ -31,11 +31,7 @@ try {
   const page=await ctx.newPage();
   page.setDefaultTimeout(10000);
   const errors=[]; page.on('pageerror',err=>errors.push(String(err)));
-  let rejectConsent=false;
-  page.on('dialog',dialog=>{
-    if(rejectConsent&&dialog.message().includes('给 OpenAI')){rejectConsent=false;return dialog.dismiss();}
-    return dialog.accept();
-  });
+  page.on('dialog',dialog=>dialog.accept());
   await page.goto(base);
   await page.locator('[data-action="budget"]').first().click();
   await page.locator('#budgetInput').fill('1234');
@@ -72,9 +68,15 @@ try {
 
   await ctx.setOffline(true);
   await page.goto(base+'health/?test=offline');
+  assert.equal(await page.getByText('去导入',{exact:true}).count(),0);
   await page.locator('#health-settings').click();
   const synthetic={tables:{food_events:[],weight_events:[],food_inventory:[{'食品ID':'fixture','名称':'合成库存','库存值':5,'库存单位':'包','标准份量':'每包','kcal':100}]}};
-  await page.locator('#import-file').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(synthetic))});
+  const importFile={name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(synthetic))};
+  await page.locator('#import-file').setInputFiles(importFile);
+  await page.getByRole('button',{name:'取消导入'}).click();
+  await page.locator('#import-preview').waitFor({state:'hidden'});
+  await page.locator('#import-file').setInputFiles(importFile);
+  await page.getByRole('button',{name:'确认导入'}).click();
   await page.locator('#health-settings-sheet').waitFor({state:'hidden'});
   await page.locator('#health-settings').click();
   const revision=()=>page.evaluate(async()=> (await (await import('./storage.mjs')).readState()).revision);
@@ -83,7 +85,11 @@ try {
   await page.locator('#toast').getByText('这份主账已导入').waitFor();
   assert.equal(await revision(),importedRevision);
   await page.locator('#health-settings-sheet [data-sheet-close]').click();
-  await page.locator('[data-tab="record"]').click();
+  assert.equal(await page.locator('.tabbar button').count(),3);
+  await page.getByRole('link',{name:'体重趋势',exact:true}).click();
+  await page.getByRole('heading',{name:'体重趋势',exact:true}).waitFor();
+  await page.getByRole('link',{name:'返回首页',exact:true}).click();
+  await page.locator('#local-events').waitFor();
   await page.locator('#add-health').click();
   const manual=page.locator('#food-form');
   await manual.locator('[name=foodId]').selectOption('fixture');
@@ -95,7 +101,9 @@ try {
     return inventoryWithMoves(await readState())[0].qty;
   });
   assert.equal(await quantity(),5);
-  await page.locator('#local-events').getByRole('button',{name:'编辑'}).click();
+  await page.locator('#local-events').getByRole('button',{name:/合成库存/}).click();
+  await page.getByRole('button',{name:'删除这条记录'}).click();
+  await page.locator('#confirm-delete-health').getByRole('button',{name:'取消',exact:true}).click();
   await manual.locator('[name=status]').selectOption('actual');
   await manual.locator('[type=submit]').click();
   await page.locator('#toast').getByText('饮食已保存').waitFor();
@@ -112,6 +120,7 @@ try {
   await page.locator('#restore-file').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from('{"appType":"airplane-health-v1"}')});
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('导入失败'));
   await page.locator('#restore-file').setInputFiles({name:'valid.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(healthCopy))});
+  await page.getByRole('button',{name:'确认导入'}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('恢复成功'));
   assert.equal(await ledger(),before);
   const cacheNames=await page.evaluate(()=>caches.keys());
@@ -163,7 +172,8 @@ try {
   const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
 
   const calls=[],testKey='sk-fixture-browser-only';
-  const aiIcon=await page.locator('[data-open-ai] svg').innerHTML();
+  const aiIcon=await page.locator('.topbar-actions [data-open-ai] svg').innerHTML();
+  assert.equal(await page.locator('.tabbar [data-open-ai]').count(),0);
   await ctx.route('https://api.openai.com/v1/responses',async route=>{
     const headers={'Access-Control-Allow-Origin':new URL(base).origin,'Access-Control-Allow-Headers':'authorization,content-type','Access-Control-Allow-Methods':'POST'};
     if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
@@ -203,14 +213,19 @@ try {
     await form.getByRole('button',{name:'发送',exact:true}).click();
   }
   await page.locator('[data-open-ai]').click();
+  assert.equal(await access.isVisible(),false);
+  await chat.getByText('API Key',{exact:true}).click();
   await access.getByText('请导入 OpenAI API Key').waitFor();
   assert.equal(await chat.isVisible(),true);assert.equal(calls.length,0);
   await access.locator('[type=file]').setInputFiles({name:'fixture.txt',mimeType:'text/plain',buffer:Buffer.from(testKey)});
-  await access.locator('[type=submit]').click();await chat.waitFor();
-  rejectConsent=true;
+  await access.locator('[type=submit]').click();
+  await access.getByText('已保存 Key',{exact:true}).waitFor();
   await say('合成餐点');
+  await chat.getByRole('button',{name:'返回编辑'}).click();
   assert.equal(calls.length,0);
-  await say('合成餐点');await review.waitFor();
+  await say('合成餐点');
+  await chat.getByRole('button',{name:'确认发送'}).click();
+  await review.waitFor();
   assert.equal(calls.length,1);
   assert.deepEqual(calls[0].history,[]);
   assert.equal(await review.getByLabel('匹配食品').inputValue(),'');
@@ -219,6 +234,8 @@ try {
   await review.getByLabel('数量',{exact:true}).fill('90');
   await review.getByRole('button',{name:'确认保存'}).click();
   await chat.getByText('记录已保存。',{exact:true}).waitFor();
+  const food=await page.evaluate(async()=>(await (await import('../health/storage.mjs')).readState()).local.foods.at(-1));
+  assert.match(food.time,/^\d{2}:\d{2}$/);
   await say('用我描述的合成蔬菜规划一餐');await review.waitFor();
   assert.equal(calls[1].history[0].text,'合成餐点');
   assert.equal(await review.getByRole('combobox',{name:/^动作/}).inputValue(),'plan');
@@ -242,7 +259,9 @@ try {
   assert.equal(await ledger(),before);
   await review.getByRole('button',{name:'确认记账'}).click();
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
-  assert.equal(JSON.parse(await ledger()).transactions.at(-1).amount,28);
+  const recordedExpense=JSON.parse(await ledger()).transactions.at(-1);
+  assert.equal(recordedExpense.amount,28);
+  assert.match(recordedExpense.time,/^\d{2}:\d{2}$/);
   assert.ok(calls.at(-1).history.some(turn=>turn.text==='金额是多少？'));
   assert.equal(calls.at(-1).photo,undefined);
   await page.getByRole('link',{name:'健康',exact:true}).click();

@@ -29,6 +29,7 @@
         </div>
       </div>
       <div class="topbar-actions">
+        <a class="icon-button" href="./assistant/" data-open-ai data-shell-icon="sparkles" aria-label="AI 助手" title="AI 助手"></a>
         <a class="icon-button" data-module-link data-shell-icon="health" href="./health/" aria-label="健康" title="健康"></a>
         <button class="icon-button" id="settingsButton" aria-label="打开设置" data-shell-icon="settings"></button>
       </div>
@@ -36,11 +37,11 @@
 
     <main id="app" aria-live="polite"></main>
 
-    <nav class="tabbar tabbar-with-ai" aria-label="主导航">
+    <nav class="tabbar tabbar-grouped" aria-label="主导航">
       <div class="tab-group"><button data-tab="home" class="tab active"><span data-shell-icon="home"></span><small>首页</small></button></div>
       <button id="addButton" class="add-button" aria-label="记一笔" data-shell-icon="plus"></button>
       <div class="tab-group"><button data-tab="stats" class="tab"><span data-shell-icon="chart"></span><small>统计</small></button>
-      <a href="./assistant/" data-open-ai class="tab ai-tab" aria-label="AI 助手"><span data-shell-icon="sparkles"></span><small>AI</small></a></div>
+      </div>
     </nav>
   </div>
 

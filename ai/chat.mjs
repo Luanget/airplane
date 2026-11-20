@@ -23,10 +23,13 @@ const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
 const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
 const historySearch=historyPanel.querySelector('input');
-const readPanel=$('.assistant-read'),share=$('[data-share-read]'),skip=$('[data-skip-read]');
+const readPanel=$('[data-read-preview]').closest('section'),share=$('[data-share-read]'),skip=$('[data-skip-read]');
+const consentPanel=$('#assistant-consent'),approve=$('[data-approve-send]'),cancelSend=$('[data-cancel-send]');
+const consentKey='airplane-ai-send-consent-v1';
 const skillForm=$('#assistant-skill form'),skillOutput=skillForm.querySelector('output');
 const keyPanel=$('#assistant-key-panel');
-let busy=false,saving=false,firstSend=true,pending=null;
+let busy=false,saving=false,prepared=null,pending=null;
+let firstSend=!demo&&localStorage.getItem(consentKey)!=='yes';
 
 hydrateShell();
 if(demo){
@@ -41,10 +44,16 @@ if(demo){
  keyPanel.hidden=false;
  const keyStatus=mountKeyForm($('#assistant-key'));
  try{
-  if(!await readKey()){keyPanel.open=true;keyStatus.textContent='请导入 OpenAI API Key';}
- }catch{keyPanel.open=true;keyStatus.textContent='请重新导入 API Key';}
+  if(!await readKey())keyStatus.textContent='请导入 OpenAI API Key';
+ }catch{keyStatus.textContent='请重新导入 API Key';}
+ const openKeySettings=()=>{if(location.hash==='#api-key')revealKeySettings();};
+ window.addEventListener('hashchange',openKeySettings);
+ openKeySettings();
 }
 
+function revealKeySettings(){
+ keyPanel.open=true;keyPanel.scrollIntoView({block:'nearest'});
+}
 function tell(text){status.textContent=text;}
 function report(err){tell(err.name==='TypeError'?'无法完成请求，请检查网络或本机存储':err.message);}
 function updateContext(){
@@ -103,11 +112,12 @@ function append(role,text,carry=true){
 }
 function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;}
 function clearRead(){pending=null;readPanel.hidden=true;$('[data-read-preview]').textContent='';}
+function clearConsent(){prepared=null;consentPanel.hidden=true;}
 function resetPhoto(){
  composer.elements.image.value='';$('[data-attachment]').textContent='';clearPhoto.hidden=true;
 }
 function lock(){
- const waiting=busy||saving||!!pending;
+ const waiting=busy||saving||!!pending||!!prepared;
  send.disabled=waiting;newChat.disabled=busy||saving;historyButton.disabled=busy||saving;
  for(const button of historyList.querySelectorAll('button'))button.disabled=busy||saving;
  historySearch.disabled=busy||saving;
@@ -115,7 +125,7 @@ function lock(){
  composer.elements.image.disabled=waiting;
  composer.elements.allowRead.disabled=waiting;
  clearPhoto.disabled=waiting;
- share.disabled=busy;skip.disabled=busy;
+ share.disabled=busy;skip.disabled=busy;approve.disabled=busy;cancelSend.disabled=busy;
  for(const b of review.querySelectorAll('button'))b.disabled=waiting;
  for(const b of $('.assistant-examples').querySelectorAll('button'))b.disabled=waiting;
 }
@@ -124,7 +134,7 @@ function renderThread(){
  transcript.replaceChildren();
  start.hidden=messages.length>0;
  for(const m of messages)if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text);
- clearRead();clearReview();composer.elements.text.value='';resetPhoto();syncThreads();updateContext();lock();
+ clearConsent();clearRead();clearReview();composer.elements.text.value='';resetPhoto();syncThreads();updateContext();lock();
 }
 function refreshSkill(){skillForm.elements.skill.value=workspace.readSkill().slice(0,320);updateContext();}
 $('#assistant-skill pre').textContent=chatInstructions;
@@ -197,7 +207,7 @@ async function makeReview(proposal,today){
  const out=document.createElement('output');out.setAttribute('role','status');
  actions.append(discard,apply);review.append(actions,out);
  review.onsubmit=async e=>{
-  e.preventDefault();if(saving||busy||pending)return;
+  e.preventDefault();if(saving||busy||pending||prepared)return;
   saving=true;lock();out.textContent='';
   try{const message=await confirm();clearReview();append('assistant',message,false);}
   catch(err){out.textContent=err.message;}
@@ -227,21 +237,10 @@ function describeSummary(scope,summary){
  }
  return rows.join('\n');
 }
-composer.onsubmit=async e=>{
- e.preventDefault();if(busy||saving||pending)return;
- const text=composer.elements.text.value.trim(),file=composer.elements.image.files[0];
- if(!text&&!file){tell('请输入消息或添加照片');return;}
- busy=true;lock();tell('');
- try{
-  if(!demo&&!await readKey()){keyPanel.open=true;keyPanel.scrollIntoView({block:'nearest'});tell('请先导入 API Key');return;}
-  const photo=file?await jpeg(file):null,{turns,skill}=updateContext();
-  const input={mode:'chat',text,photo,date:localDate(),history:turns};
-  const allowRead=composer.elements.allowRead.checked&&!photo;
-  if(!validInput(input))throw Error('请检查消息或照片');
-  if(!demo&&firstSend&&!window.confirm('发送这条消息、手选照片、当天日期、Skill 和近期对话给 OpenAI？'))return;
-  firstSend=false;tell('正在回复…');
+async function sendMessage(input,{skill,allowRead}){
+  tell('正在回复…');
   const response=await respond(input,{skill,allowRead});
-  append('user',[text,photo?'（附一张照片）':''].filter(Boolean).join(' '));
+  append('user',[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' '));
   composer.elements.text.value='';resetPhoto();
   clearReview();
   if(response.call){
@@ -253,9 +252,38 @@ composer.onsubmit=async e=>{
    readPanel.hidden=false;thread.scrollTop=thread.scrollHeight;
    tell('核对本轮账本摘要后继续。');
   }else await complete(response,input.date);
+}
+composer.onsubmit=async e=>{
+ e.preventDefault();if(busy||saving||pending||prepared)return;
+ const text=composer.elements.text.value.trim(),file=composer.elements.image.files[0];
+ if(!text&&!file){tell('请输入消息或添加照片');return;}
+ busy=true;lock();tell('');
+ try{
+  if(!demo&&!await readKey()){revealKeySettings();tell('请先导入 API Key');return;}
+  const photo=file?await jpeg(file):null,{turns,skill}=updateContext();
+  const input={mode:'chat',text,photo,date:localDate(),history:turns};
+  const options={skill,allowRead:composer.elements.allowRead.checked&&!photo};
+  if(!validInput(input))throw Error('请检查消息或照片');
+  if(firstSend){
+   prepared={input,options};
+   consentPanel.hidden=false;thread.scrollTop=thread.scrollHeight;
+   return;
+  }
+  await sendMessage(input,options);
  }catch(err){report(err);}
  finally{busy=false;lock();}
 };
+approve.onclick=async()=>{
+ if(!prepared||busy)return;
+ const {input,options}=prepared;
+ busy=true;clearConsent();lock();
+ firstSend=false;
+ try{localStorage.setItem(consentKey,'yes');}catch{}
+ try{await sendMessage(input,options);}
+ catch(err){report(err);}
+ finally{busy=false;lock();}
+};
+cancelSend.onclick=()=>{clearConsent();lock();composer.elements.text.focus();};
 share.onclick=async()=>{
  if(!pending||busy)return;
  const {input,skill,item,summary}=pending;

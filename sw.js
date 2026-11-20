@@ -1,4 +1,4 @@
-const SW_VERSION = '46';
+const SW_VERSION = '47';
 const scope = self.registration.scope;
 const prefix = 'airplane-shell:' + new URL(scope).pathname + ':';
 const CACHE = prefix + SW_VERSION;
@@ -32,6 +32,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   url.search = '';
+  url.hash = '';
   if (e.request.mode === 'navigate' && [scope, new URL('./health/',scope).href, new URL('./assistant/',scope).href].includes(url.href))
     url.pathname += 'index.html';
   if (!assets.has(url.href)) return;

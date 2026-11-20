@@ -5,17 +5,19 @@ import {attachCombinedBackup,combinedBackup} from './backup.mjs';
 import {addBatch,convertCookingWeight,measuredGrams,saveSku,splitBatch,stockAlerts} from './inventory.mjs';
 import {units} from './contract.mjs';
 import {manualStockQty,basis} from './candidates.mjs';
+import {shellGlyphs} from '../shell.mjs';
 import {checkForAppUpdate} from '../updates.mjs';
 import {newState,normalizeLedger,validateAppState,APP_SCHEMA,numeric,round,zero,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,addDays} from './core.mjs';
 import {readState,saveState,exportState} from './storage.mjs';
 const $=id=>document.getElementById(id);
 const E=s=>String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const fmt=(v,d=0)=> v===null||v===undefined?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:d,minimumFractionDigits:d});
-let state=newState(), selectedDate=dateNow(),tab='overview',toastHandle;
+let state=newState(), selectedDate=dateNow(),tab='overview',historyDayOnly=false,toastHandle;
 const editing={};
 const dirtyEntries=new Set();
 let activeEntryType='food';
 let updatePurchases=()=>{},updateShopping=()=>{};
+let importPreview=null,importVersion=0;
 const settingKeys=['calorieTarget','baselineTdee','cycleTarget','cycleDays','cycleAnchor','proteinMin','proteinMax','fatMin','sodiumTarget'];
 function toast(message){
  const t=$('toast'),sheet=Array.from(document.querySelectorAll('.health-sheet[open]')).at(-1);
@@ -24,9 +26,10 @@ function toast(message){
 }
 function text(id,value){$(id).textContent=String(value);}
 function switchTab(next){
+ if(next!=='trends'&&location.hash==='#trends')history.replaceState(null,'',location.pathname+location.search);
  tab=next;
  document.querySelectorAll('[data-tab]').forEach(x=>{
-  const current=x.dataset.tab===next;
+  const current=x.dataset.tab===next||next==='trends'&&x.dataset.tab==='overview';
   x.classList.toggle('active',current);
   if(current)x.setAttribute('aria-current','page');else x.removeAttribute('aria-current');
  });
@@ -35,7 +38,6 @@ function switchTab(next){
 }
 function render(){
  if(tab==='overview')renderOverview();
- if(tab==='record')renderRecord();
  if(tab==='inventory'){updatePurchases();updateShopping();renderInventory();}
  if(tab==='trends')renderTrends();
  if($('health-settings-sheet').open)renderSettings();
@@ -48,6 +50,14 @@ function selectEntry(type){
   b.classList.toggle('active',selected);b.setAttribute('aria-pressed',String(selected));
  });
  document.querySelectorAll('[data-entry-panel]').forEach(panel=>panel.hidden=panel.dataset.entryPanel!==type);
+ syncEntryMode();
+}
+function syncEntryMode(){
+ const editingRow=!!editing[activeEntryType];
+ text('health-entry-title',editingRow?'编辑记录':'记一笔');
+ $('delete-health-entry').hidden=!editingRow;
+ $('confirm-delete-health').hidden=true;
+ $('meal-templates').hidden=!!editing.food||!(state.local.templates?.length);
 }
 function openEntry(){
  for(const type of Object.keys(historyTypes)){
@@ -60,13 +70,13 @@ function openEntry(){
  selectEntry(activeEntryType);syncCalendarFields($('health-entry'));$('health-entry').showModal();
 }
 function openSettings(){
+ $('template-settings').elements.date.value=selectedDate;
  renderSettings();syncCalendarFields($('health-settings-sheet'));$('health-settings-sheet').showModal();
 }
 function progress(id,val){$(id).style.width=`${Math.max(0,Math.min(100,Number(val)||0))}%`;}
 function renderOverview(){
  const today=dateNow(),intake=dayIntake(state,selectedDate),cals=intake.totals.kcal,known=intake.reported;
  const goal=state.settings.calorieTarget,energy=energyForDay(state,selectedDate,today);
- $('welcome').hidden=!!state.importInfo||state.local.foods.length>0||state.local.weights.length>0;
  $('report-date').value=selectedDate;
  text('today-status',selectedDate<today?(energy.closed?'已结算':known?'数据待补':'缺少记录'):selectedDate===today?'当天待结算':'未来日期');
  text('hero-calories',known?fmt(cals,0):'—'); text('hero-goal',`目标 ${fmt(goal)} kcal`);
@@ -77,13 +87,10 @@ function renderOverview(){
  const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,2)} kg`:'—');text('weight-date',weights.last?displayDay(weights.last.date):'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,2)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>0?'+':''}${fmt(weights.delta,2)} kg`:'需至少8次有效晨重');renderWeightChart(weights.points.slice(-14));
  text('cycle-title',state.settings.cycleDays===6?'六天减脂周期':state.settings.cycleDays+' 天减脂周期');
  const cycle=cycleForDate(state,selectedDate,today);text('cycle-range',`${displayDay(cycle.start)} — ${displayDay(cycle.end)} · ${cycle.closedDays}/${cycle.days}天已封账`);text('cycle-deficit',`${fmt(cycle.deficit)} kcal`);progress('cycle-progress',cycle.progress);text('cycle-pct',`目标完成 ${fmt(cycle.progress,1)}% / ${fmt(cycle.goal)} kcal`);text('cycle-equivalent',`理论脂肪当量 ${fmt(cycle.fatEquivalent,3)} kg`);text('cycle-note',cycle.unreported?`有 ${cycle.unreported} 天缺少有效进食记录，未按零摄入推算；消耗和外食热量均为估算。`:'已过日期根据现有记录自动封账。可补报更正，估算并不等于实测。');
- const entries=foodsForDay(state,selectedDate);const list=entries.slice(-12);
- $('day-food-list').innerHTML=list.length?list.map(e=>`<div class="event-row"><div class="event-main"><strong>${E(e.name)}</strong><small>${E(e.meal||'')} · ${E(e.portion||'')}</small></div><span class="event-value">${fmt(e.nutrition?.kcal)} kcal</span></div>`).join(''):'<div class="event-empty">这一天没有已确认的食品流水</div>';
- const ac=events(state,'activities').filter(a=>a.date===selectedDate);
- $('day-activity-list').innerHTML=ac.length?ac.map(a=>`<div class="event-row"><div class="event-main"><strong>${E(a.name)}</strong><small>${a.km===null?'':`${fmt(a.km,2)} km · `}${E(a.includedInBase?'包含在日常基线':'专项运动')}</small></div><span class="event-value">${a.kcal===null?'—':`${fmt(a.kcal)} kcal`}</span></div>`).join(''):'';
+ renderTimeline();
 }
-function renderWeightChart(points){
- const svg=$('weight-chart');if(!points.length){svg.innerHTML='<text x="25" y="95" fill="var(--muted)" font-size="14">暂无有效晨重数据</text>';return;}
+function renderWeightChart(points,svg=$('weight-chart')){
+ if(!points.length){svg.innerHTML='<text x="270" y="94" text-anchor="middle" fill="var(--muted)" font-size="16">暂无有效晨重记录</text>';return;}
  const values=points.map(p=>p.kg),min=Math.floor(Math.min(...values)*2)/2-0.5,max=Math.ceil(Math.max(...values)*2)/2+0.5;
  const left=45,right=517,top=20,bottom=154,y=v=>bottom-(v-min)/(max-min)*(bottom-top),x=i=>left+((points.length===1?0.5:i/(points.length-1))*(right-left));
  const path=points.map((p,i)=>`${i?'L':'M'} ${x(i).toFixed(1)} ${y(p.kg).toFixed(1)}`).join(' ');
@@ -94,17 +101,40 @@ function renderWeightChart(points){
 }
 function setDateDefaults(){document.querySelectorAll('form input[name=date]').forEach(el=>{if(!el.value)el.value=dateNow();});}
 const historyTypes={food:'foods',weight:'weights',activity:'activities'};
-function renderRecord(){
- setDateDefaults();
- const date=$('history-date').value;
+function renderTimeline(){
+ const month=selectedDate.slice(0,7);
+ const matchesDate=date=>historyDayOnly?date===selectedDate:
+  String(date??'').startsWith(month)||!validDate(date)&&month===dateNow().slice(0,7);
  const entries=Object.entries(historyTypes).flatMap(([type,key])=>events(state,key)
-  .filter(e=>!date||e.date===date).map(e=>({...e,type}))).sort((a,b)=>b.date.localeCompare(a.date) || String(b.createdAt??'').localeCompare(String(a.createdAt??'')));
- $('local-events').innerHTML=entries.slice(0,100).map(e=>{
-  const label=e.type==='weight'?`${e.kg} kg`:e.name;
-  const status=({plan:'计划',cancelled:'已取消',actual:'实际'})[e.status] || e.status;
-  const value=e.type==='weight'?e.isMorning||e.trendStatus?'晨重':'称重':fmt(e.nutrition?.kcal??e.kcal)+' kcal';
-  return `<div class="event-row"><div class="event-main"><strong>${E(label)}</strong><small>${E(displayDay(e.date))}${normalizeClock(e.time)?' '+normalizeClock(e.time):''} · ${E(status||value)}${e.date<dateNow()&&e.source!=='legacy'?' · 补报或更正':''}</small></div><button class="btn btn-secondary" data-edit-id="${E(e.id)}" data-type="${e.type}" type="button">编辑</button><button class="btn btn-danger" data-delete-id="${E(e.id)}" data-type="${e.type}" type="button">删除</button></div>`;
- }).join('')||'<div class="event-empty">暂无记录</div>';
+  .filter(e=>matchesDate(e.date)).map(e=>({...e,type}))).sort((a,b)=>
+  String(b.date??'').localeCompare(String(a.date??''))||normalizeClock(b.time).localeCompare(normalizeClock(a.time))
+  ||String(b.createdAt??'').localeCompare(String(a.createdAt??'')));
+ const groups=new Map();
+ for(const row of entries){
+  const date=validDate(row.date)?row.date:'';
+  if(!groups.has(date))groups.set(date,[]);
+  groups.get(date).push(row);
+ }
+ text('health-history-period',historyDayOnly?displayDay(selectedDate):month.slice(0,4)+'年'+Number(month.slice(5))+'月');
+ $('health-show-month').hidden=!historyDayOnly;
+ $('local-events').innerHTML=[...groups].map(([date,rows])=>
+  `<div class="day-group"><div class="day-head">${date?displayDay(date):'日期待补'}</div><div class="card transaction-list">${rows.map(timelineRow).join('')}</div></div>`
+ ).join('')||'<div class="card event-empty health-ledger-empty">暂无记录</div>';
+}
+function timelineRow(row){
+ const {type}=row,weight=type==='weight';
+ const title=weight?(row.isMorning||row.trendStatus?'晨重':'称重'):row.name;
+ const category={food:'饮食',weight:'体重',activity:'运动'}[type];
+ const icon={food:'health',weight:'chart',activity:'activity'}[type];
+ const status={plan:'计划',cancelled:'已取消',actual:'已吃'}[row.status]??row.status;
+ const detail=weight?category:[category,type==='food'?row.meal:null,type==='food'?row.portion:null,status].filter(Boolean).join(' · ');
+ const kcal=row.nutrition?.kcal??row.kcal;
+ const amount=weight?fmt(row.kg,2)+' kg':kcal==null?'':fmt(kcal)+' kcal';
+ return `<button type="button" class="tx-row tx-row-interactive health-tx-row" data-edit-id="${E(row.id)}" data-type="${type}">
+  <span class="category-symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shellGlyphs[icon]}</svg></span>
+  <span class="tx-main"><span class="tx-title">${E(title)}</span><span class="tx-sub">${E(detail)}</span></span>
+  <span class="health-tx-value"><span class="tx-money">${E(amount)}</span><span class="tx-time">${normalizeClock(row.time)}</span></span>
+ </button>`;
 }
 function editEvent(type,id){
  const row=events(state,historyTypes[type]).find(e=>e.id===id);
@@ -134,7 +164,9 @@ function fillForm(form,fields){
 }
 function renderTrends(){
  const today=dateNow(), cycle=cycleForDate(state,today,today);
- const kilos=new Map(weightTrend(state).points.map(e=>[e.date,e.kg]));
+ const points=weightTrend(state).points;
+ renderWeightChart(points.slice(-14),$('weight-detail-chart'));
+ const kilos=new Map(points.map(e=>[e.date,e.kg]));
  $('trend-days').innerHTML=`<p>本周期缺口 ${fmt(cycle.deficit)} kcal · 已结算 ${cycle.closedDays}/${cycle.days} 天</p>`+Array.from({length:14},(_,i)=>{
   const date=addDays(today,-i),intake=dayIntake(state,date),e=energyForDay(state,date,today);
   return `<div class="event-row"><div class="event-main"><strong>${displayDay(date)} · 晨重 ${fmt(kilos.get(date),2)} kg</strong><small>摄入 ${intake.incomplete.includes('kcal')?'≥ ':''}${fmt(intake.totals.kcal)} kcal · 蛋白质 ${fmt(intake.totals.protein,1)} g · 碳水 ${fmt(intake.totals.carbs,1)} g · 脂肪 ${fmt(intake.totals.fat,1)} g · 钠 ${fmt(intake.totals.sodium)} mg</small><small>${e.closed?'缺口 '+fmt(e.deficit)+' kcal':date===today?'待结算':'待补数据'} · 饮食成本 ${intake.cost===null?'未知':(intake.costPartial?'已知部分 ':'')+'¥'+fmt(intake.cost,2)}</small></div></div>`;
@@ -148,12 +180,12 @@ function renderInventory(){
  const alerts=stockAlerts(state,dateNow());
  $('stock-alerts').textContent=[...alerts.low.map(s=>s.name+' 库存偏低'),...alerts.expiry.map(b=>byId.get(b.foodId)?.name+' 到期 '+b.expires)].join(' · ');
  $('batch-list').innerHTML=batches.filter(b=>b.remaining>0).map(b=>`<p>${E(byId.get(b.foodId)?.name)} · ${E(displayDay(b.date))} · ${fmt(b.remaining,3)} ${E(byId.get(b.foodId)?.unit)} · ${b.costCents===null?'成本未知':('批次成本 ¥'+fmt(b.costCents/100,2))}${b.parent?' · 分装':''}</p>`).join('');
- $('stock-history').innerHTML=state.local.stockMoves.slice(-40).reverse().map(m=>`<div class="event-row"><span>${E(displayDay(m.date))} · ${E(byId.get(m.foodId)?.name)} · ${E(m.reason)}</span><strong>${m.delta>0?'+':''}${fmt(m.delta,3)}</strong></div>`).join('');
+ $('stock-history').innerHTML=state.local.stockMoves.slice(-40).reverse().map(m=>`<div class="event-row"><span>${E(displayDay(m.date))}${normalizeClock(m.time)?' '+normalizeClock(m.time):''} · ${E(byId.get(m.foodId)?.name)} · ${E(m.reason)}</span><strong>${m.delta>0?'+':''}${fmt(m.delta,3)}</strong></div>`).join('');
 
 }
 function renderSettings(){
  const s=state.settings, form=$('settings-form');for(const k of settingKeys)form.elements[k].value=s[k];form.elements.preferences.value=s.preferences??'';
- const l=state.legacy;text('import-status',state.importInfo?`已导入：${state.importInfo.sourceVersion} · ${state.importedAt?.slice(0,10)}\n饮食 ${l.foods.length} 条 / 体重 ${l.weights.length} 条 / 运动 ${l.activities.length} 条 / 库存 ${l.inventory.length} 项；当前应用新增饮食 ${state.local.foods.length} 条。`:'尚未导入历史账本。可先手动添加记录，但更推荐导入旧账。');$('import-status').style.whiteSpace='pre-line';
+ const l=state.legacy;text('import-status',state.importInfo?`已导入：${state.importInfo.sourceVersion} · ${state.importedAt?.slice(0,10)}\n饮食 ${l.foods.length} 条 / 体重 ${l.weights.length} 条 / 运动 ${l.activities.length} 条 / 库存 ${l.inventory.length} 项；当前应用新增饮食 ${state.local.foods.length} 条。`:'当前使用本机健康账本。');$('import-status').style.whiteSpace='pre-line';
 }
 function rebuildFoodSelection(){
  const inv=inventoryWithMoves(state).filter(i=>i.active).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN'));
@@ -165,7 +197,7 @@ function rebuildFoodSelection(){
  }
  const batchOptions=batchBalances(state).filter(b=>b.remaining>0).map(b=>`<option value="${E(b.id)}">${E(inv.find(i=>i.id===b.foodId)?.name)} · ${E(displayDay(b.date))} · 余 ${fmt(b.remaining,3)}</option>`).join('');
  for(const el of document.querySelectorAll('[data-batch-options]'))el.innerHTML=batchOptions;
- $('meal-templates').hidden=!(state.local.templates?.length);
+ $('meal-templates').hidden=!!editing.food||!(state.local.templates?.length);
  $('meal-template').innerHTML=(state.local.templates??[]).map(t=>`<option value="${E(t.id)}">${E(t.name)}</option>`).join('');
  updateBatches();
 }
@@ -177,15 +209,22 @@ function updateBatches(){
  if([...form.elements.batchId.options].some(o=>o.value===selected))form.elements.batchId.value=selected;
 }
 async function commit(next,message,snapshot){state=await saveState(next,state.revision ?? 0,globalThis.airplaneAccount,snapshot);rebuildFoodSelection();render();toast(message);}
-async function removeEvent(type,id){
- if(!confirm('删除此记录并重新计算？'))return;
- const next=structuredClone(state);
- try{deleteEvent(next,historyTypes[type],id);await commit(next,'记录已删除');}
- catch(err){toast(err.message);}
+async function removeEditedEvent(){
+ const type=activeEntryType,id=editing[type],button=$('apply-delete-health');
+ if(!id||button.disabled)return;
+ button.disabled=true;
+ try{
+  const next=structuredClone(state);
+  deleteEvent(next,historyTypes[type],id);
+  await commit(next,'记录已删除');
+  resetEditor($(`${type}-form`),type);$('health-entry').close();
+ }catch(err){toast(err.message);}
+ finally{button.disabled=false;}
 }
 function resetEditor(form,type){
  delete editing[type];dirtyEntries.delete(type);form.reset();setDateDefaults();
  if(type==='food'){$('food-editing').hidden=$('cancel-food-edit').hidden=true;showFoodSummary();}
+ syncEntryMode();
 }
 function showFoodSummary(){
  const f=$('food-form');
@@ -208,15 +247,37 @@ function applyAmount(){
 }
 function download(name,content){const blob=new Blob([content],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);}
 function backup(){download(`airplane-health-backup-${dateNow()}.json`,exportState(state));}
-async function handleImport(file,kind){try{const raw=JSON.parse(await file.text());const imported=kind==='backup' ? raw : normalizeLedger(raw);
- if(kind==='ledger'&&JSON.stringify(state.legacy.sourceSnapshot)===JSON.stringify(raw)){toast('这份主账已导入');return;}
- if(!validateAppState(imported))throw Error('文件结构不正确');
- const msg=`准备导入${kind==='backup'?'健康备份':'主账 '+(imported.importInfo?.sourceVersion||'')}。\n饮食 ${imported.legacy.foods.length} 条、体重 ${imported.legacy.weights.length} 条、库存 ${imported.legacy.inventory.length} 项。\n将替换当前健康模块的数据。确定吗？`;
- $('import-preview').innerHTML=`<div class="notice notice-info">文件已解析：${E(file.name)}<br>饮食 ${imported.legacy.foods.length} 条 · 晨重 ${imported.legacy.weights.length} 条 · 库存 ${imported.legacy.inventory.length} 项</div>`;
- if(!confirm(msg))return;
- if(state.revision || state.importInfo || Object.values(state.local).some(list => list.length)) backup();
- await commit(imported,kind==='backup'?'健康备份恢复成功':'历史健康数据已导入',combinedBackup(state,null));$('health-settings-sheet').close();switchTab('overview');
- }catch(e){toast('导入失败：'+e.message);}}
+function clearHealthImport(){
+ importVersion++;importPreview=null;$('import-preview').hidden=true;
+}
+async function previewHealthImport(file,kind){
+ clearHealthImport();
+ const version=importVersion;
+ try{
+  const raw=JSON.parse(await file.text());
+  if(version!==importVersion)return;
+  if(kind==='ledger'&&JSON.stringify(state.legacy.sourceSnapshot)===JSON.stringify(raw)){toast('这份主账已导入');return;}
+  const imported=kind==='backup'?raw:normalizeLedger(raw);
+  if(!validateAppState(imported))throw Error('文件结构不正确');
+  importPreview={imported,kind,revision:state.revision??0};
+  const panel=$('import-preview');
+  panel.querySelector('[data-import-summary]').textContent=
+   `${file.name} · 饮食 ${events(imported,'foods').length} 条 · 体重 ${events(imported,'weights').length} 条 · 库存 ${inventoryWithMoves(imported).length} 项`;
+  panel.hidden=false;panel.scrollIntoView({block:'nearest'});
+ }catch(err){if(version===importVersion)toast('导入失败：'+err.message);}
+}
+async function applyHealthImport(){
+ const button=$('apply-health-import'),cancel=$('cancel-health-import');
+ if(button.disabled||!importPreview)return;
+ const {imported,kind,revision}=importPreview;
+ button.disabled=true;cancel.disabled=true;
+ try{
+  if(revision!==(state.revision??0))throw Error('账本已变更，请重新预览文件');
+  await commit(imported,kind==='backup'?'健康备份恢复成功':'历史健康数据已导入',combinedBackup(state,null));
+  clearHealthImport();$('health-settings-sheet').close();switchTab('overview');
+ }catch(err){toast('导入失败：'+err.message);}
+ finally{button.disabled=false;cancel.disabled=false;}
+}
 function bindForm(type,update,message){
  const form=$(`${type}-form`);
  form.onsubmit=async e=>{
@@ -258,16 +319,29 @@ function attach(){
  };
  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
  const writeDay=bindDayPicker(document.querySelector('.day-picker'),date=>{
-  selectedDate=date;$('history-date').value=date;writeDay(date);render();
+  selectedDate=date;historyDayOnly=true;writeDay(date);render();
  });
  writeDay(selectedDate);
- $('jump-import').addEventListener('click',openSettings);$('quick-record').addEventListener('click',openEntry);$('inventory-search').addEventListener('input',()=>renderInventory());
- $('history-date').onchange=renderRecord;
+ $('health-show-month').onclick=()=>{historyDayOnly=false;renderTimeline();};
+ $('inventory-search').addEventListener('input',()=>renderInventory());
+ function selectTrendView(){
+  if(location.hash==='#trends')switchTab('trends');
+  else if(tab==='trends')switchTab('overview');
+ }
+ window.addEventListener('hashchange',selectTrendView);
+ selectTrendView();
+ $('health-trend-back').onclick=e=>{e.preventDefault();switchTab('overview');};
  $('local-events').onclick=e=>{
-  const button=e.target.closest('[data-type]');
-  if(button?.dataset.editId)editEvent(button.dataset.type,button.dataset.editId);
-  if(button?.dataset.deleteId)removeEvent(button.dataset.type,button.dataset.deleteId);
+  const row=e.target.closest('[data-edit-id]');
+  if(row)editEvent(row.dataset.type,row.dataset.editId);
  };
+ $('delete-health-entry').onclick=()=>{
+  $('delete-health-entry').hidden=true;
+  $('confirm-delete-health').hidden=false;
+  $('confirm-delete-health').scrollIntoView({block:'nearest'});
+ };
+ $('cancel-delete-health').onclick=syncEntryMode;
+ $('apply-delete-health').onclick=removeEditedEvent;
  $('cancel-food-edit').onclick=()=>resetEditor($('food-form'),'food');
  $('food-select').onchange=()=>{
   const form=$('food-form'),sku=inventoryWithMoves(state).find(s=>s.id===form.elements.foodId.value);
@@ -295,25 +369,27 @@ function attach(){
    showFoodSummary();
   }catch(err){toast(err.message);}
  };
- $('save-template').onclick=async()=>{
-  const date=$('history-date').value||selectedDate,meal=$('template-meal').value;
+ $('template-settings').onsubmit=async event=>{
+  event.preventDefault();
+  const {date,name}=Object.fromEntries(new FormData(event.target)),meal=$('template-meal').value;
   const items=foodsForDay(state,date).filter(e=>e.meal===meal);
   if(!items.length){toast('所选日期和餐次没有实际记录');return;}
-  const name=prompt('模板名称',meal)?.trim();
-  if(!name)return;
   const next=structuredClone(state);
-  (next.local.templates??=[]).push({id:makeId('meal'),name,items});
+  (next.local.templates??=[]).push({id:makeId('meal'),name:name.trim()||meal,items});
   try{await commit(next,'已保存餐食模板');}catch(err){toast(err.message);}
  };
  $('use-template').onclick=async()=>{
   const form=$('food-form'),t=(state.local.templates??[]).find(t=>t.id===$('meal-template').value);
-  if(!t||!confirm('录入餐食模板「'+t.name+'」？'))return;
-  const {date,meal,status}=Object.fromEntries(new FormData(form)),next=structuredClone(state);
+  const button=$('use-template');
+  if(!t||button.disabled)return;
+  button.disabled=true;
+  const {date,time,meal,status}=Object.fromEntries(new FormData(form)),next=structuredClone(state);
   try{
-   for(const item of t.items)addFood(next,{...item,...item.nutrition,date,meal,status,batchId:null,cost:null});
+   for(const item of t.items)addFood(next,{...item,...item.nutrition,date,time,meal,status,batchId:null,cost:null});
    await commit(next,'已录入餐食模板');
    $('health-entry').close();
   }catch(err){toast(err.message);}
+  finally{button.disabled=false;}
  };
  bindForm('food', (next,d)=>addFood(next,d,editing.food),'饮食已保存');
  bindForm('weight',(next,d,f)=>{
@@ -348,8 +424,11 @@ function attach(){
   next.settings.preferences=fields.preferences.trim();
   try{await commit(next,'参数已更新');}catch(err){toast(err.message);}
  };
- $('choose-import').addEventListener('click',()=>$('import-file').click());$('import-file').addEventListener('change',e=>{if(e.target.files[0])handleImport(e.target.files[0],'ledger');e.target.value='';});
- $('choose-restore').addEventListener('click',()=>$('restore-file').click());$('restore-file').addEventListener('change',e=>{if(e.target.files[0])handleImport(e.target.files[0],'backup');e.target.value='';});
+ $('choose-import').addEventListener('click',()=>$('import-file').click());$('import-file').addEventListener('change',e=>{if(e.target.files[0])void previewHealthImport(e.target.files[0],'ledger');e.target.value='';});
+ $('choose-restore').addEventListener('click',()=>$('restore-file').click());$('restore-file').addEventListener('change',e=>{if(e.target.files[0])void previewHealthImport(e.target.files[0],'backup');e.target.value='';});
+ $('apply-health-import').onclick=applyHealthImport;
+ $('cancel-health-import').onclick=clearHealthImport;
+ $('health-settings-sheet').addEventListener('close',clearHealthImport);
  $('export-button').addEventListener('click',backup);
 }
 async function main(){try{state=await readState();if(!validateAppState(state))throw new Error('健康模块数据无效，请通过备份恢复。');attach();rebuildFoodSelection();setDateDefaults();render(); }catch(err){toast('初始化失败：'+err.message);}}

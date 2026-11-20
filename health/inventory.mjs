@@ -33,7 +33,7 @@ export function saveSku(state,fields) {
   return row;
 }
 
-export function addBatch(state,{id=makeId('batch'),foodId,date,quantity,costCents=null,expires=null,raw=null,cooked=null,reason='采购',parent=null}) {
+export function addBatch(state,{id=makeId('batch'),foodId,date,time,quantity,costCents=null,expires=null,raw=null,cooked=null,reason='采购',parent=null}) {
   quantity=numeric(quantity);
   if(!validDate(date) || !(quantity>0) || expires&&!validDate(expires) || !inventoryWithMoves(state).some(s=>s.id===foodId))
     throw Error('请检查批次数量、食品和日期');
@@ -42,7 +42,7 @@ export function addBatch(state,{id=makeId('batch'),foodId,date,quantity,costCent
   if(batches.some(b=>b.id===id))throw Error('此批次已入库');
   const batch={id,foodId,date,quantity,costCents,expires,raw,cooked,parent};
   batches.push(batch);
-  state.local.stockMoves.push({id:makeId('stock'),batchId:id,foodId,date,delta:quantity,reason,createdAt:new Date().toISOString()});
+  state.local.stockMoves.push({id:makeId('stock'),batchId:id,foodId,date,...(time?{time}:{}),delta:quantity,reason,createdAt:new Date().toISOString()});
   return batch;
 }
 

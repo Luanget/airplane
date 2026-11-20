@@ -516,7 +516,7 @@ function settingsContent(){
     <section class="card settings-section">
       <button class="setting-row" data-action="storage-persist"><span class="mini-icon">${icon('shield')}</span><span class="setting-copy"><span class="setting-title">本地数据保护</span><span class="setting-sub ${protection.cls}">${protection.label}</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="check-update"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">程序更新</span><span class="setting-sub">当前 ${APP_VERSION} · 启动优先本地，可在这里手动检查</span></span><span class="chevron">${icon('chevron')}</span></button>
-      <button class="setting-row" type="button" data-ai-key><span class="mini-icon">${icon('sparkles')}</span><span class="setting-copy"><span class="setting-title">管理 API Key</span><span class="setting-sub">使用自己的 OpenAI Key</span></span><span class="chevron">${icon('chevron')}</span></button>
+      <a class="setting-row" href="./assistant/${window.airplaneAccount.demo?'?demo=1':''}#api-key"><span class="mini-icon">${icon('sparkles')}</span><span class="setting-copy"><span class="setting-title">管理 API Key</span><span class="setting-sub">使用自己的 OpenAI Key</span></span><span class="chevron">${icon('chevron')}</span></a>
     </section>
     <section class="card"><div class="helper">主屏幕 Airplane 与 Safari 网页在 iOS 上属于不同的本地数据空间。长期使用请固定从主屏幕 Airplane 进入；程序更新只替换程序文件，不会重建余额、预算、分类或账单。人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。</div></section>
     <button class="danger-button" data-action="reset">清空本机全部数据</button>
@@ -1216,7 +1216,6 @@ document.getElementById('importInput').addEventListener('change', async e=>{
 });
 
 if(recoveryRequired){
-  document.querySelector('[data-open-ai]').hidden=true;
   document.querySelector('.tabbar').hidden=true;
   document.querySelector('.topbar').hidden=true;
   const app=document.querySelector('#app');

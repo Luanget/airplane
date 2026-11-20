@@ -1,4 +1,4 @@
-import {syncCalendarFields} from '../calendar.mjs';
+import {localClock,syncCalendarFields} from '../calendar.mjs';
 import {cents,newPurchaseId,recordPurchase} from './purchases.mjs';
 import {saveSku} from './inventory.mjs';
 import {inventoryWithMoves,recordEvent,numeric,validDate} from './core.mjs';
@@ -105,7 +105,7 @@ function editActivity(panel,item){
  return ()=>({name:name.value.trim(),km:numeric(km.value),minutes:numeric(minutes.value),kcal:numeric(kcal.value),
   energyKind:energyKind.value,quality:quality.value,includedInBase:includedInBase.value,uncertainty:uncertainty.value});
 }
-function approvedPurchase(state,items,date,total) {
+function approvedPurchase(state,items,date,time,total) {
  const next=structuredClone(state);
  const rows=items.map(c=>{
   const {sku,stockQty,amount,unit}=resolveItem(next,c);
@@ -114,7 +114,7 @@ function approvedPurchase(state,items,date,total) {
     ...c.nutrients,quality:'estimated',source:c.uncertainty,packageSize:c.packageSize,packageUnit:c.packageUnit}).id;
   return {foodId,quantity:stockQty??amount,costCents:c.itemCost===null?null:cents(c.itemCost),expires:null};
  });
- recordPurchase(next,{id:newPurchaseId(),date,items:rows,totalCents:cents(total),financeId:null,note:'AI 候选采购'});
+ recordPurchase(next,{id:newPurchaseId(),date,time,items:rows,totalCents:cents(total),financeId:null,note:'AI 候选采购'});
  return next;
 }
 export function healthReview(container, proposal, state, today) {
@@ -138,11 +138,12 @@ export function healthReview(container, proposal, state, today) {
     label:mode==='plan'?'保存为饮食计划':mode==='purchase'?'确认采购入库':'确认保存',
     apply(current) {
       if(!validDate(date.value))throw Error('请选择记录日期');
+      const time=localClock();
       if(mode==='activity'){
         const activity=activities();
         if(!matches(activitySchema,{activity,note:''}))throw Error('请核对活动名称和数值');
         const next=structuredClone(current);
-        recordEvent(next,'activities',{...activity,date:date.value,includedInBase:activity.energyKind==='activity'&&activity.includedInBase==='yes'});
+        recordEvent(next,'activities',{...activity,date:date.value,time,includedInBase:activity.energyKind==='activity'&&activity.includedInBase==='yes'});
         return next;
       }
       const items=rows.map(read=>read()).filter(Boolean);
@@ -150,7 +151,7 @@ export function healthReview(container, proposal, state, today) {
       if(!items.length||!matches(purchase?purchaseSchema:resultSchema,{items,note:'',...(purchase?{total}:{})}))
         throw Error('请勾选候选并核对份量和营养字段');
       if(purchase&&total===null)throw Error('请填写订单实付总额');
-      return purchase?approvedPurchase(current,items,date.value,total):confirmItems(current,items,date.value,meal?.value??'午餐');
+      return purchase?approvedPurchase(current,items,date.value,time,total):confirmItems(current,items,date.value,meal?.value??'午餐',time);
     },
     saved:mode==='purchase'?'采购已入库，可在库存页关联支出。':mode==='plan'?'已保存饮食计划。':'记录已保存。'
   };

@@ -1,4 +1,4 @@
-import {displayDay,syncCalendarFields} from '../calendar.mjs';
+import {displayDay,localClock,syncCalendarFields} from '../calendar.mjs';
 import {inventoryWithMoves,localStockChange,validDate} from '../health/core.mjs';
 import {setShoppingItem} from '../health/shopping.mjs';
 import {cleanSkill,SKILL_LIMIT} from './workspace.mjs';
@@ -54,7 +54,7 @@ export function inventoryReview(container,proposal,current,today){
   if(shopping)setShoppingItem(next,row.id,value);
   else {
    if(!validDate(date.value)||date.value>today)throw Error('请核对盘点日期');
-   localStockChange(next,{foodId:row.id,delta:value,date:date.value,count:true,reason:'助手盘点 · 已确认'});
+   localStockChange(next,{foodId:row.id,delta:value,date:date.value,time:localClock(),count:true,reason:'助手盘点 · 已确认'});
   }
   return next;
  };

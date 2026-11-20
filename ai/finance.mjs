@@ -1,4 +1,4 @@
-import {normalizeClock,syncCalendarFields} from '../calendar.mjs';
+import {localClock,syncCalendarFields} from '../calendar.mjs';
 import {freshData,readFinance,replaceFinance} from '../finance-storage.mjs';
 import {validFinanceEntry} from '../health/contract.mjs';
 
@@ -12,14 +12,13 @@ export function financeReview(container,entry,today,store=localStorage){
   const row=document.createElement('label');row.append(label,control);parent.append(row);return control;
  }
  function input(label,type,value,parent){
-  const control=document.createElement('input');control.type=type;control.value=value;control.required=type!=='time'&&type!=='text';
+  const control=document.createElement('input');control.type=type;control.value=value;control.required=type!=='text';
   return field(label,control,parent);
  }
  const type=field('收支方向',document.createElement('select'));
  type.add(new Option('支出','expense'));type.add(new Option('收入','income'));type.value=entry.type;
  const amount=input('金额 ¥','number',entry.amount);amount.min='0.01';amount.max='100000000';amount.step='0.01';
  const date=input('日期','date',entry.date);date.max=today;
- const time=input('时间','time','');
  const category=field('分类',document.createElement('select'));category.required=true;
  const note=input('备注','text',entry.note,container);note.maxLength=200;
  const budget=document.createElement('input');budget.type='checkbox';
@@ -47,7 +46,8 @@ export function financeReview(container,entry,today,store=localStorage){
   if(current.primary!==primary)throw Error('账本已变更，请重新生成候选');
   const next=current.payload??freshData();
   if(next.transactions.some(tx=>tx.id===id))throw Error('这条候选已保存');
-  next.transactions.push({...fields,id,note:note.value.trim(),time:normalizeClock(time.value),createdAt:new Date().toISOString(),
+  const now=new Date();
+  next.transactions.push({...fields,id,note:note.value.trim(),time:localClock(now),createdAt:now.toISOString(),
    categoryName:selected.name,categoryIcon:selected.icon,categoryColor:selected.color,
    budgetSync:fields.type==='income'&&budget.checked,budgetExcluded:fields.type==='expense'&&!budget.checked});
   next.prefs??={};

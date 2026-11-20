@@ -1,4 +1,5 @@
 import {inventoryWithMoves, addFood, localStockChange, round, makeId} from './core.mjs';
+import {localClock} from '../calendar.mjs';
 import {measuredGrams,saveSku} from './inventory.mjs';
 import {nutrientKeys} from './contract.mjs';
 
@@ -58,7 +59,7 @@ export function resolveItem(state, c) {
   }));
   return {sku, stockQty, nutrition, pack,amount:c.amount,unit:c.unit};
 }
-export function confirmItems(current, candidates, date, meal) {
+export function confirmItems(current, candidates, date, meal, time=localClock()) {
   const next = structuredClone(current);
   for (const c of candidates) {
     const {sku,stockQty,nutrition,pack,amount,unit} = resolveItem(next,c);
@@ -79,10 +80,10 @@ export function confirmItems(current, candidates, date, meal) {
           packageSize:pack.size, packageUnit:pack.measure, pack:pack.pack,pricePerUnit:null,priceBasis:''});
       }
       if (sku && stockQty === null) throw Error('份量与库存单位无法换算，请核对包装规格');
-      localStockChange(next,{date,foodId:id,delta:(stockQty ?? amount)*(c.action==='add'?1:-1),reason:'确认智能候选'});
+      localStockChange(next,{date,time,foodId:id,delta:(stockQty ?? amount)*(c.action==='add'?1:-1),reason:'确认智能候选'});
     } else {
       if (c.action === 'eat' && sku && stockQty === null) throw Error('无法换算扣库数量，请调整单位或选择自定义食物');
-      const entry = addFood(next,{date,meal,name:sku?.name ?? c.name,portion:`${amount} ${unit}`,
+      const entry = addFood(next,{date,time,meal,name:sku?.name ?? c.name,portion:`${amount} ${unit}`,
         ...nutrition,foodId:sku?.id,stockQty,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
       entry.source = 'confirmed-assistant';
       entry.uncertainty = c.uncertainty;

@@ -24,7 +24,24 @@ body[data-module="health"] fieldset { min-width:0 }
 .panel, .form-panel, .inventory-list { margin:14px 0 }
 .panel > p, .panel-note, .panel form { margin-top:10px }
 .panel-note, .panel p, .form-hint, .event-empty, .notice, .preview { font-size:13px; line-height:1.55 }
-.panel #weight-chart { display:block; width:100%; max-height:230px }
+#weight-chart, #weight-detail-chart { display:block; width:100%; max-height:230px }
+.health-trend-link { display:block; color:inherit; text-decoration:none }
+.health-trend-link .panel-title strong { font-size:17px }
+.health-trend-link .panel-title span,.health-trend-back span { display:grid; place-items:center; color:var(--muted) }
+.health-trend-link .panel-title svg,.health-trend-back svg { width:17px; height:17px }
+.health-trend-link:focus-visible,.health-tx-row:focus-visible,.health-trend-back:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+.health-trend-link:active { background:var(--surface-2) }
+.health-trend-back { display:inline-flex; gap:4px; align-items:center; text-decoration:none }
+.health-trend-back svg { transform:rotate(180deg) }
+.health-ledger { margin-top:24px }
+.health-ledger .section-head { justify-content:flex-start; gap:10px }
+.health-ledger .section-head .muted { margin-inline-start:auto; font-size:13px; white-space:nowrap }
+.health-ledger .day-group+.day-group { margin-top:12px }
+.health-ledger-empty { padding:16px }
+.health-tx-row { width:100%; text-align:left }
+.health-tx-row .category-symbol { color:var(--green); background:var(--green-soft) }
+.health-tx-row :is(.tx-title,.tx-sub,.tx-money,.tx-time) { display:block }
+.health-tx-value { white-space:nowrap }
 .cycle-total, .event-value, .stock-qty { white-space:nowrap; font-variant-numeric:tabular-nums }
 .event-row, .inv-row {
   display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -41,6 +58,8 @@ body[data-module="health"] fieldset { min-width:0 }
 .inventory-list button { text-align:left }
 #stock-alerts, #batch-list p { padding:5px 0; color:var(--muted); font-size:13px }
 .health-sheet .entry-fields { margin-top:12px }
+.health-sheet > .modal-head { position:sticky; top:-12px; z-index:2; background:var(--bg) }
+#import-preview { scroll-margin-top:52px }
 .health-types { grid-template-columns:repeat(3,1fr) }
 .health-types button.active { background:var(--surface); color:var(--green) }
 body[data-module="health"] [data-shell] label:not(.day-picker-value) { display:block; color:var(--muted); font-size:13px }
@@ -60,7 +79,6 @@ body[data-module="health"] [data-shell] label.checkbox { display:flex; gap:8px; 
 .btn-danger { background:var(--red-soft); color:var(--red) }
 .btn.full { width:100%; margin-top:10px }
 .notice { background:var(--surface-2); padding:14px; border-radius:16px; margin-bottom:14px }
-.notice-info { background:var(--green-soft) }
 .notice p { margin:5px 0 8px }
 .form-hint, .panel-note { color:var(--muted) }
 #assistant-status:empty { display:none }

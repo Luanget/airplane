@@ -1,4 +1,3 @@
-import {bindSheetSwipe} from '../shell.mjs';
 import {MODEL,OPENAI_URL,modelRequest,parseResult,pendingLedgerRead} from './responses.mjs';
 import {readKey,importKey,forgetKey} from './keys.mjs';
 
@@ -29,34 +28,6 @@ export function bindKeyForm(form,onSaved=()=>{}) {
 export function mountKeyForm(form) {
  form.innerHTML=keyFields;
  return bindKeyForm(form);
-}
-
-export function installKeyDialog() {
- const dialog=document.createElement('dialog');
- dialog.id='ai-keys';
- dialog.className='modal bottom-sheet ai-dialog';
- dialog.setAttribute('aria-labelledby','ai-key-title');
- dialog.innerHTML=`<div class="modal-grabber" aria-hidden="true"></div><form>
-  <div class="modal-head"><button type="button" class="cancel" data-close>关闭</button><h2 id="ai-key-title">API Key</h2><span></span></div>
-  ${keyFields}</form>`;
- document.body.append(dialog);
- bindSheetSwipe(dialog);
- const form=dialog.querySelector('form');
- let afterSave=null;
- const out=bindKeyForm(form,()=>{const proceed=afterSave;dialog.close();proceed?.();});
- form.querySelector('[data-close]').onclick=()=>dialog.close();
- dialog.onclose=()=>{form.reset();out.textContent='';afterSave=null;};
- async function open(onSaved=null){
-  if(dialog.open)return;
-  afterSave=onSaved;
-  dialog.showModal();
-  try{
-   const current=await readKey();
-   if(dialog.open)out.textContent=current?'已导入 Key，可替换或移除':'请导入 OpenAI API Key';
-  }catch{if(dialog.open)out.textContent='无法读取已保存的 Key，可重新导入';}
- }
- document.addEventListener('click',e=>{if(e.target.closest('[data-ai-key]'))open();});
- return open;
 }
 
 export async function recognize(input,options={}) {
