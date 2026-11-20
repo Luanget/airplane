@@ -183,33 +183,7 @@ main { padding: 6px 16px 28px; }
 .form-row input, .form-row textarea { width:100%; border:0; outline:0; background:transparent; text-align:right; resize:none; }
 .form-row textarea { min-height:42px; padding-top:12px; }
 
-/* iOS date/time controls have their own internal alignment. Normalize them so
-   both rows use the same centered value geometry instead of Safari defaults. */
-.form-row input[type="date"],
-.form-row input[type="time"] {
-  -webkit-appearance:none;
-  appearance:none;
-  min-height:44px;
-  padding:0 8px;
-  text-align:center;
-  text-align-last:center;
-  line-height:44px;
-}
-.form-row input[type="date"]::-webkit-date-and-time-value,
-.form-row input[type="time"]::-webkit-date-and-time-value {
-  width:100%;
-  margin:0;
-  padding:0;
-  text-align:center;
-}
-.form-row input[type="date"]::-webkit-datetime-edit,
-.form-row input[type="time"]::-webkit-datetime-edit {
-  display:flex;
-  width:100%;
-  justify-content:center;
-  align-items:center;
-  padding:0;
-}
+
 
 .input-card { display:grid; gap:10px; }
 .input-card label { color:var(--muted); font-size:12px; }

@@ -1,3 +1,4 @@
+import {resumePurchaseUpdate} from './health/purchase-sync.mjs';
 import {hydrateShell} from './shell.mjs';
 import {installKeyDialog} from './ai/client.mjs';
 import {accountKeys, privateAccount} from './account.mjs';
@@ -40,6 +41,8 @@ if (isPrivate) {
 
 async function start(account) {
   window.airplaneAccount = account;
+  try {await resumePurchaseUpdate(account);}
+  catch {window.airplanePendingPurchase=true;}
   if (health) await import('./health/app.mjs');
   else await import('./app.js');
   const openFromLink=()=>{if(location.hash==='#model') openKeys();};

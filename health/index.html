@@ -26,7 +26,11 @@
     <header class="topbar">
       <div>
         <div class="brand-row"><span class="brand-mark" data-shell-icon="plane"></span><h1>Airplane</h1></div>
-        <label class="health-date"><span class="sr-only">查看日期</span><input id="report-date" type="date"></label>
+        <div class="month-switcher health-day-switcher">
+          <button type="button" id="prev-health-day" class="month-step month-step-prev" data-shell-icon="chevron" aria-label="前一天"></button>
+          <label class="health-date"><span class="sr-only">查看日期</span><input id="report-date" type="date" data-short-date></label>
+          <button type="button" id="next-health-day" class="month-step" data-shell-icon="chevron" aria-label="后一天"></button>
+        </div>
       </div>
       <div class="topbar-actions">
         <a data-account class="account-link" href="?private=1">私人账本</a>
@@ -91,12 +95,21 @@
           <label>原批次<select name="batchId" data-batch-options required></select></label><div class="form-grid"><label>记录日期<input name="date" type="date" required></label><label>份数<input name="count" type="number" min="1" max="100" step="1" required></label><label>每份数量（库存单位）<input name="quantity" type="number" min="0.001" step="any" required></label></div>
           <button type="submit" class="btn btn-primary full">确认分装</button>
         </form></details>
+        <details class="card form-panel"><summary>补货清单</summary>
+          <form id="shopping-form"><div class="form-grid"><label>食品<select name="foodId" data-stock-options required></select></label><label>补货数量（库存单位）<input name="quantity" type="number" min="0.000001" step="any" required></label></div><button type="submit" class="btn btn-primary">加入或更新清单</button></form>
+          <div class="button-row"><button type="button" class="btn btn-secondary" data-low-stock>加入低库存食品</button><button type="button" class="btn btn-secondary" data-to-purchase>用勾选项填写采购单</button></div>
+          <div id="shopping-list"></div>
+        </details>
+        <section id="purchase-recovery" class="card panel" hidden aria-live="polite">
+          <h2>待处理的采购更正</h2><p>请完成财务与库存的同步，或放弃尚未写入财务的更正。</p>
+          <div class="button-row"><button type="button" class="btn btn-primary" data-resume>继续同步</button><button type="button" class="btn btn-secondary" data-abandon>放弃更正</button></div>
+        </section>
         <details class="card form-panel" id="purchase-panel"><summary>一张订单，多项采购</summary><form id="purchase-form">
-          <div class="form-grid"><label>订单日期<input type="date" name="date" required></label><label>订单总额 ¥<input type="number" name="total" min="0" step="0.01" required></label></div>
+          <div class="form-grid"><label>订单日期<input type="date" name="date" required></label><label>时间<input type="time" name="time"></label><label>订单总额 ¥<input type="number" name="total" min="0" step="0.01" required></label></div>
           <label>订单备注<input name="note"></label><label>关联已有财务支出<select name="financeId"></select></label>
           <div data-lines></div><button type="button" data-add-line class="btn btn-secondary">再加一项食品</button>
           <label class="checkbox"><input type="checkbox" name="createExpense"> 入库后打开财务表单，确认新增支出</label>
-          <button type="submit" class="btn btn-primary full">确认采购入库</button>
+          <button type="submit" class="btn btn-primary full">确认采购入库</button><button type="button" class="btn btn-text" data-close-edit hidden>结束编辑</button>
         </form></details>
         <section class="card panel"><h2>采购记录</h2><div id="purchases-list"></div></section>
         <section class="card panel"><h2>批次与流水</h2><div id="batch-list"></div><div id="stock-history"></div></section>
@@ -121,7 +134,7 @@
             <div class="form-grid"><label>餐食模板<select id="meal-template"></select></label><button type="button" id="use-template" class="btn btn-secondary">应用到当前日期与餐次</button></div>
             </details>
 
-            <div class="form-grid"><label>日期<input type="date" name="date" required></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div>
+            <div class="form-grid"><label>日期<input type="date" name="date" required></label><label>时间<input type="time" name="time"></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div>
             <label>从库存食品选择（可选）<select name="foodId" id="food-select"><option value="">自定义食物</option></select></label>
             <label>食品名称<input name="name" required placeholder="如：熟鸡胸、面包、外卖"></label>
             <div class="form-grid"><label>份量描述<input name="portion" placeholder="如：246g / 1整包"></label><label>份量（按食品单位）<input type="number" name="amount" min="0" step="any" inputmode="decimal" placeholder="可选"></label></div>
@@ -142,8 +155,8 @@
               <button id="apply-weight" type="button" class="btn btn-secondary">计算份量</button>
             </div></details>
           </form></div>
-        <div class="card entry-fields" data-entry-panel="weight" hidden><form id="weight-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>体重 kg<input type="number" name="kg" min="20" max="500" step="0.01" inputmode="decimal" required placeholder="75.0"></label></div><label class="checkbox"><input type="checkbox" name="isMorning" checked> 晨重（计入7次均重）</label><button type="submit" class="btn btn-primary full">保存体重</button></form></div>
-        <div class="card entry-fields" data-entry-panel="activity" hidden><form id="activity-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>运动类型<input name="name" required placeholder="通勤骑行 / 夜骑 / 步行"></label><label>距离 km<input name="km" type="number" min="0" step="0.01" placeholder="可选"></label><label>活动热量 kcal<input name="kcal" type="number" min="0" step="0.1"></label><label>时长（分钟）<input type="number" name="minutes" min="0" step="any"></label><label>消耗口径<select name="energyKind"><option value="activity">单次活动</option><option value="total">设备全天总消耗</option></select></label><label>数据来源<select name="quality"><option value="estimated">手动估算</option><option value="device">手表或运动设备</option></select></label></div><label class="checkbox"><input type="checkbox" name="includedInBase" checked> 已包含普通日TDEE（通勤通常勾选，防重复）</label><button type="submit" class="btn btn-primary full">保存运动</button></form></div>
+        <div class="card entry-fields" data-entry-panel="weight" hidden><form id="weight-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>时间<input type="time" name="time"></label><label>体重 kg<input type="number" name="kg" min="20" max="500" step="0.01" inputmode="decimal" required placeholder="75.0"></label></div><label class="checkbox"><input type="checkbox" name="isMorning" checked> 晨重（计入7次均重）</label><button type="submit" class="btn btn-primary full">保存体重</button></form></div>
+        <div class="card entry-fields" data-entry-panel="activity" hidden><form id="activity-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>时间<input type="time" name="time"></label><label>运动类型<input name="name" required placeholder="通勤骑行 / 夜骑 / 步行"></label><label>距离 km<input name="km" type="number" min="0" step="0.01" placeholder="可选"></label><label>活动热量 kcal<input name="kcal" type="number" min="0" step="0.1"></label><label>时长（分钟）<input type="number" name="minutes" min="0" step="any"></label><label>消耗口径<select name="energyKind"><option value="activity">单次活动</option><option value="total">设备全天总消耗</option></select></label><label>数据来源<select name="quality"><option value="estimated">手动估算</option><option value="device">手表或运动设备</option></select></label></div><label class="checkbox"><input type="checkbox" name="includedInBase" checked> 已包含普通日TDEE（通勤通常勾选，防重复）</label><button type="submit" class="btn btn-primary full">保存运动</button></form></div>
 
     </dialog>
     <dialog class="modal bottom-sheet health-sheet" id="health-settings-sheet" aria-labelledby="health-settings-sheet-title">

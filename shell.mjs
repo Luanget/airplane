@@ -1,4 +1,5 @@
 export const shellGlyphs = {
+ chevron: '<path d="m9 6 6 6-6 6"/>',
  plane: '<path d="M3 14.5 21 3l-6.2 18-4.1-6.2L3 14.5Z"/><path d="m10.7 14.8 4.1-4.1"/>',
  wallet: '<path d="M4 7h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3h12v4"/><path d="M16 12h5v4h-5a2 2 0 1 1 0-4Z"/>',
  health: '<path d="M12 21s-8-4.8-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.2-8 11-8 11Z"/><path d="M9 12h6M12 9v6"/>',

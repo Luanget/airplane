@@ -1,3 +1,4 @@
+import {normalizeClock} from '../calendar.mjs';
 /** Airplane Health — deterministic domain logic. No third-party libraries. */
 export const APP_SCHEMA = 'airplane-health-v1';
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -105,6 +106,7 @@ export function validateAppState(state){
    && rows(l.inventory, sku) && rows(m.inventory ?? [], sku) && rows(m.stockMoves, x => dated(x) && Number.isFinite(x.delta))
    && rows(m.batches ?? [], x=>typeof x.id==='string' && typeof x.foodId==='string' && dated(x) && Number.isFinite(x.quantity) && x.quantity>0 && (x.costCents==null || Number.isSafeInteger(x.costCents) && x.costCents>=0))
    && rows(m.templates ?? [], x=>typeof x.name==='string' && Array.isArray(x.items) && x.items.every(food))
+   && rows(m.shoppingList ?? [], x=>typeof x.foodId==='string' && Number.isFinite(x.quantity) && x.quantity>0)
    && rows(m.purchases ?? [], x=>typeof x.id==='string' && dated(x) && Array.isArray(x.items) && Number.isSafeInteger(x.totalCents) && x.totalCents>=0)
    && (m.edits==null || object(m.edits) && ['foods','weights','activities'].every(k=>m.edits[k]==null || object(m.edits[k]) && Object.values(m.edits[k]).every(x=>x===null || object(x) && (k!=='foods' || food(x)) && dated(x))))
    && object(l.daily) && Object.values(l.daily).every(x => object(x?.nutrition))
@@ -208,7 +210,7 @@ export function batchBalances(state,foodId){
 }
 export function makeId(prefix='local'){return prefix+'-'+crypto.randomUUID();}
 
-function assertBalances(state,foodId) {
+export function assertBalances(state,foodId) {
  const sku=inventoryWithMoves(state).find(x=>x.id===foodId);
  const batches=batchBalances(state,foodId);
  if (batches.some(b=>b.remaining<0) || sku?.qty!==null && sku?.qty < round(batches.reduce((n,b)=>n+b.remaining,0),6))
@@ -244,7 +246,7 @@ export function allocateStock(state,foodId,qty,batchId,date) {
 }
 
 export function addFood(state,fields,id) {
- const {date,meal,name,portion,cost,foodId,stockQty,batchId,status='actual',quality='label',uncertainty='',amount}=fields;
+ const {date,meal,name,portion,cost,foodId,stockQty,time,batchId,status='actual',quality='label',uncertainty='',amount}=fields;
  if(!validDate(date)||!name?.trim()||!['actual','plan','cancelled'].includes(status))throw Error('请检查日期、食物名称和状态');
  const nutrition=Object.fromEntries(NUTRIENTS.map(k=>[k,numeric(fields[k])]));
  if(Object.values(nutrition).some(x=>x!==null&&x<0))throw Error('营养数值不能为负');
@@ -253,8 +255,8 @@ export function addFood(state,fields,id) {
  const previous=events(state,'foods').find(e=>e.id===id);
  if(id && !previous)throw Error('记录已更新，请刷新');
  const createdAt=previous?.createdAt ?? new Date().toISOString();
- const entry={id:id??makeId('food'),source:'manual',date,meal,name:name.trim(),portion:portion||'',status,nutrition,
-  foodId:foodId||null,stockQty:qty,amount:numeric(amount),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost};
+ const entry={id:id??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
+  foodId:foodId||null,stockQty:qty,amount:numeric(amount),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:explicitCost===null?'inventory':'manual'};
  const oldMoves=state.local.stockMoves;
  state.local.stockMoves=oldMoves.filter(m=>m.linkedFoodId!==entry.id);
  try{

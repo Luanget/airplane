@@ -1,3 +1,4 @@
+import {syncCalendarFields} from '../calendar.mjs';
 import {cents,newPurchaseId,recordPurchase} from './purchases.mjs';
 import {saveSku} from './inventory.mjs';
 import {inventoryWithMoves,recordEvent,numeric,validDate} from './core.mjs';
@@ -165,7 +166,7 @@ export function attachAssistant({getState,commit,today}) {
       const extra=$('candidate-extra');
       if(resultMode==='activity')readActivity=editActivity(extra,result.activity);
       if(resultMode==='purchase')totalField=field(extra,'订单实付总额 ¥（待核对）',{type:'number',value:result.total});
-      $('candidate-note').textContent=result.note; review.elements.date.value=today();
+      $('candidate-note').textContent=result.note; review.elements.date.value=today();syncCalendarFields(review);
       rows=(result.items??[]).map(c=>editRow($('candidate-list'),c,getState(),data.mode));
       review.hidden=false; status.textContent='候选已生成，核对后可入账。';
     } catch (err) { if (id===version) status.textContent=err.name==='TypeError'?'无法连接 AI 服务，请检查设备网络':err.message; }

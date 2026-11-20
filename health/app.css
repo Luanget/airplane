@@ -7,7 +7,8 @@ body[data-module="health"] h2 { font-size:17px }
 body[data-module="health"] fieldset { min-width:0 }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap }
 .view.hidden { display:none }
-.health-date { display:block; width:max-content; margin:7px 0 0 34px }
+.health-date { display:block; width:max-content }
+.health-day-switcher .month-step { width:29px; height:36px }
 .health-date input { color:var(--muted); border:0; padding:3px 0; background:transparent; font-size:13px }
 .section-title-row { margin:4px 2px 14px }
 .panel-title, .hero-label, .hero-foot, .cycle-meta {
@@ -78,3 +79,9 @@ body[data-module="health"] label.checkbox { display:flex; gap:8px; align-items:c
 .entry-fields details { margin-top:12px }
 .entry-fields summary { color:var(--muted); font-size:13px; cursor:pointer }
 .entry-fields details[open] > summary { margin-bottom:10px }
+body[data-module="health"] .calendar-field { display:grid; margin:5px 0 12px; border:1px solid var(--line); background:var(--surface-2); min-height:42px }
+body[data-module="health"] .calendar-field input:is([type=date],[type=time]) { margin:0; padding:0; min-height:0 }
+body[data-module="health"] .health-date .calendar-field { display:inline-grid; min-height:32px; margin:0; border:0; background:transparent; padding:0; color:var(--muted); font-size:13px }
+.shopping-row .checkbox { flex:1; min-width:0; min-height:44px; overflow-wrap:anywhere; cursor:pointer }
+.shopping-row input[type=checkbox] { flex:none; width:18px; height:18px; margin:0; accent-color:var(--green) }
+body[data-module="health"] .shopping-row input[type=number] { width:78px; margin:0 }

@@ -209,8 +209,11 @@ try {
   // Start in finance, reuse the saved expense, then start a separate purchase in inventory.
   await page.locator('#addButton').click();await page.locator('#txAmount').fill('18');
   await page.locator('#txNote').fill('试验采购');
+  await page.locator('#txTime').fill('18:05');
+  assert.equal(await page.locator('#txTime').locator('..').locator('.calendar-value').textContent(),'18:05');
   await page.getByRole('button',{name:'保存食品支出并同步入库'}).click();
   const buy=page.locator('#purchase-form');
+  await page.waitForFunction(()=>document.querySelector('#purchase-form [name=time]')?.value==='18:05');
   await buy.locator('[name=quantity]').fill('2');await buy.locator('[name=cost]').fill('18');
   await buy.locator('[type=submit]').click();
   await page.locator('#purchases-list').getByText(/已关联支出/).waitFor();
@@ -221,7 +224,7 @@ try {
   await page.locator('#txSubmit').waitFor();
   const link=page.url();
   await page.locator('#txSubmit').click();
-  assert.equal(JSON.parse(await ledger()).transactions.length,count+1);
+  await page.waitForFunction(expected=>JSON.parse(localStorage.getItem('airplane-pwa-v1')).transactions.length===expected,count+1);
   await page.goto(link);
   await page.getByText('这张采购订单已记账',{exact:true}).waitFor();
   assert.equal(JSON.parse(await ledger()).transactions.length,count+1);
@@ -243,6 +246,67 @@ try {
   await combined.locator('[name=finance]').check();
   await combined.locator('[type=file]').setInputFiles({name:'both.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(both))});
   await page.waitForFunction(expected=>JSON.parse(localStorage.getItem('airplane-pwa-v1')).transactions.length===expected,count+1);
+  await page.locator('#health-settings-sheet [data-sheet-close]').click();
+  await page.locator('[data-tab="inventory"]').click();
+  const purchaseRow=amount=>page.locator('#purchases-list p').filter({hasText:'¥'+amount});
+  await purchaseRow('6.00').getByRole('button',{name:'编辑采购'}).click();
+  await buy.locator('[name=total]').fill('9');
+  await buy.locator('[name=quantity]').fill('3');
+  await buy.locator('[name=cost]').fill('9');
+  await buy.locator('[type=submit]').click();
+  await purchaseRow('9.00').filter({hasText:'已关联支出'}).waitFor();
+  const afterEdit=JSON.parse(await ledger());
+  assert.equal(afterEdit.transactions.length,count+1);
+  assert.equal(afterEdit.transactions.find(t=>t.id.startsWith('expense-purchase-')).amount,9);
+  assert.equal(await quantity(),9);
+
+  // Simulate a failed financial write after the recovery record was persisted.
+  await page.evaluate(async()=>{
+    const account=window.airplaneAccount;
+    const {readState,saveState,readPurchaseUpdate}=await import('./storage.mjs');
+    const {revisePurchase,purchaseTransactionId}=await import('./purchases.mjs');
+    const {projectedExpense,updatePurchaseLedgers}=await import('./purchase-sync.mjs');
+    const state=await readState();
+    const order=state.local.purchases.find(x=>x.totalCents===900);
+    const tx=JSON.parse(account.finance.getItem('airplane-pwa-v1')).transactions.find(t=>t.id===purchaseTransactionId(order));
+    const updated=revisePurchase(state,order.id,{...order,totalCents:1100,items:[{...order.items[0],costCents:1100}]});
+    const failing={...account,finance:{getItem:k=>account.finance.getItem(k),setItem(){throw Error('synthetic storage failure');}}};
+    try{await updatePurchaseLedgers(failing,updated.next,state.revision,projectedExpense(order,updated.order,tx));}
+    catch(err){if(err.message!=='synthetic storage failure')throw err;}
+    if(!(await readPurchaseUpdate(account)))throw Error('recovery journal missing');
+    if((await readState()).local.purchases.find(x=>x.id===order.id).totalCents!==900)throw Error('pending edit appeared as committed');
+    try{await saveState(state,state.revision,account);}
+    catch(err){if(err.message.includes('待完成'))return;}
+    throw Error('unrelated writes are not blocked during recovery');
+  });
+  await page.reload();await page.locator('[data-tab="inventory"]').click();
+  await purchaseRow('11.00').filter({hasText:'已关联支出'}).waitFor();
+  assert.equal(JSON.parse(await ledger()).transactions.find(t=>t.id.startsWith('expense-purchase-')).amount,11);
+  await purchaseRow('11.00').getByRole('button',{name:'撤销采购'}).click();
+  await purchaseRow('11.00').filter({hasText:'已撤销'}).waitFor();
+  assert.equal(JSON.parse(await ledger()).transactions.length,count);
+  assert.equal(await quantity(),6);
+
+  // The list can feed a purchase draft without touching inventory until confirmation.
+  await page.locator('#inventory-list').getByRole('button',{name:'合成库存'}).click();
+  await page.locator('#sku-form [name=minimum]').fill('7');
+  await page.locator('#sku-form [type=submit]').click();
+  await page.getByText('合成库存 库存偏低',{exact:true}).waitFor();
+  await page.getByText('补货清单',{exact:true}).click();
+  await page.getByRole('button',{name:'加入低库存食品'}).click();
+  const shopping=page.locator('#shopping-list');
+  await shopping.locator('label').scrollIntoViewIfNeeded();
+  await shopping.getByRole('checkbox').check();
+  await page.getByRole('button',{name:'用勾选项填写采购单'}).click();
+  assert.equal(await buy.locator('[name=foodId]').inputValue(),'fixture');
+  assert.equal(await quantity(),6);
+  await buy.locator('[name=quantity]').fill('3');
+  await buy.locator('[name=total]').fill('6');
+  await buy.locator('[type=submit]').click();
+  await page.locator('#toast').getByText('订单已入库').waitFor();
+  assert.equal(await quantity(),9);
+  assert.equal(await shopping.locator('[type=number]').inputValue(),'4');
+  console.log('PASS mirrored purchase correction, interrupted commit recovery, cancellation and shopping conversion');
   console.log('PASS BYOK with private request payload, both purchase directions, duplicate protection and selective backup restore');
   await page.goto(base);
   await page.evaluate(()=>{localStorage.setItem('airplane-pwa-v1','{');localStorage.setItem('airplane-pwa-recovery-v1','invalid');});
