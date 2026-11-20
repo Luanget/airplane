@@ -117,16 +117,23 @@
       <div class="segmented health-types"><button type="button" data-entry="food">饮食</button><button type="button" data-entry="weight">体重</button><button type="button" data-entry="activity">运动</button></div>
 <div class="card entry-fields" data-entry-panel="food"><form id="food-form">
             <p id="food-editing" class="muted" hidden>正在更正历史记录</p>
+            <details id="meal-templates" hidden><summary>套用常吃的一餐</summary>
             <div class="form-grid"><label>餐食模板<select id="meal-template"></select></label><button type="button" id="use-template" class="btn btn-secondary">应用到当前日期与餐次</button></div>
+            </details>
 
             <div class="form-grid"><label>日期<input type="date" name="date" required></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div>
             <label>从库存食品选择（可选）<select name="foodId" id="food-select"><option value="">自定义食物</option></select></label>
             <label>食品名称<input name="name" required placeholder="如：熟鸡胸、面包、外卖"></label>
-            <div class="form-grid"><label>份量描述<input name="portion" placeholder="如：246g / 1整包"></label><label>自动估值份量（g / mL / 个）<input type="number" name="amount" min="0" step="any" inputmode="decimal" placeholder="可选"></label></div>
+            <div class="form-grid"><label>份量描述<input name="portion" placeholder="如：246g / 1整包"></label><label>份量（按食品单位）<input type="number" name="amount" min="0" step="any" inputmode="decimal" placeholder="可选"></label></div>
+            <div class="form-grid"><label>进食状态<select name="status"><option value="actual">已吃（计入）</option><option value="plan">计划</option><option value="cancelled">取消</option></select></label></div>
+            <p class="muted form-hint" id="food-summary" hidden></p>
+            <button class="btn btn-primary full" type="submit">确认保存这条饮食</button><button id="cancel-food-edit" type="button" class="btn btn-text" hidden>结束编辑</button>
+            <details class="entry-options"><summary>营养、成本与库存详情</summary>
             <div class="form-grid"><label>热量 kcal<input name="kcal" type="number" step="0.01" min="0"></label><label>蛋白质 g<input name="protein" type="number" step="0.01" min="0"></label><label>碳水 g<input name="carbs" type="number" step="0.01" min="0"></label><label>脂肪 g<input name="fat" type="number" step="0.01" min="0"></label><label>钠 mg<input name="sodium" type="number" step="any" min="0"></label><label>成本 ¥（可选）<input name="cost" type="number" step="0.01" min="0" placeholder="未知可留空"></label></div>
-            <div class="form-grid"><label>进食状态<select name="status"><option value="actual">已吃（计入）</option><option value="plan">计划</option><option value="cancelled">取消</option></select></label><label>库存扣减数量（原库存单位，可选）<input name="stockQty" type="number" min="0" step="any" placeholder="不填则不扣"></label></div>
+            <label>库存扣减数量（原单位）<input name="stockQty" type="number" min="0" step="any" placeholder="可选"></label>
             <div class="form-grid"><label>消耗批次<select name="batchId" id="food-batch"></select></label><label>数据来源<select name="quality"><option value="label">标签或实测</option><option value="estimated">估算</option><option value="unknown">待补数据</option></select></label></div>
             <label>估算依据或备注<input name="uncertainty"></label>
+            </details>
             <details><summary>包装扣重 / 生熟换算</summary><div class="form-grid">
               <label>称重前毛重 g<input name="before" type="number" min="0" step="any"></label><label>称重后毛重 g<input name="after" type="number" min="0" step="any"></label>
               <label>空包装重 g<input name="tare" type="number" min="0" step="any"></label>
@@ -134,8 +141,6 @@
               <label>同批生重 g<input name="raw" type="number" min="0" step="any"></label><label>同批熟重 g<input name="cooked" type="number" min="0" step="any"></label>
               <button id="apply-weight" type="button" class="btn btn-secondary">计算份量</button>
             </div></details>
-            <p class="form-hint">从食品库选择后，会按标签的100g或整份自动填写营养。请在提交前核对重量与标签；未知不能由AI代填为实测值。</p>
-            <button class="btn btn-primary full" type="submit">确认保存这条饮食</button><button id="cancel-food-edit" type="button" class="btn btn-text" hidden>结束编辑</button>
           </form></div>
         <div class="card entry-fields" data-entry-panel="weight" hidden><form id="weight-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>体重 kg<input type="number" name="kg" min="20" max="500" step="0.01" inputmode="decimal" required placeholder="75.0"></label></div><label class="checkbox"><input type="checkbox" name="isMorning" checked> 晨重（计入7次均重）</label><button type="submit" class="btn btn-primary full">保存体重</button></form></div>
         <div class="card entry-fields" data-entry-panel="activity" hidden><form id="activity-form"><div class="form-grid"><label>日期<input type="date" name="date" required></label><label>运动类型<input name="name" required placeholder="通勤骑行 / 夜骑 / 步行"></label><label>距离 km<input name="km" type="number" min="0" step="0.01" placeholder="可选"></label><label>活动热量 kcal<input name="kcal" type="number" min="0" step="0.1"></label><label>时长（分钟）<input type="number" name="minutes" min="0" step="any"></label><label>消耗口径<select name="energyKind"><option value="activity">单次活动</option><option value="total">设备全天总消耗</option></select></label><label>数据来源<select name="quality"><option value="estimated">手动估算</option><option value="device">手表或运动设备</option></select></label></div><label class="checkbox"><input type="checkbox" name="includedInBase" checked> 已包含普通日TDEE（通勤通常勾选，防重复）</label><button type="submit" class="btn btn-primary full">保存运动</button></form></div>

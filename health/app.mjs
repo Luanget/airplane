@@ -112,7 +112,7 @@ function editEvent(type,id){
   fillForm(form,{...row,...row.nutrition,status:row.source==='legacy'?(row.actual?'actual':row.status.includes('计划')?'plan':'cancelled'):row.status});
   updateBatches();
   form.elements.batchId.value=row.batchId??'';
-  $('food-editing').hidden=$('cancel-food-edit').hidden=false;
+  $('food-editing').hidden=$('cancel-food-edit').hidden=false;showFoodSummary();
  }else {
   fillForm(form,row);
   if(type==='weight')form.elements.isMorning.checked=!!(row.isMorning??/^(是|纳入|暂定纳入)/.test(row.trendStatus??''));
@@ -160,6 +160,7 @@ function rebuildFoodSelection(){
  }
  const batchOptions=batchBalances(state).filter(b=>b.remaining>0).map(b=>`<option value="${E(b.id)}">${E(inv.find(i=>i.id===b.foodId)?.name)} · ${E(b.date)} · 余 ${fmt(b.remaining,3)}</option>`).join('');
  for(const el of document.querySelectorAll('[data-batch-options]'))el.innerHTML=batchOptions;
+ $('meal-templates').hidden=!(state.local.templates?.length);
  $('meal-template').innerHTML=(state.local.templates??[]).map(t=>`<option value="${E(t.id)}">${E(t.name)}</option>`).join('');
  updateBatches();
 }
@@ -179,16 +180,26 @@ async function removeEvent(type,id){
 }
 function resetEditor(form,type){
  delete editing[type];dirtyEntries.delete(type);form.reset();setDateDefaults();
- if(type==='food')$('food-editing').hidden=$('cancel-food-edit').hidden=true;
+ if(type==='food'){$('food-editing').hidden=$('cancel-food-edit').hidden=true;showFoodSummary();}
+}
+function showFoodSummary(){
+ const f=$('food-form');
+ const kcal=numeric(f.elements.kcal.value),quantity=numeric(f.elements.stockQty.value);
+ const item=inventoryWithMoves(state).find(x=>x.id===f.elements.foodId.value);
+ const parts=[];
+ if(kcal!==null)parts.push('热量 '+fmt(kcal,1)+' kcal');
+ if(item&&quantity>0&&f.elements.status.value==='actual')parts.push('扣库 '+fmt(quantity,3)+' '+item.unit);
+ const output=$('food-summary');
+ output.textContent=parts.join(' · ');output.hidden=!parts.length;
 }
 function applyAmount(){
  const form=$('food-form'),sku=inventoryWithMoves(state).find(s=>s.id===form.elements.foodId.value);
  if(!sku)return;
  const quantity=numeric(form.elements.amount.value);
  const nutrition=suggestNutritionByInventory(sku,quantity);
- if(!nutrition){form.elements.stockQty.value='';return;}
+ if(!nutrition){form.elements.stockQty.value='';showFoodSummary();return;}
  fillForm(form,nutrition);
- form.elements.stockQty.value=manualStockQty(sku,quantity)??'';
+ form.elements.stockQty.value=manualStockQty(sku,quantity)??'';showFoodSummary();
 }
 function download(name,content){const blob=new Blob([content],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);}
 function backup(){download(`airplane-health-backup-${dateNow()}.json`,exportState(state));}
@@ -234,7 +245,10 @@ function attach(){
   if(d.contains(t))document.body.append(t);
  }));
  attachAssistant({getState:()=>state, commit, today:dateNow});
- $('check-update').onclick=()=>checkForAppUpdate(true);
+ $('check-update').onclick=()=>{
+  $('health-settings-sheet').close();
+  checkForAppUpdate(true);
+ };
  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
  $('report-date').addEventListener('change',e=>{if(validDate(e.target.value)){selectedDate=e.target.value;renderOverview();}});
  $('jump-import').addEventListener('click',openSettings);$('quick-record').addEventListener('click',openEntry);$('inventory-search').addEventListener('input',()=>renderInventory());
@@ -248,12 +262,13 @@ function attach(){
  $('food-select').onchange=()=>{
   const form=$('food-form'),sku=inventoryWithMoves(state).find(s=>s.id===form.elements.foodId.value);
   form.elements.stockQty.value='';updateBatches();
-  if(!sku)return;
+  if(!sku){showFoodSummary();return;}
   const [amount,unit]=basis(sku);
   fillForm(form,{name:sku.name,amount,portion:`${amount} ${unit}`});
   form.elements.amount.placeholder='份量单位：'+unit;
   applyAmount();
  };
+ $('food-form').oninput=showFoodSummary;
  $('food-form').elements.amount.oninput=applyAmount;
  $('apply-weight').onclick=()=>{
   const form=$('food-form'),fields=Object.fromEntries(new FormData(form));
@@ -267,6 +282,7 @@ function attach(){
    fillForm(form,{amount,portion:`${grams} g（${fields.measuredStage==='cooked'?'熟重':'生重'}）`});
    applyAmount();
    if(sku?.unit==='g') form.elements.stockQty.value=convertCookingWeight(grams,fields.measuredStage,sku.stockStage??stage,numeric(fields.raw)??batch?.raw,numeric(fields.cooked)??batch?.cooked);
+   showFoodSummary();
   }catch(err){toast(err.message);}
  };
  $('save-template').onclick=async()=>{

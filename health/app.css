@@ -75,3 +75,6 @@ body[data-module="health"] label.checkbox { display:flex; gap:8px; align-items:c
 #assistant-status { display:block; margin:8px 0; color:var(--muted) }
 #assistant-status:empty { display:none }
 .health-sheet #toast { position:sticky; inset:auto; bottom:0; transform:none; margin:12px auto 0 }
+.entry-fields details { margin-top:12px }
+.entry-fields summary { color:var(--muted); font-size:13px; cursor:pointer }
+.entry-fields details[open] > summary { margin-bottom:10px }
