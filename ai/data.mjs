@@ -45,7 +45,8 @@ const financeSets={
  finance_settings:['财务设置',{initialBalance:'?number',lastIncomeCategoryId:'?name',lastExpenseCategoryId:'?name'}]
 };
 const otherSets={
- skills:['Skill',{name:'name',text:'name',enabled:'bool'}],
+ skills:['Skill',{name:'name',text:'name',enabled:'bool',folderId:'name',folderName:'name'}],
+ skill_folders:['Skill 文件夹',{name:'name',skillIds:'identifiers'}],
  conversations:['对话',{title:'name'}],
  assistant_settings:['助手设置',{model:'name',history:'name'}]
 };
@@ -64,6 +65,7 @@ const validators={
  name:value=>typeof value==='string'&&!!value.trim(),text:value=>typeof value==='string',
  date:dateString,time:value=>value===''||typeof value==='string'&&normalizeClock(value)===value,
  cycleDays:value=>Number.isInteger(value)&&value>=1&&value<=31,unit:value=>units.includes(value),
+ identifiers:value=>Array.isArray(value)&&value.every(id=>typeof id==='string'&&id.trim()),
  packUnit:value=>isChoice(value,'g','mL'),stage:value=>isChoice(value,'raw','cooked'),
  foodStatus:value=>isChoice(value,'actual','plan','cancelled'),
  meal:value=>isChoice(value,'早餐','午餐','晚餐','加餐'),
@@ -156,12 +158,13 @@ export async function readAppData(workspace,book,{dataset,id,date,query,fields=[
  if(dataset==='app_info')return {dataset,version:APP_VERSION};
 
  const shape=dataShape(dataset);
- if(!id&&!date&&!term&&!singletons.has(dataset)&&!['categories','skills','budgets','legacy_rules'].includes(dataset))
+ if(!id&&!date&&!term&&!singletons.has(dataset)&&!['categories','skills','skill_folders','budgets','legacy_rules'].includes(dataset))
   return {...shape,hint:'请选择 ID、记录日期、月份或关键词后查询。'};
  let found;
  if(Object.hasOwn(healthSets,dataset))found=healthRows(await workspace.readHealth(),dataset);
  else if(Object.hasOwn(financeSets,dataset))found=financeRows(readFinance(workspace.finance).payload??freshData(),dataset);
  else if(dataset==='skills')found=workspace.skills.list();
+ else if(dataset==='skill_folders')found=workspace.skills.folders();
  else if(dataset==='conversations')found=book.list().map(({id,title,updatedAt})=>({id,title,updatedAt}));
  else found=[currentSettings(workspace.finance)];
  const filtered=found.filter(row=>{
@@ -377,6 +380,12 @@ export async function dataEdit(workspace,book,result,today){
   if(previous?.preset)check(action!=='delete'&&!fields.name,'预置 Skill 可以改规则或关闭');
   updated=action==='delete'?null:{...previous,...fields};
   commit=()=>workspace.skills.applyChanges(id,fields,previous,action);
+ }else if(dataset==='skill_folders'){
+  previous=workspace.skills.folders().find(row=>row.id===id);validate(previous);
+  check(!previous?.preset,'请选自己的 Skill 文件夹');
+  if(action==='add')check(!id&&fields.name,'新文件夹需要名称');
+  updated=action==='delete'?null:{...previous,...fields};
+  commit=()=>workspace.skills.saveFolder(id,fields,action);
  }else if(dataset==='conversations'){
   previous=book.list().map(({id,title})=>({id,title})).find(row=>row.id===id);validate(previous);
   check(action!=='add','开始对话请发送一条新消息');

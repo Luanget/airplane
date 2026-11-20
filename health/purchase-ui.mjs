@@ -14,6 +14,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
  const form=document.querySelector('#purchase-form'),lines=form.querySelector('[data-lines]');
  const output=document.querySelector('#purchases-list'),details=form.closest('details');
  const button=form.querySelector('[type=submit]'),cancelEdit=form.querySelector('[data-close-edit]');
+ const home=document.createComment('采购录入表单');form.before(home);
  const pendingPanel=document.querySelector('#purchase-recovery');
  const params=new URL(location.href).searchParams;
  let orderId=newPurchaseId(),editing=null,shopping=new Set(),saving=false;
@@ -70,12 +71,17 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   url.searchParams.set('purchase',order.id);
   location.href=url.href;
  }
+ function dockEditor(row){
+  if(row){row.after(form);form.classList.add('inline-inventory-editor');}
+  else{home.after(form);form.classList.remove('inline-inventory-editor');}
+ }
  function render(){
+  dockEditor(null);
   let transactions=[];
   try {transactions=finance();}catch {}
   const els=(getState().local.purchases??[]).slice().reverse().map(order=>{
    const tx=transactions.find(t=>t.id===purchaseTransactionId(order));
-   const p=document.createElement('p');
+   const p=document.createElement('p');p.dataset.purchaseId=order.id;
    p.textContent=displayDay(order.date)+(normalizeClock(order.time)?' '+normalizeClock(order.time):'')+' · ¥'+(order.totalCents/100).toFixed(2)+' · '+order.items.length+' 项 · '+(order.note||'采购');
    if(order.status==='cancelled'){p.append(' · 已撤销');return p;}
    if(tx){
@@ -83,11 +89,13 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
    } else if(!order.financeId&&order.totalCents>0){
     p.append(' ',action('去财务确认支出',()=>openFinance(order)));
    }else if(order.financeId)p.append(' · 关联支出待恢复');
-   p.append(' ',action('编辑采购',()=>openEdit(order)),action('撤销采购',()=>void withdraw(order)));
+   p.append(' ',action('编辑采购',()=>editing?.id===order.id?reset():openEdit(order),{'ariaExpanded':String(editing?.id===order.id)}),action('撤销采购',()=>void withdraw(order)));
    if(order.history?.length)p.append(' · '+order.history.length+' 次更正');
    return p;
   });
-  output.replaceChildren(...els);refreshLinks();
+  output.replaceChildren(...els);
+  if(editing)dockEditor(els.find(row=>row.dataset.purchaseId===editing.id));
+  refreshLinks();
   syncChoiceFields(form);
  }
  function reset(items=[]){
@@ -99,13 +107,14 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
  function reveal(){
   switchTab('inventory');details.open=true;details.scrollIntoView({block:'start'});
  }
- function openEdit(order){
+ function openEdit(order,fromFinance=false){
   form.reset();editing=order;shopping=new Set();
   button.textContent='保存采购更正';cancelEdit.hidden=false;
   form.elements.financeId.disabled=true;form.elements.createExpense.disabled=true;
   form.elements.date.value=order.date;form.elements.time.value=normalizeClock(order.time);form.elements.total.value=(order.totalCents/100).toFixed(2);form.elements.note.value=order.note;
   lines.replaceChildren();order.items.forEach((r,i)=>addLine({...r,batchId:orderBatchId(order,r,i)}));syncChoiceFields(form);
-  reveal();syncCalendarFields(form);
+  details.open=true;render();syncCalendarFields(form);
+  if(fromFinance){switchTab('inventory');form.scrollIntoView({block:'nearest'});}
  }
  function readItems(){
   const foods=new Map(inventoryWithMoves(getState()).map(row=>[row.id,row]));
@@ -184,7 +193,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
  }
  if(params.has('editPurchase')){
   const match=getState().local.purchases?.find(x=>x.id===params.get('editPurchase')&&x.status!=='cancelled');
-  if(match)openEdit(match);
+  if(match)openEdit(match,true);
  }
  return {
   openOrder(items){reset(items);reveal();},

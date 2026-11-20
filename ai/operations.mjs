@@ -13,7 +13,7 @@ function field(parent,name,control){
 function heading(parent,text){
  const title=document.createElement('h3');title.textContent=text;parent.append(title);
 }
-export function skillReview(container,items,suggested){
+export function skillReview(container,items,suggested,fixedId){
  const card=document.createElement('section');
  card.className='skill-edit-review';container.append(card);
  heading(card,'核对 Skill 修改');
@@ -21,8 +21,9 @@ export function skillReview(container,items,suggested){
  target.dataset.pickerVerbatim='';
  target.add(new Option('新建并启用个人 Skill',''));
  for(const item of items)target.add(new Option(item.name,item.id));
- const match=items.filter(item=>item.name===suggested.name);
+ const match=items.filter(item=>fixedId?item.id===fixedId:item.name===suggested.name);
  if(match.length===1)target.value=match[0].id;
+ if(fixedId)target.disabled=true;
  const name=field(card,'名称',document.createElement('input'));
  name.maxLength=SKILL_NAME_LIMIT;name.value=suggested.name??'我的偏好';
  const before=document.createElement('details'),summary=document.createElement('summary'),previous=document.createElement('p');

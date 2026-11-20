@@ -158,3 +158,10 @@ body[data-module="health"] [data-shell] .shopping-row input[type=number] { width
 #purchase-form [data-lines] fieldset { margin:0 0 10px; padding:12px 12px 4px; border:1px solid var(--line); border-radius:14px }
 #purchase-form [data-lines] fieldset > button { grid-column:1 / -1; justify-self:end }
 .inventory-purchase-log { margin-top:14px; padding-top:10px; border-top:1px solid var(--line) }
+
+.inline-inventory-editor {
+ padding:10px 12px; margin:8px 0 12px; border:1px solid var(--line); border-radius:13px;
+ background:var(--surface-2)
+}
+body[data-module="health"] [data-shell] .inline-inventory-editor :is(input,select,textarea):not([type=checkbox],[data-short-date]) { background:var(--surface) }
+.inline-inventory-editor [data-close-stock-editor],.inline-inventory-editor [data-close-edit] { min-height:44px }

@@ -36,9 +36,11 @@ export async function demoWorkspace(today){
  }
  const workspace={account,finance,readHealth:()=>readState(account),saveHealth:(next,expected)=>saveState(next,expected,account),
   skills:skillLibrary(finance,'skill')};
- async function respond(input,{allowRead,continuation=[],applied=[],photoPosition}={}){
+ async function respond(input,{allowRead,continuation=[],applied=[],photoPosition,skillMerge}={}){
   const latest=continuation.at(-1);
   const text=input.text;
+  if(skillMerge)return {reply:'已整理个人规则和新版差异，请核对后保存。',proposal:{mode:'skill',date:null,
+   result:{name:skillMerge.name,text:skillMerge.personal}}};
   const focus=inventoryWithMoves(await workspace.readHealth()).find(s=>text.includes(s.name)),name=focus?.name??'燕麦';
   const quantity=Number(text.match(/(\d+(?:\.\d+)?)\s*(?:g|克)/i)?.[1]??300);
   const propose=(reply,mode,result)=>({reply,proposal:{mode,result,date:null}});

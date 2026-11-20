@@ -29,12 +29,12 @@ const transcript=$('.chat-transcript'),thread=$('.chat-thread'),review=$('.chat-
 const photoResults=$('[data-photo-results]');
 const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
 const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]'),stop=$('[data-stop-request]');
-const retryFollowUp=$('[data-retry-follow-up]');
+const retryFollowUp=$('[data-retry-follow-up]'),retryRequest=$('[data-retry-request]'),restoreReview=$('[data-restore-review]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
 const historySearch=historyPanel.querySelector('input');
 const historyConfirmation=$('[data-delete-confirm]'),historyDelete=$('[data-delete-apply]');
 const keyPanel=$('#assistant-key-panel'),settings=$('#assistant-settings-sheet');
-let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null,photoRun=null;
+let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null,photoRun=null,photoBatch=null;
 
 hydrateShell();
 const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
@@ -90,18 +90,16 @@ function revealKeySettings(){
 }
 function tell(text){status.textContent=text;}
 function report(err){tell(err.name==='TypeError'?'无法完成请求，请检查网络或本机存储':err.message);}
-async function requestReply(input,options,userText){
- const sent=userText?messageNode('user',userText):null;
+async function requestReply(input,options,savePartial=()=>{}){
  const answer=messageNode('assistant','');
  const reply=answer.querySelector('.chat-bubble');
  answer.classList.add('streaming-reply');answer.hidden=true;answer.setAttribute('aria-live','off');
  start.hidden=true;
- if(sent)transcript.append(sent);
  transcript.append(answer);thread.scrollTop=thread.scrollHeight;
  const onReply=text=>{
   const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
   if(answer.hidden)tell(demo?'正在接收演示回复…':'正在接收 OpenAI 回复…');
-  answer.hidden=false;reply.textContent=text;
+  answer.hidden=false;reply.textContent=text;savePartial(text);
   if(follow)thread.scrollTop=thread.scrollHeight;
  };
  const onTool=()=>tell('正在准备本机账本查询…');
@@ -120,7 +118,7 @@ async function requestReply(input,options,userText){
   }
   return result;
  }finally{
-  sent?.remove();answer.remove();start.hidden=!!book.current?.messages.length;
+  answer.remove();start.hidden=!!book.current?.messages.length;
   activeRequest=null;stop.hidden=true;
  }
 }
@@ -246,6 +244,22 @@ function append(role,text,carry=true,source){
 }
 function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;delete review.dataset.syncPending;}
 function clearFollowUp(){followUp=null;retryFollowUp.hidden=true;}
+function sessionFlow({input,options}){
+ return {input:{...input,history:[],photo:null},options:{...options,skills:undefined,contextSummary:undefined},steps:[]};
+}
+function checkpoint(save){
+ let text='',timer;
+ const flush=()=>{
+  clearTimeout(timer);timer=undefined;
+  if(text)try{save(text);}catch{}
+ };
+ window.addEventListener('pagehide',flush);
+ document.addEventListener('visibilitychange',flush);
+ return {
+  update(value){text=value;if(!timer)timer=setTimeout(flush,240);},
+  stop(){flush();window.removeEventListener('pagehide',flush);document.removeEventListener('visibilitychange',flush);}
+ };
+}
 function resetPhoto(){
  composer.elements.image.value='';$('[data-attachment]').textContent='';clearPhoto.hidden=true;
 }
@@ -262,22 +276,43 @@ function lock(){
  composer.elements.image.disabled=waiting;
  composer.elements.allowRead.disabled=waiting;
  clearPhoto.disabled=waiting;
- retryFollowUp.disabled=waiting;
+ retryFollowUp.disabled=waiting;retryRequest.disabled=waiting;restoreReview.disabled=waiting;
  for(const button of photoResults.querySelectorAll('button'))button.disabled=waiting;
  for(const fields of review.querySelectorAll('.assistant-batch-step'))fields.disabled=waiting||review.dataset.syncPending==='yes';
  for(const b of review.querySelectorAll('button'))b.disabled=waiting;
  for(const b of $('.assistant-examples').querySelectorAll('button'))b.disabled=waiting;
 }
-function renderThread(){
- const messages=book.current?.messages??[];
+function renderTranscript(){
+ const current=book.current,messages=current?.messages??[];
  transcript.replaceChildren();
- photoResults.replaceChildren();
  start.hidden=messages.length>0;
- for(const m of messages)if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source);
- clearReview();clearFollowUp();clearComposer();syncThreads();updateContext();lock();
+ for(const [index,m] of messages.entries()){
+  if(index===current?.photos?.summaryIndex)continue;
+  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source);
+ }
+}
+function showPending(){
+ const pending=book.current?.pending;
+ retryRequest.hidden=!pending;
+ if(!pending)return;
+ if(pending.partial)bubble('assistant',pending.partial);
+ tell(pending.partial?'上次回复中断，已保留收到的部分。':'上次消息已保留，可以重试。');
+}
+function renderThread(){
+ const current=book.current;
+ renderTranscript();photoResults.replaceChildren();
+ clearReview();clearFollowUp();clearComposer();
+ photoBatch=null;if(current?.photos)renderPhotoBatch(current.photos);
+ showPending();
+ restoreReview.hidden=!current?.review;
+ if(current?.followUp){
+  followUp=current.followUp;retryFollowUp.hidden=false;
+  if(followUp.partial)bubble('assistant',followUp.partial);
+ }
+ syncThreads();updateContext();lock();
 }
 $('#assistant-skill pre').textContent=chatInstructions;
-const refreshSkills=mountSkillSettings($('#assistant-skill'),workspace.skills,updateContext);
+const refreshSkills=mountSkillSettings($('#assistant-skill'),workspace.skills,updateContext,mergeDefault);
 renderThread();
 newChat.onclick=()=>{
  try{book.start();openHistory(false);tell('');renderThread();}
@@ -319,7 +354,7 @@ async function makeReview(proposal,flow,photoJob){
    const message=await apply();
    if(result.dataset==='conversations')renderThread();
    if(result.dataset==='assistant_settings'){refreshModels();updateContext();}
-   if(result.dataset==='skills')refreshSkills();
+   if(['skills','skill_folders'].includes(result.dataset))refreshSkills();
    return message;
   };
   label=result.action==='delete'?'确认撤销或删除':'确认更新';
@@ -330,11 +365,14 @@ async function makeReview(proposal,flow,photoJob){
   confirm=financeReview(review,result.entry,today,workspace.finance);
   label='确认记账';
  }else if(mode==='skill'){
-  const read=skillReview(review,workspace.skills.list(),result);
+  const merge=flow.options.skillMerge;
+  const read=skillReview(review,workspace.skills.list(),result,merge?.id);
   label='确认更新 Skill';
   confirm=()=>{
    const {changes,current}=read();
-   workspace.skills.save(changes,current);refreshSkills();
+   if(merge)workspace.skills.resolveDefault(merge,changes.text);
+   else workspace.skills.save(changes,current);
+   refreshSkills();
    return current?'Skill 已更新。':'Skill 已新增并启用。';
   };
  }else{
@@ -366,7 +404,8 @@ async function makeReview(proposal,flow,photoJob){
  const discard=document.createElement('button');discard.type='button';discard.className='secondary-button';discard.textContent='放弃';
  discard.onclick=()=>{
   if(photoJob)settlePhoto(photoJob,'已放弃候选。');
-  clearReview();
+  else book.setReview(null);
+  restoreReview.hidden=true;clearReview();
  };
  actions.append(discard);
  let saveOnly;
@@ -383,9 +422,12 @@ async function makeReview(proposal,flow,photoJob){
   saving=true;lock();out.textContent='';
   let resume=false;
   try{
+   if(!photoJob&&book.current?.review)book.setReview({...book.current.review,applying:true});
+   if(photoJob){photoJob.stage='applying';savePhotoBatch();}
    const message=await confirm();
    if(photoJob)settlePhoto(photoJob,message);
-   clearReview();
+   else book.setReview(null);
+   restoreReview.hidden=true;clearReview();
    if(mode==='app_data_edit'&&result.dataset==='conversations'&&!book.current)tell(message);
    else append('assistant',message,false);
    if(continuationApproved){
@@ -394,9 +436,12 @@ async function makeReview(proposal,flow,photoJob){
      options:{...flow.options,contextSummary:'',applied:result.operations.map(operation=>operation.mode)},
      steps:[]
     };
+    book.setFollowUp(sessionFlow(followUp));
     resume=true;
    }
   }catch(err){
+   if(photoJob){photoJob.stage='done';savePhotoBatch();}
+   else if(book.current?.review?.applying)book.setReview({...book.current.review,applying:false});
    out.textContent=err.message;
    if(err instanceof AssistantSyncPending){
     review.dataset.syncPending='yes';apply.textContent='继续同步';discard.hidden=true;
@@ -413,10 +458,17 @@ async function makeReview(proposal,flow,photoJob){
  thread.scrollTop=Math.max(0,thread.scrollTop+review.getBoundingClientRect().top-thread.getBoundingClientRect().top-contextAbove);
 }
 
-async function complete(response,flow,source){
- clearReview();
- tell('');
- append('assistant',response.reply,!source,source);
+async function complete(response,flow,source,ticket){
+ clearReview();tell('');
+ if(flow.options.skillMerge&&response.proposal?.mode!=='skill')throw Error('没有收到可核对的融合结果');
+ const candidate=response.proposal?{proposal:response.proposal,flow:sessionFlow(flow)}:null;
+ if(ticket){
+  if(!book.finish(ticket,response.reply,source,candidate))return;
+  bubble('assistant',response.reply,source);syncThreads();updateContext();
+ }else{
+  append('assistant',response.reply,!source,source);book.setReview(candidate);
+ }
+ retryRequest.hidden=true;restoreReview.hidden=true;
  try{await makeReview(response.proposal,flow);}
  catch(err){clearReview();report(err);}
 }
@@ -492,7 +544,7 @@ function querySource(steps){
   first.scope==='foods'?'查看本次饮食记录 · '+first.summary.foods.length+' 条':'查看本次查询数据';
  return {label,text:steps.map(({scope,summary})=>describeSummary(scope,summary)).join('\n\n')};
 }
-async function resolveResponse(response,flow){
+async function resolveResponse(response,flow,savePartial){
  const {input,options,steps}=flow;
  const queried=new Set();
  while(response.call){
@@ -505,37 +557,78 @@ async function resolveResponse(response,flow){
    const summary=args.scope==='app_data'?await readAppData(workspace,book,args):
     await readLedger(workspace,args,input.date);
    steps.push({item,summary,scope:args.scope});
-   response=await requestReply(input,{...options,continuation:steps});
+   response=await requestReply(input,{...options,continuation:steps},savePartial);
    if(args.scope==='foods')try{book.setFoodDate(summary.date);}catch{}
  }
  return response;
 }
-async function showResponse(response,flow){
- const resolved=await resolveResponse(response,flow);
- await complete(resolved,flow,querySource(flow.steps));
+async function showResponse(response,flow,ticket,savePartial){
+ const resolved=await resolveResponse(response,flow,savePartial);
+ await complete(resolved,flow,querySource(flow.steps),ticket);
 }
 async function continueAfterSave(){
  if(!followUp||busy||saving)return;
  busy=true;retryFollowUp.hidden=true;lock();
  tell('账本已保存，正在继续本轮…');
+ renderTranscript();
+ const saved=checkpoint(text=>{
+  if(!followUp)return;
+  followUp.partial=text;book.setFollowUp({...sessionFlow(followUp),partial:text});
+ });
  try{
-  const flow={...followUp,steps:[]};
-  const response=await requestReply(flow.input,flow.options);
-  await showResponse(response,flow);
-  clearFollowUp();
+  const flow={...followUp,options:{skills:workspace.skills.active(),...followUp.options},steps:[]};
+  const response=await requestReply(flow.input,flow.options,saved.update);
+  await showResponse(response,flow,undefined,saved.update);
+  clearFollowUp();book.setFollowUp(null);
  }catch(err){
+  saved.stop();
+  if(followUp?.partial)bubble('assistant',followUp.partial);
   tell('账本已保存。'+err.message);
   retryFollowUp.hidden=false;
- }finally{busy=false;lock();}
+ }finally{saved.stop();busy=false;lock();}
 }
 retryFollowUp.onclick=continueAfterSave;
+function photoSummary(jobs){
+ const done=jobs.filter(job=>job.stage==='done'||job.stage==='settled'||job.stage==='applying');
+ const remaining=jobs.length-done.length;
+ const details=done.flatMap(job=>{
+  const result=job.proposal?.result;
+  const items=result?.items??job.items??[];
+  const labels=items.filter(row=>row.name).map(row=>row.name+(row.amount&&row.unit?' '+row.amount+' '+row.unit:''));
+  if(!labels.length&&result?.activity?.name)labels.push(result.activity.name);
+  if(!labels.length&&result?.entry?.amount)labels.push((result.entry.note||'收支')+' ¥'+result.entry.amount);
+  if(!labels.length&&job.reply){
+   const first=job.reply.trim().match(/^[^。！？\n]+[。！？]?/)?.[0];
+   if(first)labels.push(first);
+  }
+  return labels.length?['照片 '+job.index+' · '+labels.join('、')]:[];
+ });
+ const waiting=remaining?'还有 '+remaining+' 张未完成，可重试。':'';
+ const notice=jobs.some(job=>job.proposal&&job.stage==='done')?'请逐张核对候选。':'';
+ return ['这组共 '+jobs.length+' 张照片，已识别 '+done.length+' 张。'+waiting,...details,notice].filter(Boolean).join('\n');
+}
 function showPhoto(job,text,action=''){
  job.output.textContent=text;
  job.button.textContent=action? action+'照片 '+job.index:'';
  job.button.hidden=!action;
 }
+function savePhotoBatch(final=false){
+ if(!photoBatch)return;
+ const {id,flow,jobs}=photoBatch;
+ const text=photoSummary(jobs);
+ const photos={id,flow:sessionFlow(flow),summary:text,jobs:jobs.map(({index,label,reply,proposal,stage,items})=>
+  ({index,label,reply,proposal,stage,items}))};
+ photoBatch.summary=text;
+ book.setPhotos(photos);
+ if(final){
+  photoBatch.final?.remove();
+  photoBatch.final=messageNode('assistant',text);photoResults.append(photoBatch.final);
+  thread.scrollTop=thread.scrollHeight;
+ }
+}
 function settlePhoto(job,message){
- job.proposal=null;showPhoto(job,job.reply+'\n'+message);
+ job.items=job.proposal?.result?.items;job.proposal=null;job.stage='settled';
+ job.reply=job.reply+'\n'+message;showPhoto(job,job.reply);savePhotoBatch(true);
 }
 async function recognizePhotos(jobs,flow,total){
  const run={stopped:false};
@@ -546,64 +639,134 @@ async function recognizePhotos(jobs,flow,total){
    showPhoto(job,'识别中…');
    tell('正在识别照片 '+job.index+' / '+total+'…');
    stop.hidden=false;stop.disabled=false;
+   const saved=checkpoint(text=>{job.reply=text;savePhotoBatch();});
    try{
     const photo=await jpeg(job.file);
     if(run.stopped)throw Error('识别已停止。');
     const input={...flow.input,photo},options={...flow.options,photoPosition:{index:job.index,total}},steps=[];
-    const reply=await resolveResponse(await requestReply(input,options),{input,options,steps});
-    job.file=null;job.proposal=reply.proposal;job.reply=reply.reply;
+    const reply=await resolveResponse(await requestReply(input,options,saved.update),{input,options,steps},saved.update);
+    saved.stop();job.file=null;job.proposal=reply.proposal;job.reply=reply.reply;job.stage='done';
     const source=querySource(steps);
     remember('assistant','照片 '+job.index+'\n'+reply.reply,!source,source);
     showPhoto(job,reply.reply,job.proposal?'核对':'');
    }catch(err){
-    const message=run.stopped?'识别已停止。':
-     err.name==='EncodingError'?'无法读取这张照片，请重新选择。':err.message;
-    showPhoto(job,message,'重试');
+    saved.stop();
+    const reason=run.stopped?'识别已停止。':err.name==='EncodingError'?'无法读取这张照片，请重新选择。':err.message;
+    job.reply=[job.reply,reason].filter(Boolean).join('\n');job.stage='error';
+    showPhoto(job,job.reply,'重试');
    }
+   savePhotoBatch();
   }
  }finally{
   photoRun=null;stop.hidden=true;stop.textContent='停止等待';
+  savePhotoBatch(true);
   tell(run.stopped?'已暂停，可单独识别剩余照片。':'');
  }
 }
-async function sendPhotos(input,options,files){
- const total=files.length;
- const flow={input,options,steps:[]};
- append('user',[input.text,'（附 '+total+' 张照片）'].filter(Boolean).join(' '));
- clearComposer();clearReview();
+function renderPhotoBatch(batch,files=[]){
+ photoResults.replaceChildren();
  const group=document.createElement('section');
  group.className='card photo-batch';group.setAttribute('aria-label','照片识别结果');
- const jobs=files.map((file,i)=>{
+ const jobs=batch.jobs.map((fields,i)=>{
   const row=document.createElement('div'),name=document.createElement('strong'),output=document.createElement('p');
-  const button=document.createElement('button');button.type='button';button.className='text-button';button.disabled=true;
-  const index=i+1,label='照片 '+index+' · '+file.name;
-  row.className='photo-result';name.textContent=label;row.append(name,output,button);group.append(row);
-  const job={file,index,label,output,button};
-  showPhoto(job,'等待识别','识别');
-  button.onclick=async()=>{
+  const button=document.createElement('button');button.type='button';button.className='text-button';
+  const fileInput=document.createElement('input');fileInput.type='file';fileInput.accept='image/*';fileInput.hidden=true;
+  const job={...fields,file:files[i]??null,output,button};
+  row.className='photo-result';name.textContent=job.label;row.append(name,output,button,fileInput);group.append(row);
+  if(job.stage==='applying')showPhoto(job,job.reply+'\n上次保存未确认完成，请先核对账本。');
+  else if(job.stage==='done'||job.stage==='settled')showPhoto(job,job.reply,job.proposal?'核对':'');
+  else if(job.file)showPhoto(job,'等待识别','识别');
+  else showPhoto(job,(job.reply?job.reply+'\n':'')+'重新选择这张照片可接续识别。','重新选择');
+  const run=async()=>{
    if(busy||saving)return;
    busy=true;lock();
    try{
-    if(job.file)await recognizePhotos([job],flow,total);
+    const flow={...batch.flow,options:{skills:workspace.skills.active(),...batch.flow.options}};
+    if(job.file)await recognizePhotos([job],flow,jobs.length);
     else await makeReview(job.proposal,flow,job);
    }catch(err){clearReview();report(err);}
    finally{busy=false;lock();}
   };
+  button.onclick=()=>{
+   if(!job.file&&!job.proposal){fileInput.click();return;}
+   void run();
+  };
+  fileInput.onchange=()=>{
+   if(!fileInput.files[0])return;
+   job.file=fileInput.files[0];fileInput.value='';void run();
+  };
   return job;
  });
- photoResults.append(group);thread.scrollTop=thread.scrollHeight;
- await recognizePhotos(jobs,flow,total);
+ photoResults.append(group);
+ const final=batch.summary?messageNode('assistant',batch.summary):null;
+ if(final)photoResults.append(final);
+ photoBatch={...batch,jobs,final};
+ thread.scrollTop=thread.scrollHeight;
+}
+async function sendPhotos(input,options,files){
+ const total=files.length,flow={input,options,steps:[]};
+ const display=[input.text,'（附 '+total+' 张照片）'].filter(Boolean).join(' ');
+ book.begin(display,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto:true});
+ renderTranscript();syncThreads();updateContext();
+ clearComposer();clearReview();restoreReview.hidden=true;retryRequest.hidden=true;
+ renderPhotoBatch({id:crypto.randomUUID(),flow,jobs:files.map((file,i)=>({
+  index:i+1,label:'照片 '+(i+1)+' · '+file.name,stage:'queued'
+ }))},files);
+ savePhotoBatch();
+ await recognizePhotos(photoBatch.jobs,flow,total);
 }
 async function sendMessage(input,options,files){
- clearFollowUp();
+ clearFollowUp();book.setFollowUp(null);
  if(files.length>1){await sendPhotos(input,options,files);return;}
- tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
  const userText=[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' ');
- const response=await requestReply(input,options,userText);
- append('user',userText);
- clearComposer();
- clearReview();
- await showResponse(response,{input,options,steps:[]});
+ const previous=book.current?.pending?.request;
+ const hasPhoto=!!input.photo;
+ const reuse=previous?.text===input.text&&previous.hasPhoto===hasPhoto;
+ const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto,skillMerge:options.skillMerge},reuse);
+ const saved=checkpoint(text=>book.checkpoint(ticket,text));
+ clearReview();restoreReview.hidden=true;retryRequest.hidden=true;photoResults.replaceChildren();
+ renderTranscript();syncThreads();
+ tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
+ try{
+  const response=await requestReply(input,options,saved.update);
+  await showResponse(response,{input,options,steps:[]},ticket,saved.update);
+  clearComposer();
+ }catch(err){
+  saved.stop();
+  if(book.current?.pending?.id===ticket.id)showPending();
+  throw err;
+ }finally{saved.stop();}
+}
+retryRequest.onclick=()=>{
+ const item=book.current?.pending?.request;
+ if(!item||busy||saving)return;
+ composer.elements.text.value=item.text;
+ composer.elements.allowRead.checked=item.allowRead;
+ if(item.hasPhoto){tell('请重新选中原照片后再发送。');return;}
+ composer.requestSubmit();
+};
+restoreReview.onclick=async()=>{
+ const candidate=book.current?.review;
+ if(!candidate||busy||saving)return;
+ if(candidate.applying){
+  tell('上次保存未确认完成，请先核对账本。');
+  return;
+ }
+ busy=true;lock();
+ try{await makeReview(candidate.proposal,candidate.flow);restoreReview.hidden=true;}
+ catch(err){clearReview();report(err);}
+ finally{busy=false;lock();}
+};
+async function mergeDefault(info){
+ if(!info||busy||saving)return;
+ busy=true;lock();
+ try{
+  if(!demo&&!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
+  settings.close();
+  const input={mode:'chat',text:'融合新版 Skill：'+info.name,photo:null,date:localDate(),history:[]};
+  await sendMessage(input,{model:readChatModel(workspace.finance).id,allowRead:false,skillMerge:info},[]);
+ }catch(err){report(err);}
+ finally{busy=false;lock();}
 }
 composer.onsubmit=async e=>{
  e.preventDefault();if(busy||saving)return;
@@ -615,10 +778,15 @@ composer.onsubmit=async e=>{
    tell('正在读取本机 API Key…');
    if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
   }
-  const photo=files.length===1?await jpeg(files[0]):null,date=localDate(),model=readChatModel(workspace.finance).id;
+  const pending=book.current?.pending?.request;
+  const retry=pending?.text===text,skillMerge=retry?pending.skillMerge:undefined;
+  const photo=files.length===1?await jpeg(files[0]):null,date=(retry?pending.date:null)??localDate();
+  const model=readChatModel(workspace.finance).id;
   const {turns,skills,summary}=await prepareContext(date,model);
-  const input={mode:'chat',text,photo,date,history:turns};
-  const options={model,skills,contextSummary:summary,allowRead:composer.elements.allowRead.checked};
+  const history=skillMerge?[]:retry&&turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
+  const input={mode:'chat',text,photo,date,history};
+  const options=skillMerge?{model,allowRead:false,skillMerge}:
+   {model,skills,contextSummary:summary,allowRead:composer.elements.allowRead.checked};
   if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
  }catch(err){report(err);}

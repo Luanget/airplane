@@ -75,6 +75,8 @@
           </div>
           <label class="assistant-query"><input type="checkbox" name="allowRead" checked> 允许本轮查询账本</label>
           <div class="assistant-request-status"><output data-status aria-live="polite"></output><button type="button" class="text-button" data-stop-request hidden>停止等待</button></div>
+          <button type="button" class="text-button" data-retry-request hidden>重试这条消息</button>
+          <button type="button" class="text-button" data-restore-review hidden>继续核对上次候选</button>
           <button type="button" class="text-button" data-retry-follow-up hidden>重试后续请求</button>
         </form>
       </section>
@@ -105,8 +107,19 @@
           <div class="assistant-panel-body">
             <div data-skill-items></div>
             <button type="button" class="text-button skill-new" data-new-skill>新建 Skill</button>
+            <button type="button" class="text-button skill-new" data-new-folder>新建文件夹</button>
+            <form class="assistant-fields skill-editor" data-skill-folder-form hidden>
+              <label>文件夹名称<input name="name" required maxlength="60"></label>
+              <output role="status"></output>
+              <div class="chat-actions"><button type="button" class="text-button" data-close-folder>收起</button><button type="submit" class="primary-button">建立文件夹</button></div>
+            </form>
             <form id="skill-editor" class="assistant-fields skill-editor" hidden>
               <label>名称<input name="name" required></label>
+              <label>Skill 文件夹<select data-picker="" name="folderId"></select></label>
+              <div class="skill-update" data-skill-update hidden>
+                <p>内置规则有新版，要用 AI 融合你改过的内容吗？</p>
+                <div class="chat-actions"><button type="button" class="text-button" data-keep>保留我的规则</button><button type="button" class="text-button" data-merge>让 AI 融合</button></div>
+              </div>
               <label>工作规则<textarea name="text" rows="5" placeholder="例如：优先安排库存里的食材，份量用克。" required></textarea></label>
               <output role="status" data-skill-error></output>
               <div class="chat-actions">

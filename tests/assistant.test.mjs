@@ -1,3 +1,4 @@
+import {threadBook} from '../ai/threads.mjs';
 import {modelRequest,parseResult,pendingLedgerRead} from '../ai/responses.mjs';
 import {readResponseStream,ResponseStreamError} from '../ai/stream.mjs';
 import {test} from 'node:test';
@@ -442,4 +443,50 @@ test('nutrition queries omit inventory and matching saved chat queries omit othe
   {role:'assistant',text:'另一个主题'}]},{id:'second',title:'无关',messages:[{role:'user',text:'合成体重秘密'}]}]};
  const chat=await readAppData(workspace,book,{dataset:'conversation_messages',id:'first',date:null,query:'体重',fields:['text']});
  assert.deepEqual(chat.rows,[{text:'合成体重趋势'}]);
+});
+
+test('leaving a thread preserves its partial reply and only the matching ticket can finish it',()=>{
+ const values=new Map(),store={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
+ const first=threadBook(store),ticket=first.begin('测试消息',{text:'测试消息',hasPhoto:false});
+ first.checkpoint(ticket,'已收到的部分');
+ const reopened=threadBook(store);
+ assert.equal(reopened.current.pending.partial,'已收到的部分');
+ const retry=reopened.begin('测试消息',{text:'测试消息',hasPhoto:false},true);
+ assert.equal(reopened.current.messages.length,1);
+ assert.equal(first.finish(ticket,'旧响应',null,null),false);
+ assert.equal(reopened.finish(retry,'完成',null,{proposal:{mode:'plan'}}),true);
+ assert.equal(threadBook(store).current.review.proposal.mode,'plan');
+ assert.deepEqual(threadBook(store).current.messages.map(row=>row.text),['测试消息','完成']);
+});
+
+test('skill folders migrate old rules and AI can move rules into a new folder',async()=>{
+ const values=new Map([['airplane-ai-skill-v1','旧偏好']]);
+ const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
+ const skills=skillLibrary(storage),personal=skills.list().find(row=>!row.preset);
+ assert.equal(personal.folderId,'personal');
+ const request={dataset:'skill_folders',action:'add',id:null,changes:JSON.stringify({name:'我的训练',skillIds:[personal.id]})};
+ await (await dataEdit({skills},null,request,date)).commit();
+ const folder=skills.folders().find(row=>row.name==='我的训练');
+ assert.equal(skills.list().find(row=>row.id===personal.id).folderId,folder.id);
+ const add={dataset:'skills',action:'add',id:null,changes:JSON.stringify({name:'训练安排',text:'优先查询近期记录',folderId:folder.id})};
+ await (await dataEdit({skills},null,add,date)).commit();
+ assert.equal(skills.list().filter(row=>row.folderId===folder.id).length,2);
+});
+
+test('a changed default only prompts a merge for a customized preset and the baseline advances on confirmation',()=>{
+ const initial={overrides:{'l-stock':{text:'保留自己的盘点规则',baseText:'先前的默认版本'}},personal:[]};
+ const values=new Map([['airplane-ai-skills-v2',JSON.stringify(initial)]]);
+ const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
+ const skills=skillLibrary(storage);
+ const info=skills.mergeInfo('l-stock');
+ assert.equal(info.previous,'先前的默认版本');
+ assert.equal(info.personal,'保留自己的盘点规则');
+ assert.ok(info.current.includes('同款标签'));
+ assert.equal(skills.mergeInfo('l-progress'),null);
+ const request=modelRequest({mode:'chat',text:'融合 Skill',date,history:[],photo:null},{skillMerge:info,allowRead:true});
+ assert.equal(request.tools,undefined);
+ assert.deepEqual(Object.keys(JSON.parse(request.input[0].content[0].text).skillMerge),['name','previous','current','personal']);
+ skills.resolveDefault(info,'沿用自己的盘点规则，也核对同款标签');
+ assert.equal(skills.mergeInfo('l-stock'),null);
+ assert.equal(skills.list().find(row=>row.id==='l-stock').text,'沿用自己的盘点规则，也核对同款标签');
 });
