@@ -405,7 +405,33 @@ try {
   await page.locator('#importInput').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
   await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
   assert.deepEqual(JSON.parse(await ledger()),backup.data);
+  // The demo uses its own stored thread and ledger through the same review UI.
+  await page.goto(base+'assistant/?demo=1');
+  await chat.getByRole('button',{name:'查昨天饮食'}).click();
+  await form.getByRole('button',{name:'发送',exact:true}).click();
+  await chat.getByRole('region',{name:'账本摘要'}).getByText(/牛奶 · 250 g/).waitFor();
+  await chat.getByRole('button',{name:'发送摘要'}).click();
+  await chat.getByText('记录里有燕麦 60 g、牛奶 250 g。',{exact:true}).waitFor();
+  await page.reload();
+  await say('牛奶那条改成 300g');
+  await review.getByText('250 g → 300 g',{exact:true}).waitFor();
+  assert.equal(await review.getByText('牛奶 500 → 450 g',{exact:true}).count(),1);
+  const demoMilk=()=>page.evaluate(async()=>{
+    const {demoWorkspace}=await import('../ai/demo.mjs'),{localDate}=await import('../calendar.mjs');
+    return (await (await demoWorkspace(localDate())).readHealth()).local.foods.filter(row=>row.name==='牛奶');
+  });
+  const original=(await demoMilk())[0];
+  assert.equal(original.portion,'250 g');
+  await review.getByRole('button',{name:'确认更正'}).click();
+  await chat.getByText('已更正原饮食记录，并重新计算当日营养和关联库存。',{exact:true}).waitFor();
+  const milk=await demoMilk();
+  assert.deepEqual(milk.map(row=>[row.id,row.portion,row.nutrition.kcal]),[[original.id,'300 g',186]]);
+  await page.getByRole('link',{name:'健康',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#hero-goal').textContent.includes('kcal'));
+  await page.getByRole('button',{name:'前一天'}).click();
+  await page.locator('#local-events').getByRole('button',{name:/牛奶.*300 g.*186 kcal/}).waitFor();
   assert.deepEqual(errors,[]);
+  console.log('PASS dated food lookup, thread reload, confirmed in-place correction and health timeline');
   console.log('PASS damaged finance recovery and synthetic-only fixtures');
 } finally {
   await browser?.close();

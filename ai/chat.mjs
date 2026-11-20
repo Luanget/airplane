@@ -9,7 +9,7 @@ import {readKey} from './keys.mjs';
 import {financeReview} from './finance.mjs';
 import {chatInstructions} from './responses.mjs';
 import {cleanSkill,localWorkspace,shortHistory,readLedger,readLabels} from './workspace.mjs';
-import {inventoryReview,skillReview} from './operations.mjs';
+import {foodEditReview,inventoryReview,skillReview} from './operations.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 
@@ -190,7 +190,8 @@ async function makeReview(proposal,today){
    draft=result.operation==='shopping'?
     {apply,label:'确认加入补货清单',saved:'补货清单已更新。'}:
     {apply,label:'确认盘点',saved:'库存已按盘点结果更新。'};
-  }else draft=healthReview(review,proposal,current,today);
+  }else if(mode==='food_edit')draft=foodEditReview(review,proposal,current,today,book.current?.foodDate);
+  else draft=healthReview(review,proposal,current,today);
   if(draft){
    label=draft.label;
    confirm=async()=>{
@@ -226,6 +227,12 @@ async function complete(response,today,usedLedger=false){
 }
 function describeSummary(scope,summary){
  if(scope==='expenses')return summary.date+' · 支出 '+summary.expense+' 元 · 收入 '+summary.income+' 元 · '+summary.count+' 笔';
+ if(scope==='foods'){
+  const rows=summary.foods.map(row=>[row.time,row.meal,row.name,row.portion].filter(Boolean).join(' · '));
+  if(!rows.length)rows.push('没有匹配的实际饮食记录');
+  if(summary.more)rows.push('只发送前十条，可按食品名称进一步查询');
+  return [displayDay(summary.date,true),...rows].join('\n');
+ }
  const rows=summary.stock.map(row=>row.name+' · '+(row.qty??'数量未知')+' '+row.unit);
  if(!rows.length)rows.push('没有匹配的食品');
  if(summary.more)rows.push('只发送前四项');
@@ -246,7 +253,7 @@ async function sendMessage(input,{skill,allowRead}){
   if(response.call){
    if(!allowRead)throw Error('本轮未允许账本查询');
    const {args,item}=response.call,summary=await readLedger(workspace,args,input.date);
-   pending={input,skill,item,summary};
+   pending={input,skill,item,summary,scope:args.scope};
    $('[data-read-label]').textContent='助手请求了：'+readLabels[args.scope]+'。';
    $('[data-read-preview]').textContent=describeSummary(args.scope,summary);
    readPanel.hidden=false;thread.scrollTop=thread.scrollHeight;
@@ -286,9 +293,15 @@ approve.onclick=async()=>{
 cancelSend.onclick=()=>{clearConsent();lock();composer.elements.text.focus();};
 share.onclick=async()=>{
  if(!pending||busy)return;
- const {input,skill,item,summary}=pending;
+ const {input,skill,item,summary,scope}=pending;
  busy=true;lock();tell('正在生成回复…');
- try{await complete(await respond(input,{skill,continuation:{item,summary}}),input.date,true);}
+ try{
+  const response=await respond(input,{skill,continuation:{item,summary}});
+  if(scope==='foods'){
+   try{book.setFoodDate(summary.date);}catch{}
+  }
+  await complete(response,input.date,true);
+ }
  catch(err){report(err);}
  finally{busy=false;lock();}
 };

@@ -66,10 +66,13 @@ const proposal=(mode,result)=>object({mode:choice(mode),date:optional(string(10,
 export const chatSchema=object({reply:string(1600,1),proposal:{anyOf:[
   {type:'null'},proposal('finance',financeSchema),proposal('activity',activitySchema),
   proposal('purchase',purchaseSchema),proposal('entry',resultSchema),proposal('plan',resultSchema),
+  proposal('food_edit',object({name:string(80,1),amount:number(100000,0.001),unit,
+   meal:optional(string(24,1)),time:optional(string(5,5))})),
   proposal('inventory',object({operation:choice('count','shopping'),name:string(80,1),quantity:number(100000),unit})),
   proposal('skill',object({text:string(320,1)}))
 ]}});
 export const ledgerReadSchema=object({scope:choice('stock','meal','expenses'),query:string(80)});
+export const foodHistoryReadSchema=object({date:string(10,10),query:string(80)});
 const jpegPhoto=photo=>photo?.startsWith('data:image/jpeg;base64,/9j/') &&
   /^[A-Za-z0-9+/]+={0,2}$/.test(photo.slice(23));
 export function validFinanceEntry(entry,input) {

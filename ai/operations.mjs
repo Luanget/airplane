@@ -1,5 +1,6 @@
-import {displayDay,localClock,syncCalendarFields} from '../calendar.mjs';
-import {inventoryWithMoves,localStockChange,validDate} from '../health/core.mjs';
+import {displayDay,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
+import {dayIntake,inventoryWithMoves,localStockChange,validDate} from '../health/core.mjs';
+import {matchFoodRecords,reviseFoodPortion} from '../health/food-history.mjs';
 import {setShoppingItem} from '../health/shopping.mjs';
 import {cleanSkill,SKILL_LIMIT} from './workspace.mjs';
 
@@ -57,5 +58,56 @@ export function inventoryReview(container,proposal,current,today){
    localStockChange(next,{foodId:row.id,delta:value,date:date.value,time:localClock(),count:true,reason:'助手盘点 · 已确认'});
   }
   return next;
+ };
+}
+
+export function foodEditReview(container,proposal,current,today,lastFoodDate){
+ const date=proposal.date??lastFoodDate;
+ if(!validDate(date)||date>today)throw Error('请先指定日期，或查询那天的饮食记录');
+ const {name,amount,unit,meal,time}=proposal.result;
+ if(!name.trim())throw Error('请指定要更正的食品');
+ const rows=matchFoodRecords(current,date,name).filter(row=>
+  (!meal||row.meal===meal)&&(!time||normalizeClock(row.time)===time));
+ if(!rows.length)throw Error(displayDay(date)+'没有找到匹配的「'+name+'」记录，请核对日期或餐次');
+ heading(container,'更正原饮食记录');
+ const selection=field(container,'原记录',document.createElement('select'));
+ if(rows.length>1)selection.add(new Option('找到多条，请选择一条',''));
+ for(const row of rows)selection.add(new Option([row.name,row.meal,normalizeClock(row.time),row.portion].filter(Boolean).join(' · '),row.id));
+ selection.required=true;
+ const quantity=field(container,'新份量（'+unit+'）',document.createElement('input'));
+ Object.assign(quantity,{type:'number',required:true,min:'0.001',max:'100000',step:'any',value:amount});
+ const preview=document.createElement('div');
+ preview.className='food-edit-diff';preview.setAttribute('aria-live','polite');
+ container.append(preview);
+ function calculate(){
+  return reviseFoodPortion(current,{id:selection.value,date,amount:quantity.valueAsNumber,unit});
+ }
+ function update(){
+  preview.replaceChildren();
+  if(!selection.value)return;
+  try{
+   const {before,after,stock,next}=calculate();
+   const list=document.createElement('dl');
+   const pair=(label,value)=>{
+    const dt=document.createElement('dt'),dd=document.createElement('dd');
+    dt.textContent=label;dd.textContent=value;list.append(dt,dd);
+   };
+   const calories=v=>v===null?'未知':v+' kcal';
+   pair('日期',[displayDay(date,true),before.meal,normalizeClock(before.time)].filter(Boolean).join(' · '));
+   pair('份量',before.portion+' → '+after.portion);
+   pair('热量',calories(before.nutrition.kcal)+' → '+calories(after.nutrition.kcal));
+   for(const [key,label,measure] of [['protein','蛋白质','g'],['carbs','碳水','g'],['fat','脂肪','g'],['sodium','钠','mg']]){
+    if(after.nutrition[key]!==null)pair(label,before.nutrition[key]+' → '+after.nutrition[key]+' '+measure);
+   }
+   pair('当日热量',calories(dayIntake(current,date).totals.kcal)+' → '+calories(dayIntake(next,date).totals.kcal));
+   pair('库存',stock?stock.name+' '+stock.before+' → '+stock.after+' '+stock.unit:'原记录无关联扣库流水，库存不变');
+   preview.append(list);
+  }catch(err){preview.textContent=err.message;}
+ }
+ selection.onchange=update;quantity.oninput=update;update();
+ return {
+  apply:()=>calculate().next,
+  label:'确认更正',
+  saved:'已更正原饮食记录，并重新计算当日营养和关联库存。'
  };
 }

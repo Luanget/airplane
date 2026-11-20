@@ -1,4 +1,4 @@
-import {inventoryWithMoves} from '../health/core.mjs';
+import {addDays,addFood,inventoryWithMoves} from '../health/core.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {freshData,STORAGE_KEY} from '../finance-storage.mjs';
 import {readState,saveState} from '../health/storage.mjs';
@@ -20,9 +20,15 @@ export async function demoWorkspace(today){
  }
  const health=await readState(account);
  if(!health.revision){
+  const yesterday=addDays(today,-1);
   for(const [name,qty,kcal,protein] of [['燕麦',450,375,13],['鸡胸肉',520,120,23],['牛奶',750,62,3.3]]){
    const row=saveSku(health,{name,unit:'g',basisUnit:'g',basisAmount:100,kcal,protein,quality:'estimated',source:'演示'});
    row.qty=qty;
+   if(name==='牛奶'||name==='燕麦'){
+    const amount=name==='牛奶'?250:60;
+    addFood(health,{date:yesterday,time:'08:15',meal:'早餐',name,portion:amount+' g',amount,stockQty:amount,foodId:row.id,
+     kcal:kcal*amount/100,protein:protein*amount/100,quality:'estimated'});
+   }
   }
   try{await saveState(health,0,account);}
   catch(err){if(!(await readState(account)).revision)throw err;}
@@ -35,6 +41,21 @@ export async function demoWorkspace(today){
   const quantity=Number(text.match(/(\d+(?:\.\d+)?)\s*(?:g|克)/i)?.[1]??300);
   const propose=(reply,mode,result)=>({reply,proposal:{mode,result,date:null}});
   const call=(scope,query='')=>({call:{args:{scope,query},item:{call_id:'demo'}}});
+  const chineseDate=text.match(/(\d{1,2})月(\d{1,2})日/);
+  const date=text.match(/\d{4}-\d{2}-\d{2}/)?.[0]??(chineseDate?
+   input.date.slice(0,4)+'-'+chineseDate[1].padStart(2,'0')+'-'+chineseDate[2].padStart(2,'0'):
+   text.includes('前天')?addDays(input.date,-2):
+   text.includes('昨天')?addDays(input.date,-1):text.includes('今天')?input.date:null);
+  if(focus&&/改成|改为|更正/.test(text)&&/\d\s*(?:g|克)\b/i.test(text.replace('克','g'))){
+   return {reply:'我会按你选中的原记录更正份量，请核对下面的变化。',proposal:{mode:'food_edit',date,
+    result:{name,amount:quantity,unit:'g',meal:null,time:null}}};
+  }
+  if(date&&/吃了(?:什么|啥)|喝了什么|饮食记录|查.*饮食/.test(text)){
+   if(allowRead&&!continuation)return {call:{args:{scope:'foods',date,query:focus?.name??''},item:{call_id:'demo-foods'}}};
+   const rows=continuation?.summary.foods;
+   return {reply:rows?.length?'记录里有'+rows.map(row=>row.name+' '+row.portion).join('、')+'。':
+    rows?'这一天没有匹配的实际饮食记录。':'请开启本轮账本查询。',proposal:null};
+  }
   if(/偏好|高蛋白|skill/i.test(text))return propose('我整理了一条可长期使用的饮食偏好。','skill',{text:'晚餐优先安排高蛋白食材，搭配易采购的蔬菜。'});
   if(/花了|支出|收入|记账/.test(text)&&/\d+(?:\.\d+)?\s*元/.test(text)){
    const amount=Number(text.match(/(\d+(?:\.\d+)?)\s*元/)[1]),type=text.includes('收入')?'income':'expense';

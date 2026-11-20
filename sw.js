@@ -1,4 +1,4 @@
-const SW_VERSION = '47';
+const SW_VERSION = '48';
 const scope = self.registration.scope;
 const prefix = 'airplane-shell:' + new URL(scope).pathname + ':';
 const CACHE = prefix + SW_VERSION;
@@ -8,7 +8,7 @@ const SHELL = [
   './health/index.html','./health/app.css','./health/app.mjs','./health/core.mjs',
   './finance-storage.mjs','./health/backup.mjs','./health/inventory.mjs','./health/purchases.mjs','./health/purchase-sync.mjs','./health/shopping.mjs','./health/purchase-ui.mjs','./health/storage.mjs','./health/assistant.mjs','./health/candidates.mjs',
   './assistant/index.html','./assistant/workspace.css','./ai/workspace.mjs','./ai/operations.mjs','./ai/demo.mjs','./ai/threads.mjs',
-  './health/contract.mjs','./ai/client.mjs','./ai/chat.mjs','./ai/finance.mjs','./ai/keys.mjs','./ai/responses.mjs',
+  './health/contract.mjs','./health/food-history.mjs','./ai/client.mjs','./ai/chat.mjs','./ai/finance.mjs','./ai/keys.mjs','./ai/responses.mjs',
   './icons/icon-192.png','./icons/icon-512.png','./icons/icon-512-maskable.png','./icons/apple-touch-icon.png'
 ];
 const assets = new Set(SHELL.map(path => new URL(path, scope).href));

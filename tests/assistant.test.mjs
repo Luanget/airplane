@@ -1,7 +1,10 @@
-import {modelRequest} from '../ai/responses.mjs';
+import {modelRequest,pendingLedgerRead} from '../ai/responses.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {newState, validDate, validateAppState, inventoryWithMoves, dayIntake, energyForDay, cycleForDate} from '../health/core.mjs';
+import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validateAppState,inventoryWithMoves,dayIntake,energyForDay,cycleForDate} from '../health/core.mjs';
+import {addBatch,saveSku} from '../health/inventory.mjs';
+import {summarizeFoodHistory,reviseFoodPortion} from '../health/food-history.mjs';
+import {readLedger} from '../ai/workspace.mjs';
 import {confirmItems,resolveItem} from '../health/candidates.mjs';
 import {matches,resultSchema,validInput,assistantInput} from '../health/contract.mjs';
 import {accountKeys,privateAccount} from '../account.mjs';
@@ -47,6 +50,52 @@ test('explicit gram and mL units require a defensible conversion',()=>{
   state.legacy.inventory.push({id:'milk',name:'牛奶',active:true,standard:'每100mL',unit:'mL',nutritionBasis:'per100ml',qty:1000,nutrition});
   assert.throws(()=>confirmItems(state,[{...part,sku:'milk',amount:533,unit:'g'}],date,'早餐'));
   assert.equal(confirmItems(state,[{...part,sku:'milk',amount:533,unit:'mL'}],date,'早餐').local.foods[0].nutrition.kcal,533);
+});
+test('one-day food lookup sends a bounded summary with no IDs or other dates',async()=>{
+ const state=newState(),previous=addDays(date,-1);
+ for(let i=0;i<12;i++)addFood(state,{date,meal:'早餐',name:'牛奶 '+i,time:'08:10',portion:'250 g',kcal:155});
+ addFood(state,{date:previous,name:'无关日期',portion:'250 g'});
+ addFood(state,{date,name:'计划餐',portion:'100 g',status:'plan'});
+ const summary=await readLedger({readHealth:async()=>state},{scope:'foods',date,query:''},date);
+ assert.deepEqual(summary.foods[0],{name:'牛奶 0',portion:'250 g',meal:'早餐',time:'08:10'});
+ assert.equal(summary.foods.length,10);assert.equal(summary.more,true);
+ assert.ok(!JSON.stringify(summary).includes('无关日期'));
+ assert.ok(!JSON.stringify(summary).includes('计划餐'));
+ assert.equal(summarizeFoodHistory(state,date,'牛奶 11').foods.length,1);
+ const call={type:'function_call',name:'read_food_history',call_id:'fixture',arguments:JSON.stringify({date,query:'牛奶'})};
+ const parsed=pendingLedgerRead({status:'completed',output:[call]});
+ assert.deepEqual(parsed.args,{scope:'foods',date,query:'牛奶'});
+ await assert.rejects(readLedger({readHealth:async()=>state},{...parsed.args,date:addDays(date,1)},date));
+});
+test('food correction preserves the original entry and replaces its inventory allocation',()=>{
+ const state=newState();
+ const sku=saveSku(state,{name:'牛奶',unit:'g',basisUnit:'g',basisAmount:100,kcal:62});
+ const lot=addBatch(state,{foodId:sku.id,date,quantity:750,costCents:750});
+ const row=addFood(state,{date,time:'08:15',meal:'早餐',name:'牛奶',portion:'250 g',
+  foodId:sku.id,batchId:lot.id,stockQty:250,kcal:155,protein:8.25});
+ const draft=reviseFoodPortion(state,{id:row.id,date,amount:300,unit:'g'});
+ assert.equal(state.local.foods[0].portion,'250 g');
+ assert.deepEqual(draft.stock,{name:'牛奶',unit:'g',before:500,after:450});
+ assert.equal(draft.next.local.foods.length,1);
+ assert.equal(draft.after.id,row.id);assert.equal(draft.after.time,'08:15');
+ assert.equal(draft.after.nutrition.protein,9.9);
+ assert.equal(draft.after.nutrition.sodium,null);
+ assert.equal(dayIntake(draft.next,date).totals.kcal,186);
+ assert.equal(batchBalances(draft.next)[0].remaining,450);
+ assert.deepEqual(draft.next.local.stockMoves.filter(m=>m.linkedFoodId===row.id).map(m=>m.delta),[-300]);
+ assert.throws(()=>reviseFoodPortion(draft.next,{id:row.id,date,amount:300,unit:'g'}),/没有变化/);
+ assert.throws(()=>reviseFoodPortion(draft.next,{id:row.id,date,amount:1000,unit:'g'}),/库存不足/);
+ assert.throws(()=>reviseFoodPortion(state,{id:row.id,date,amount:300,unit:'mL'}),/原记录的单位/);
+});
+test('an imported intake embedded in stock is corrected without a second deduction',()=>{
+ const state=normalizeLedger({tables:{food_events:[{日期:date,'食物/饮品':'牛奶',食品ID:'milk','份量/重量':'250 g',状态:'已喝',kcal:155}],
+  food_inventory:[{食品ID:'milk',名称:'牛奶',库存值:500,库存单位:'g'}],
+  daily_summaries:[{日期:date,kcal:355}],weight_events:[]}});
+ const {next,stock}=reviseFoodPortion(state,{id:state.legacy.foods[0].id,date,amount:300,unit:'g'});
+ assert.equal(dayIntake(next,date).totals.kcal,386);
+ assert.equal(inventoryWithMoves(next)[0].qty,500);
+ assert.equal(stock,null);
+ assert.equal(next.local.stockMoves.length,0);
 });
 test('requests never serialize the health snapshot, financial data or historical identifiers',()=>{
   const state=newState();state.legacy.sourceSnapshot={privateField:'local-only'};

@@ -1,7 +1,8 @@
 import {readState,saveState} from '../health/storage.mjs';
 import {readFinance} from '../finance-storage.mjs';
-import {dayIntake,inventoryWithMoves} from '../health/core.mjs';
-import {ledgerReadSchema,matches} from '../health/contract.mjs';
+import {dayIntake,inventoryWithMoves,validDate} from '../health/core.mjs';
+import {summarizeFoodHistory} from '../health/food-history.mjs';
+import {foodHistoryReadSchema,ledgerReadSchema,matches} from '../health/contract.mjs';
 
 export const SKILL_LIMIT=320;
 const SKILL_KEY='airplane-ai-skill-v1';
@@ -28,9 +29,15 @@ export function shortHistory(turns){
   return short?[{role,text:short}]:[];
  }).reverse();
 }
-export const readLabels={stock:'匹配的库存',meal:'可用食材和今日营养',expenses:'今日收支合计'};
+export const readLabels={stock:'匹配的库存',meal:'可用食材和今日营养',expenses:'今日收支合计',foods:'指定日期的饮食记录'};
 
 export async function readLedger(workspace,args,today){
+ if(args.scope==='foods'){
+  const {date,query}=args;
+  if(!matches(foodHistoryReadSchema,{date,query})||!validDate(date)||date>today)
+   throw Error('请选择今天或更早的有效日期');
+  return summarizeFoodHistory(await workspace.readHealth(),date,query);
+ }
  if(!matches(ledgerReadSchema,args))throw Error('助手请求了无效的账本范围');
  if(args.scope==='expenses'){
   const tx=readFinance(workspace.finance).payload?.transactions.filter(t=>t.date===today)??[];

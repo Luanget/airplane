@@ -12,6 +12,7 @@ export function threadBook(store){
   list:()=>threads,
   start(){active=null;save();},
   select(id){active=threads.find(thread=>thread.id===id)??null;save();},
+  setFoodDate(date){if(active){active.foodDate=date;save();}},
   append(role,text,carry=true){
    if(!active){
     active={id:crypto.randomUUID(),title:role==='user'?text.slice(0,24):'新对话',messages:[]};
