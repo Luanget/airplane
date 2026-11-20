@@ -10,14 +10,15 @@ const {chromium} = createRequire(import.meta.url)('playwright-core');
 
 const root=process.cwd(), prefix='/airplane/';
 const publicAssets=new Set(['sw.js',...Array.from(readFileSync('sw.js','utf8').split('const assets')[0].matchAll(/'\.\/([^']+)'/g),m=>m[1])]);
-let old=true;
+let old=true,nextShell=false;
 const server=createServer((req,res)=>{
   const path=new URL(req.url,'http://localhost').pathname;
   let name=path.slice(prefix.length);
   if (name.endsWith('/') || !name) name+='index.html';
   if (!path.startsWith(prefix) || !publicAssets.has(name)) {res.writeHead(404).end();return;}
   try {
-    const buf=old ? execFileSync('git',['show','6fb5f50:'+name],{stdio:['ignore','pipe','ignore']}) : readFileSync(resolve(root,name));
+    let buf=old ? execFileSync('git',['show','6fb5f50:'+name],{stdio:['ignore','pipe','ignore']}) : readFileSync(resolve(root,name));
+    if(nextShell&&name==='sw.js')buf=Buffer.from(buf.toString().replace(/const SW_VERSION = '[^']+'/,"const SW_VERSION = 'fixture-next'"));
     const mime={'.html':'text/html','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.png':'image/png','.webmanifest':'application/manifest+json'};
     res.writeHead(200,{'Content-Type':mime[extname(name)] || 'text/plain','Cache-Control':'no-store'}).end(buf);
   } catch {res.writeHead(404).end();}
@@ -58,6 +59,16 @@ try {
   assert.equal(await ledger(),before);
   assert.equal(await page.evaluate(()=>localStorage.getItem('airplane-pwa-recovery-v1')),before);
   await page.locator('#settingsButton').click();
+  await page.locator('[data-action="check-update"]').click();
+  await page.locator('.update-inline').getByText('已检查，当前已是最新版本').waitFor();
+  nextShell=true;
+  await page.locator('[data-action="check-update"]').click();
+  await page.locator('.update-inline').getByText('新版已准备好').waitFor();
+  assert.equal(await page.locator('.update-banner-action').count(),0);
+  await page.locator('.update-inline').getByRole('button',{name:'更新',exact:true}).click();
+  await page.locator('[data-action="check-update"]').waitFor({state:'hidden'});
+  assert.equal(await ledger(),before);
+  await page.locator('#settingsButton').click();
   const downloading=page.waitForEvent('download');
   await page.locator('[data-action="export-json"]').click();
   const backup=JSON.parse(readFileSync(await (await downloading).path(),'utf8'));
@@ -71,6 +82,14 @@ try {
   await page.goto(base+'health/?test=offline');
   assert.equal(await page.getByText('去导入',{exact:true}).count(),0);
   await page.locator('#health-settings').click();
+  await page.locator('#check-update').click();
+  await page.locator('#health-settings-sheet .update-inline').waitFor();
+  assert.ok(await page.locator('#health-settings-sheet').isVisible());
+  const combined=page.locator('#combined-backup');
+  async function openBackups(){
+    if(!await combined.evaluate(panel=>panel.open))await combined.locator('summary').click();
+  }
+  await openBackups();
   const fixtureDay=await page.locator('#report-date').inputValue();
   const otherFixtureDay=fixtureDay.slice(0,8)+(fixtureDay.endsWith('-01')?'02':'01');
   const synthetic={tables:{
@@ -100,6 +119,7 @@ try {
   await page.getByRole('button',{name:'确认导入'}).click();
   await page.locator('#health-settings-sheet').waitFor({state:'hidden'});
   await page.locator('#health-settings').click();
+  await openBackups();
   const revision=()=>page.evaluate(async()=> (await (await import('./storage.mjs')).readState()).revision);
   const importedRevision=await revision();
   await page.locator('#import-file').setInputFiles({name:'same.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(synthetic))});
@@ -141,13 +161,20 @@ try {
   await page.locator('#local-events').waitFor();
   await page.locator('#add-health').click();
   const manual=page.locator('#food-form');
-  await manual.locator('[name=foodId]').selectOption('fixture-pieces');
+  async function choose(form,name,option,query){
+    await form.locator('.choice-trigger:has(+select[name="'+name+'"])').click();
+    const picker=page.locator('.choice-sheet');
+    if(query)await picker.getByRole('searchbox').fill(query);
+    await picker.getByRole('button',{name:option}).click();
+    await picker.waitFor({state:'hidden'});
+  }
+  await choose(manual,'foodId',/^合成计数食品/,'计数');
   await manual.getByLabel('份量（个）',{exact:true}).fill('6');
   assert.equal(await manual.locator('[name=portion]').inputValue(),'6 个');
   assert.equal(await manual.locator('[name=stockQty]').inputValue(),'6');
   assert.equal(await manual.locator('[name=kcal]').inputValue(),'120');
-  await manual.locator('[name=foodId]').selectOption('fixture');
-  await manual.locator('[name=status]').selectOption('plan');
+  await choose(manual,'foodId',/^合成库存/,'合成库存');
+  await choose(manual,'status','计划');
   await manual.locator('[type=submit]').click();
   await page.locator('#local-events').getByText('合成库存',{exact:true}).waitFor();
   const quantity=()=>page.evaluate(async()=>{
@@ -158,7 +185,7 @@ try {
   await page.locator('#local-events').getByRole('button',{name:/合成库存/}).click();
   await page.getByRole('button',{name:'删除这条记录'}).click();
   await page.locator('#confirm-delete-health').getByRole('button',{name:'取消',exact:true}).click();
-  await manual.locator('[name=status]').selectOption('actual');
+  await choose(manual,'status','已吃（计入）');
   await manual.locator('[type=submit]').click();
   await page.locator('#toast').getByText('饮食已保存').waitFor();
   assert.equal(await quantity(),4);
@@ -178,15 +205,16 @@ try {
   await page.reload();await page.locator('[data-tab="inventory"]').click();
   await page.locator('#inventory-list').getByText('合成库存',{exact:true}).waitFor();
   await page.locator('#health-settings').click();
+  await openBackups();await combined.locator('[name=finance]').uncheck();
   const healthDownload=page.waitForEvent('download');
-  await page.locator('#export-button').click();
+  await combined.locator('[data-export]').click();
   const healthCopy=JSON.parse(readFileSync(await (await healthDownload).path(),'utf8'));
   assert.equal(healthCopy.legacy.inventory[0].id,'fixture');
-  await page.locator('#restore-file').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from('{"appType":"airplane-health-v1"}')});
+  await page.locator('#import-file').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from('{"appType":"airplane-health-v1"}')});
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('导入失败'));
-  await page.locator('#restore-file').setInputFiles({name:'valid.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(healthCopy))});
+  await page.locator('#import-file').setInputFiles({name:'valid.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(healthCopy))});
   await page.getByRole('button',{name:'确认导入'}).click();
-  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('恢复成功'));
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('备份已恢复'));
   assert.equal(await ledger(),before);
   const cacheNames=await page.evaluate(()=>caches.keys());
   assert.ok(cacheNames.includes('another-app'));
@@ -364,7 +392,7 @@ try {
   await review.waitFor();
   assert.equal(calls.length,1);
   assert.deepEqual(calls[0].history,[]);
-  assert.equal(await review.getByLabel('匹配食品').inputValue(),'');
+  assert.equal(await review.locator('label').filter({hasText:'匹配食品'}).locator('select').inputValue(),'');
   const foodCount=()=>page.evaluate(async()=>(await (await import('../health/storage.mjs')).readState()).local.foods.length);
   assert.equal(await foodCount(),1);
   await review.getByLabel('数量',{exact:true}).fill('90');
@@ -374,7 +402,7 @@ try {
   assert.match(food.time,/^\d{2}:\d{2}$/);
   await say('用我描述的合成蔬菜规划一餐');await review.waitFor();
   assert.equal(calls[1].history[0].text,'合成餐点');
-  assert.equal(await review.getByRole('combobox',{name:/^动作/}).inputValue(),'plan');
+  await review.getByRole('button',{name:/^动作，计划/}).waitFor();
   await review.getByRole('button',{name:'保存为饮食计划'}).click();
   await chat.getByText('已保存饮食计划。',{exact:true}).waitFor();
   await page.getByRole('link',{name:'健康',exact:true}).click();
@@ -507,7 +535,7 @@ try {
   const photos=chat.getByRole('region',{name:'照片识别结果'});
   await photos.getByRole('button',{name:'核对照片 2'}).click();
   assert.equal(await foodCount(),beforePhotos);
-  assert.equal(await review.getByLabel('匹配食品').inputValue(),'');
+  assert.equal(await review.locator('label').filter({hasText:'匹配食品'}).locator('select').inputValue(),'');
   await review.getByRole('button',{name:'确认保存'}).click();
   await photos.getByText(/记录已保存/).waitFor();
   assert.equal(await foodCount(),beforePhotos+1);
@@ -517,7 +545,7 @@ try {
   }),4);
   await photos.getByRole('button',{name:'重试照片 1'}).click();
   await photos.getByRole('button',{name:'核对照片 1'}).click();
-  assert.equal(await review.getByLabel('匹配食品').inputValue(),'fixture');
+  assert.equal(await review.locator('label').filter({hasText:'匹配食品'}).locator('select').inputValue(),'fixture');
   await review.getByRole('button',{name:'放弃'}).click();
   await photos.getByText(/已放弃候选/).waitFor();
   assert.equal(await photos.getByRole('button',{name:/核对照片/}).count(),0);
@@ -542,6 +570,14 @@ try {
   await page.getByRole('button',{name:'保存食品支出并同步入库'}).click();
   const buy=page.locator('#purchase-form');
   await page.waitForFunction(()=>document.querySelector('#purchase-form [name=time]')?.value==='18:05');
+  const purchasePicker=page.getByRole('dialog',{name:'选择食品'});
+  await buy.locator('.choice-trigger:has(+select[name=foodId])').click();
+  await purchasePicker.getByRole('searchbox').fill('不存在的合成食品');
+  await purchasePicker.getByText('没有匹配的选项').waitFor();
+  await purchasePicker.getByRole('searchbox').fill('合成库存');
+  await purchasePicker.getByRole('button',{name:/^合成库存/}).click();
+  await purchasePicker.waitFor({state:'hidden'});
+  await buy.getByRole('button',{name:/^选择食品，合成库存/}).waitFor();
   await buy.locator('[name=quantity]').fill('2');await buy.locator('[name=cost]').fill('18');
   await buy.locator('[type=submit]').click();
   await page.locator('#purchases-list').getByText(/已关联支出/).waitFor();
@@ -559,22 +595,25 @@ try {
 
   // Export both ledgers and restore the selected section.
   await page.goto(base+'health/');await page.locator('#health-settings').click();
-  const combined=page.locator('#combined-backup');
+  await openBackups();
   const bothDownload=page.waitForEvent('download');await combined.locator('[data-export]').click();
   const both=JSON.parse(readFileSync(await (await bothDownload).path(),'utf8'));
   assert.equal(both.finance.data.transactions.length,count+1);
   assert.equal(both.health.local.purchases.length,2);
   await combined.locator('[name=finance]').uncheck();
   await combined.locator('[type=file]').setInputFiles({name:'both.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(both))});
-  await page.locator('#toast').getByText(/已恢复/).waitFor();
+  assert.doesNotMatch(await combined.locator('[data-import-summary]').innerText(),/财务/);
+  await combined.getByRole('button',{name:'确认导入'}).click();
+  await page.locator('#toast').getByText('备份已恢复').waitFor();
   assert.equal(JSON.parse(await ledger()).transactions.length,count+1);
   const edited=JSON.parse(await ledger());
   edited.transactions.pop();
   await page.evaluate(edited=>localStorage.setItem('airplane-pwa-v1',JSON.stringify(edited)),edited);
+  await page.locator('#health-settings').click();await openBackups();
   await combined.locator('[name=finance]').check();
   await combined.locator('[type=file]').setInputFiles({name:'both.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(both))});
+  await combined.getByRole('button',{name:'确认导入'}).click();
   await page.waitForFunction(expected=>JSON.parse(localStorage.getItem('airplane-pwa-v1')).transactions.length===expected,count+1);
-  await page.locator('#health-settings-sheet [data-sheet-close]').click();
   await page.locator('[data-tab="inventory"]').click();
   const purchaseRow=amount=>page.locator('#purchases-list p').filter({hasText:'¥'+amount});
   assert.equal(await page.locator('#purchases-list').isVisible(),false);
@@ -585,6 +624,7 @@ try {
   await buy.locator('[name=quantity]').fill('3');
   await buy.locator('[name=cost]').fill('9');
   await buy.locator('[type=submit]').click();
+  await page.getByRole('dialog',{name:'核对采购修改'}).getByRole('button',{name:'确认修改'}).click();
   await purchaseRow('9.00').filter({hasText:'已关联支出'}).waitFor();
   const afterEdit=JSON.parse(await ledger());
   assert.equal(afterEdit.transactions.length,count+1);
@@ -615,6 +655,7 @@ try {
   await purchaseRow('11.00').filter({hasText:'已关联支出'}).waitFor();
   assert.equal(JSON.parse(await ledger()).transactions.find(t=>t.id.startsWith('expense-purchase-')).amount,11);
   await purchaseRow('11.00').getByRole('button',{name:'撤销采购'}).click();
+  await page.getByRole('dialog',{name:'撤销采购'}).getByRole('button',{name:'确认撤销'}).click();
   await purchaseRow('11.00').filter({hasText:'已撤销'}).waitFor();
   assert.equal(JSON.parse(await ledger()).transactions.length,count);
   assert.equal(await quantity(),6);

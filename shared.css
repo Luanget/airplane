@@ -39,7 +39,10 @@
 }
 .update-banner-close svg { width:18px; height:18px; }
 [hidden] { display:none!important }
-.update-status { position:fixed; bottom:88px; left:50%; transform:translateX(-50%); background:#243629; color:white; padding:10px 16px; border-radius:14px; z-index:500; }
+.toast.update-status { pointer-events:none }
+.update-inline { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:7px 16px 11px 62px; border-bottom:1px solid var(--line) }
+.update-inline output { color:var(--muted); font-size:12px; line-height:1.45 }
+.update-inline .primary-button { width:auto; min-height:36px; padding:6px 13px; border-radius:11px }
 .ai-dialog { box-sizing:border-box; width:min(92vw,430px); max-height:85dvh; overflow:auto; color:var(--text,var(--ink)); background:var(--surface); border:1px solid var(--line); padding:22px; border-radius:18px; font:15px/1.6 system-ui; }
 .ai-dialog::backdrop { background:#1119 }
 .ai-dialog h2 { margin:0 0 8px }
@@ -67,6 +70,29 @@ dialog.bottom-sheet .modal-head .cancel, dialog.bottom-sheet .modal-head .save {
 }
 dialog.bottom-sheet .modal-head h2 { margin:0; text-align:center }
 dialog.ai-dialog.bottom-sheet { padding:12px 16px calc(24px + var(--safe-bottom)); font:inherit }
+
+.choice-trigger {
+ display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; min-height:44px;
+ margin:5px 0 12px; padding:8px 10px; border:1px solid var(--line); border-radius:10px;
+ background:var(--surface-2); color:var(--text); font-size:16px; text-align:left
+}
+.choice-trigger .choice-value { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.choice-trigger .chevron,.choice-check { display:grid; place-items:center; flex:none }
+.choice-trigger svg,.choice-check svg { width:17px; height:17px }
+.choice-trigger:focus-visible,.choice-option:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+.choice-trigger:disabled { opacity:.6 }
+dialog.choice-sheet { height:min(68dvh,580px); overscroll-behavior:contain }
+.choice-search {
+ width:100%; min-height:44px; padding:9px 12px; margin:0 0 12px; border:1px solid var(--line); border-radius:12px;
+ background:var(--surface); color:var(--text); font:inherit; font-size:16px
+}
+.choice-option .setting-copy { display:grid; gap:2px; min-width:0; overflow-wrap:anywhere }
+.choice-option .setting-sub { margin-top:0 }
+.choice-option[aria-pressed="true"] { background:var(--green-soft) }
+.choice-option:disabled { opacity:.55 }
+.choice-check { color:var(--green) }
+.choice-empty { padding:14px; color:var(--muted); text-align:center; font-size:13px }
+.confirmation-sheet p { margin:0 0 12px; color:var(--muted); line-height:1.6; white-space:pre-line }
 
 /* WebKit's date and time inputs stay tappable over the shared visible label. */
 .calendar-field {

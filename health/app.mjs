@@ -1,14 +1,16 @@
 import {bindDayPicker,displayDay,localDate as dateNow,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
 import {attachShopping} from './shopping.mjs';
 import {attachPurchases} from './purchase-ui.mjs';
-import {attachCombinedBackup,combinedBackup} from './backup.mjs';
+import {bindBackupExports,unpackBackup,restoreBackup} from './backup.mjs';
+import {readFinance,validateFinanceBackup} from '../finance-storage.mjs';
 import {addBatch,convertCookingWeight,displayStockQuantity,measuredGrams,saveSku,splitBatch,stockAlerts,stockMeasure,storedStockQuantity} from './inventory.mjs';
 import {units} from './contract.mjs';
 import {quantityInUnit,basis,packageInfo} from './candidates.mjs';
-import {shellGlyphs} from '../shell.mjs';
-import {checkForAppUpdate} from '../updates.mjs';
-import {newState,normalizeLedger,validateAppState,DEFAULT_SETTINGS,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,addDays,isStockReference,importedDietTargets,carbReference} from './core.mjs';
-import {readState,saveState,exportState} from './storage.mjs';
+import {APP_VERSION,shellGlyphs} from '../shell.mjs';
+import {bindUpdateCheck} from '../updates.mjs';
+import {syncChoiceFields} from '../choice-picker.mjs';
+import {newState,normalizeLedger,validateAppState,APP_SCHEMA,DEFAULT_SETTINGS,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,addDays,isStockReference,importedDietTargets,carbReference} from './core.mjs';
+import {readState,saveState} from './storage.mjs';
 import {mealOrder,timelineGroup,eatingState,stockName,stockUnit,stockGroups} from './presentation.mjs';
 import {renderWeightChart} from './weight-chart.mjs';
 const $=id=>document.getElementById(id);
@@ -45,6 +47,7 @@ function render(){
  if(tab==='trends')renderTrends();
  if($('health-settings-sheet').open)renderSettings();
  syncCalendarFields();
+ syncChoiceFields();
 }
 function selectEntry(type){
  activeEntryType=type;
@@ -193,6 +196,7 @@ function fillForm(form,fields){
   const el=form.elements.namedItem(key);
   if(el&&el.type!=='checkbox')el.value=el.type==='time'?normalizeClock(value):value??'';
  }
+ syncChoiceFields(form);
 }
 function renderTrends(){
  const today=dateNow(), cycle=cycleForDate(state,today,today);
@@ -241,7 +245,7 @@ function renderSettings(){
  $('diet-reference').hidden=!Object.entries(imported).some(([key,value])=>s[key]!==value);
  const proposed={...s,...imported};
  text('diet-reference-text',`普通日 ${proposed.calorieTarget} kcal · 蛋白质 ${proposed.proteinMin}–${proposed.proteinMax} g · 脂肪至少 ${proposed.fatMin} g · 碳水约 ${carbLabel(proposed)||'待核对'}`);
- const l=state.legacy;text('import-status',state.importInfo?`已导入：${state.importInfo.sourceVersion} · ${state.importedAt?.slice(0,10)}\n饮食 ${l.foods.length} 条 / 体重 ${l.weights.length} 条 / 运动 ${l.activities.length} 条 / 库存 ${l.inventory.length} 项；当前应用新增饮食 ${state.local.foods.length} 条。`:'当前使用本机健康账本。');$('import-status').style.whiteSpace='pre-line';
+ text('import-status',state.importInfo?'主账 '+state.importInfo.sourceVersion:'本机账本');
 }
 function rebuildFoodSelection(){
  const inv=inventoryWithMoves(state).filter(i=>i.active&&!isStockReference(i)).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN'));
@@ -268,6 +272,7 @@ function updateBatches(){
  form.elements.batchId.innerHTML='<option value="">自动扣减</option>'+batchBalances(state,form.elements.foodId.value).filter(b=>b.foodId===form.elements.foodId.value&&(b.remaining>0||b.id===edited?.batchId))
   .map(b=>`<option value="${E(b.id)}">${E(displayDay(b.date))} · 余 ${fmtStock(inventoryWithMoves(state).find(i=>i.id===b.foodId),b.remaining)}</option>`).join('');
  if([...form.elements.batchId.options].some(o=>o.value===selected))form.elements.batchId.value=selected;
+ syncChoiceFields(form);
 }
 async function commit(next,message,snapshot){state=await saveState(next,state.revision ?? 0,globalThis.airplaneAccount,snapshot);rebuildFoodSelection();render();toast(message);}
 async function removeEditedEvent(){
@@ -335,37 +340,47 @@ function updateStockInputLabels(){
  }
 }
 function download(name,content){const blob=new Blob([content],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);}
-function backup(){download(`airplane-health-backup-${dateNow()}.json`,exportState(state));}
 function clearHealthImport(){
  importVersion++;importPreview=null;$('import-preview').hidden=true;
 }
-async function previewHealthImport(file,kind){
+async function previewHealthImport(file){
  clearHealthImport();
  const version=importVersion;
  try{
   const raw=JSON.parse(await file.text());
   if(version!==importVersion)return;
-  if(kind==='ledger'&&JSON.stringify(state.legacy.sourceSnapshot)===JSON.stringify(raw)){toast('这份主账已导入');return;}
-  const imported=kind==='backup'?raw:normalizeLedger(raw);
-  if(!validateAppState(imported))throw Error('文件结构不正确');
-  importPreview={imported,kind,revision:state.revision??0};
+  const panelBackup=$('combined-backup'),includes=name=>panelBackup.querySelector('[name='+name+']').checked;
+  let health,finance,message='备份已恢复';
+  if(raw?.format==='airplane-combined-v1')({health,finance}=unpackBackup(raw));
+  else if(raw?.appType===APP_SCHEMA)health=raw;
+  else if(raw?.app==='Airplane'||Array.isArray(raw?.transactions))finance=validateFinanceBackup(raw);
+  else{
+   if(JSON.stringify(state.legacy.sourceSnapshot)===JSON.stringify(raw)){toast('这份主账已导入');return;}
+   health=normalizeLedger(raw);message='历史健康数据已导入';
+  }
+  if(health&&!validateAppState(health))throw Error('健康备份结构无效');
+  health=includes('health')?health:null;finance=includes('finance')?finance:null;
+  if(!health&&!finance)throw Error('文件中没有所选账本，请核对勾选范围');
+  const financeRevision=finance?readFinance(window.airplaneAccount.finance).primary:null;
+  importPreview={health,finance,financeRevision,message,revision:state.revision??0};
   const panel=$('import-preview');
-  panel.querySelector('[data-import-summary]').textContent=
-   `${file.name} · 饮食 ${events(imported,'foods').length} 条 · 体重 ${events(imported,'weights').length} 条 · 库存 ${inventoryWithMoves(imported).length} 项`;
+  panel.querySelector('[data-import-summary]').textContent=[file.name,finance&&`财务 ${finance.transactions.length} 笔`,
+   health&&`健康 ${events(health,'foods').length} 条饮食 · ${events(health,'weights').length} 条称重`].filter(Boolean).join(' · ');
   panel.hidden=false;panel.scrollIntoView({block:'nearest'});
  }catch(err){if(version===importVersion)toast('导入失败：'+err.message);}
 }
 async function applyHealthImport(){
  const button=$('apply-health-import'),cancel=$('cancel-health-import');
  if(button.disabled||!importPreview)return;
- const {imported,kind,revision}=importPreview;
- button.disabled=true;cancel.disabled=true;
+ const preview=importPreview;
+ button.disabled=true;cancel.disabled=true;$('choose-import').disabled=true;
  try{
-  if(revision!==(state.revision??0))throw Error('账本已变更，请重新预览文件');
-  await commit(imported,kind==='backup'?'健康备份恢复成功':'历史健康数据已导入',combinedBackup(state,null));
+  if(preview.revision!==(state.revision??0))throw Error('账本已变更，请重新预览文件');
+  await restoreBackup(state,preview,window.airplaneAccount,setHealthState);
   clearHealthImport();$('health-settings-sheet').close();switchTab('overview');
+  toast(preview.message);
  }catch(err){toast('导入失败：'+err.message);}
- finally{button.disabled=false;cancel.disabled=false;}
+ finally{button.disabled=false;cancel.disabled=false;$('choose-import').disabled=false;}
 }
 function bindForm(type,update,message){
  const form=$(`${type}-form`);
@@ -384,13 +399,13 @@ function bindForm(type,update,message){
   finally{button.disabled=false;}
  };
 }
+function setHealthState(next){state=next;rebuildFoodSelection();render();}
 function attach(){
- const setState=next=>{state=next;rebuildFoodSelection();render();};
- const purchases=attachPurchases({getState:()=>state,commit,setState,notify:toast,switchTab,today:dateNow});
- window.addEventListener('airplane:health-saved',e=>setState(e.detail));
+ const purchases=attachPurchases({getState:()=>state,commit,setState:setHealthState,notify:toast,switchTab,today:dateNow});
+ window.addEventListener('airplane:health-saved',e=>setHealthState(e.detail));
  updatePurchases=purchases.render;
  updateShopping=attachShopping({getState:()=>state,commit,notify:toast,today:dateNow,openOrder:purchases.openOrder});
- attachCombinedBackup({getState:()=>state,setState:next=>{state=next;rebuildFoodSelection();render();},notify:toast,download});
+ bindBackupExports($('combined-backup'),{getState:()=>state,notify:toast,download});
  for(const select of document.querySelectorAll('[data-units]'))select.innerHTML=units.map(u=>`<option>${E(u)}</option>`).join('');
  document.querySelector('[data-nutrients]').innerHTML=NUTRIENTS.map((k,i)=>`<label>${['热量 kcal','蛋白质 g','碳水 g','脂肪 g','钠 mg'][i]}<input type="number" name="${k}" min="0" step="any"></label>`).join('');
 
@@ -402,10 +417,8 @@ function attach(){
   const t=$('toast');
   if(d.contains(t))document.body.append(t);
  }));
- $('check-update').onclick=()=>{
-  $('health-settings-sheet').close();
-  checkForAppUpdate(true);
- };
+ text('health-version','当前 '+APP_VERSION+' · 检查更新');
+ bindUpdateCheck($('check-update'));
  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
  const writeDay=bindDayPicker(document.querySelector('.day-picker'),date=>{
   selectedDate=date;writeDay(date);render();
@@ -527,6 +540,7 @@ function attach(){
    piecesPerPack:measure.unit!==row.unit?measure.factor:null,
    packageSize:pack.pack===row.unit?pack.size:row.packageSize,packageUnit:pack.pack===row.unit?pack.measure:row.packageUnit});
   $('inventory-catalog').value=id;
+  syncChoiceFields(form);
   revealSku();
  }
  function editStock(event){
@@ -548,12 +562,15 @@ function attach(){
   next.settings.preferences=fields.preferences.trim();
   try{await commit(next,'参数已更新');}catch(err){toast(err.message);}
  };
- $('choose-import').addEventListener('click',()=>$('import-file').click());$('import-file').addEventListener('change',e=>{if(e.target.files[0])void previewHealthImport(e.target.files[0],'ledger');e.target.value='';});
- $('choose-restore').addEventListener('click',()=>$('restore-file').click());$('restore-file').addEventListener('change',e=>{if(e.target.files[0])void previewHealthImport(e.target.files[0],'backup');e.target.value='';});
+ $('choose-import').onclick=()=>$('import-file').click();
+ $('import-file').onchange=e=>{
+  const file=e.target.files[0];e.target.value='';
+  if(file)void previewHealthImport(file);
+ };
+ for(const checkbox of $('combined-backup').querySelectorAll('input[type=checkbox]'))checkbox.addEventListener('change',clearHealthImport);
  $('apply-health-import').onclick=applyHealthImport;
  $('cancel-health-import').onclick=clearHealthImport;
  $('health-settings-sheet').addEventListener('close',clearHealthImport);
- $('export-button').addEventListener('click',backup);
 }
 async function main(){try{state=await readState();if(!validateAppState(state))throw new Error('健康模块数据无效，请通过备份恢复。');attach();rebuildFoodSelection();setDateDefaults();render(); }catch(err){toast('初始化失败：'+err.message);}}
 await main();

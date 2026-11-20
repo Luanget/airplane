@@ -82,6 +82,11 @@ body[data-module="health"] .weight-chart-value { display:flex; align-items:basel
 .health-sheet .entry-fields { margin-top:12px }
 .health-sheet > .modal-head { position:sticky; top:-12px; z-index:2; background:var(--bg) }
 #import-preview { scroll-margin-top:52px }
+.backup-options>*+* { margin-top:8px }
+.backup-scopes { display:flex; flex-wrap:wrap; gap:6px 16px }
+.backup-options .text-button { padding-inline:0; font-size:13px }
+.backup-preview { padding:12px; border-radius:12px; background:var(--surface-2); overflow-wrap:anywhere }
+.backup-preview>*+* { margin-top:6px }
 .health-types { grid-template-columns:repeat(3,1fr) }
 .health-types button.active { background:var(--surface); color:var(--green) }
 body[data-module="health"] [data-shell] label:not(.day-picker-value) { display:block; color:var(--muted); font-size:13px }

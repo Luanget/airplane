@@ -12,6 +12,7 @@ import {foodEditReview,inventoryReview,skillReview} from './operations.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 import {batchReview} from './batch.mjs';
+import {syncChoiceFields} from '../choice-picker.mjs';
 
 const demo=new URLSearchParams(location.search).get('demo')==='1';
 const workspace=demo?await demoWorkspace(localDate()):localWorkspace();
@@ -336,6 +337,8 @@ async function makeReview(proposal,flow,photoJob){
   finally{saving=false;lock();}
   if(resume)await continueAfterSave();
  };
+ for(const select of review.querySelectorAll('select'))select.dataset.picker='';
+ syncChoiceFields(review);
  review.hidden=false;
  thread.scrollTop=Math.max(0,thread.scrollTop+review.getBoundingClientRect().top-thread.getBoundingClientRect().top-88);
 }
