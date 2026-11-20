@@ -1,4 +1,5 @@
-import {modelRequest,pendingLedgerRead} from '../ai/responses.mjs';
+import {modelRequest,parseResult,pendingLedgerRead} from '../ai/responses.mjs';
+import {readResponseStream,ResponseStreamError} from '../ai/stream.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validateAppState,inventoryWithMoves,dayIntake,energyForDay,cycleForDate} from '../health/core.mjs';
@@ -10,6 +11,8 @@ import {matches,resultSchema,validInput,assistantInput} from '../health/contract
 import {accountKeys,privateAccount} from '../account.mjs';
 import nacl from '../vendor/nacl-fast.min.js';
 import {randomBytes} from 'node:crypto';
+import {STORAGE_KEY,freshData} from '../finance-storage.mjs';
+import {displayStockQuantity,stockMeasure} from '../health/inventory.mjs';
 
 const nutrition={kcal:100,protein:10,carbs:8,fat:3,sodium:20};
 const part={name:'样品',sku:null,amount:2,unit:'包',action:'eat',basisAmount:100,basisUnit:'g',
@@ -51,6 +54,40 @@ test('explicit gram and mL units require a defensible conversion',()=>{
   assert.throws(()=>confirmItems(state,[{...part,sku:'milk',amount:533,unit:'g'}],date,'早餐'));
   assert.equal(confirmItems(state,[{...part,sku:'milk',amount:533,unit:'mL'}],date,'早餐').local.foods[0].nutrition.kcal,533);
 });
+test('a documented count converts individual servings while retaining the stored box ledger',()=>{
+ const state=normalizeLedger({tables:{food_events:[],weight_events:[],food_inventory:[
+  {'食品ID':'fixture-pieces','名称':'合成食品','库存值':2,'库存单位':'盒','标准份量':'200g/盒；10个/盒；按100g标签',kcal:100}
+ ]}});
+ const sku=inventoryWithMoves(state)[0];
+ assert.deepEqual(stockMeasure(sku),{unit:'个',factor:10});
+ const change={...part,sku:sku.id,name:sku.name,amount:6,unit:'个'};
+ const eaten=confirmItems(state,[change],date,'午餐');
+ assert.equal(eaten.local.foods[0].portion,'6 个');
+ assert.equal(eaten.local.foods[0].nutrition.kcal,120);
+ const remaining=inventoryWithMoves(eaten)[0];
+ assert.equal(remaining.qty,1.4);
+ assert.equal(displayStockQuantity(remaining,remaining.qty),14);
+ assert.deepEqual(stockMeasure({...sku,unitDescription:'11个/盒'}),{unit:'盒',factor:1});
+});
+test('expense habit analysis returns only approved date buckets and spending summaries',async()=>{
+ const data=freshData();
+ data.transactions=[
+  {id:'private-id',note:'private memo',type:'expense',amount:8.15,date,categoryId:'default-5'},
+  {type:'expense',amount:10,date:'2030-01-03',categoryId:'default-5'},
+  {type:'expense',amount:18.75,date:'2030-01-03',categoryId:'default-1'},
+  {type:'income',amount:50,date:'2030-01-03'},
+  {type:'expense',amount:1,date:'2029-12-31',categoryId:'default-5'}
+ ];
+ const workspace={finance:{getItem:key=>key===STORAGE_KEY?JSON.stringify(data):null}};
+ const call={type:'function_call',name:'read_expense_summary',call_id:'fixture-summary',
+  arguments:'{"start":"2030-01-01","end":"2030-01-03","groupBy":"category"}'};
+ const {args}=pendingLedgerRead({status:'completed',output:[call]});
+ assert.deepEqual(await readLedger(workspace,args,'2030-01-04'),{
+  start:date,end:'2030-01-03',groupBy:'category',expense:36.90,count:3,
+  rows:[{label:'餐饮',expense:18.75,count:1},{label:'日用',expense:18.15,count:2}]
+ });
+ await assert.rejects(readLedger(workspace,args,'2030-01-02'));
+});
 test('one-day food lookup sends every matching record and its full selected fields',async()=>{
  const state=newState(),previous=addDays(date,-1);
  for(let i=0;i<12;i++)addFood(state,{date,meal:'早餐',name:'牛奶 '+i,time:'08:10',portion:'250 g',kcal:155});
@@ -71,10 +108,68 @@ test('one-day food lookup sends every matching record and its full selected fiel
  const parsed=pendingLedgerRead({status:'completed',output:[call]});
  assert.deepEqual(parsed.args,{scope:'foods',date,query:'牛奶'});
  const input={mode:'chat',text:'查饮食',date,photo:null,history:[]};
- const request=modelRequest(input,{continuation:{item:parsed.item,summary}});
+ const request=modelRequest(input,{allowRead:true,continuation:[{item:parsed.item,summary}]});
  assert.deepEqual(JSON.parse(request.input.at(-1).output),summary);
  assert.ok(!Object.hasOwn(request,'max_output_tokens'));
  await assert.rejects(readLedger({readHealth:async()=>state},{...parsed.args,date:addDays(date,1)},date));
+});
+test('a second ledger read keeps both approved results in call order',()=>{
+ const input={mode:'chat',text:'查库存和支出',date,photo:null,history:[]};
+ const steps=[
+  {item:{type:'function_call',name:'read_ledger',call_id:'stock',arguments:'{"scope":"stock","query":"牛奶"}'},
+   summary:{stock:[{name:'牛奶',qty:750,unit:'g'}]}},
+  {item:{type:'function_call',name:'read_ledger',call_id:'expenses',arguments:'{"scope":"expenses","query":""}'},
+   summary:{date,expense:12,income:0,count:1}}
+ ];
+ const request=modelRequest(input,{allowRead:true,continuation:steps});
+ assert.equal(request.tool_choice,'auto');
+ assert.equal(request.parallel_tool_calls,false);
+ assert.deepEqual(request.input.slice(1),steps.flatMap(({item,summary})=>
+  [item,{type:'function_call_output',call_id:item.call_id,output:JSON.stringify(summary)}]));
+});
+test('batch candidates share the individual schemas and validate each entry',()=>{
+ const input={mode:'chat',text:'补记午餐和盘点',date,photo:null,history:[]};
+ const finance={mode:'finance',date:null,result:{note:'',entry:{type:'expense',amount:28,date,note:'午餐',categoryId:'餐饮'}}};
+ const inventory={mode:'inventory',date:null,result:{operation:'count',name:'牛奶',quantity:450,unit:'g'}};
+ const operations=[finance,inventory];
+ const response=value=>({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]});
+ const batch={reply:'请核对。',proposal:{mode:'batch',date:null,result:{operations,next:'continue'}}};
+ assert.deepEqual(parseResult(response(batch),input),batch);
+ assert.deepEqual(JSON.parse(modelRequest(input,{allowRead:true,applied:['finance','inventory']}).input[0].content[0].text),
+  {text:input.text,date,history:[],applied:['finance','inventory']});
+ batch.proposal.result.operations=[];
+ assert.throws(()=>parseResult(response(batch),input));
+ batch.proposal.result.operations=operations;
+ finance.result.entry.date='2030-01-02';
+ assert.throws(()=>parseResult(response(batch),input));
+});
+test('stream decodes split UTF-8 and JSON escapes and reveals only reply text before completion',async()=>{
+ const encoder=new TextEncoder(),preview=[];
+ let stream;
+ const response={body:new ReadableStream({start(controller){stream=controller;}})};
+ const frame=event=>{
+  const bytes=encoder.encode('data: '+JSON.stringify(event)+'\r\n\r\n');
+  for(let i=0;i<bytes.length;i+=2)stream.enqueue(bytes.slice(i,i+2));
+ };
+ let showFirst;
+ const first=new Promise(resolve=>{showFirst=resolve;});
+ const completed=readResponseStream(response,{onReply:text=>{preview.push(text);showFirst(text);}});
+ const delta=delta=>frame({type:'response.output_text.delta',output_index:0,content_index:0,delta});
+ delta('{"re');
+ delta('ply":"先显示\\uD83');
+ assert.equal(await first,'先显示');
+ delta('D\\uDE00\\n\\"好了\\"","proposal":{"note":"候选内容"}}');
+ const final={status:'completed',output:[]};
+ frame({type:'response.completed',response:final});
+ stream.close();
+ assert.deepEqual(await completed,final);
+ assert.deepEqual(preview,['先显示','先显示😀\n"好了"']);
+});
+test('a stream without a terminal response rejects even after emitting partial reply text',async()=>{
+ const preview=[];
+ const response=new Response('data: '+JSON.stringify({type:'response.output_text.delta',delta:'{"reply":"半条回复'})+'\n\n');
+ await assert.rejects(readResponseStream(response,{onReply:text=>preview.push(text)}),ResponseStreamError);
+ assert.deepEqual(preview,['半条回复']);
 });
 test('inventory lookup preserves all matches and full names',async()=>{
  const state=newState(),description='原标签'.repeat(20);
@@ -90,7 +185,7 @@ test('food and purchase response schemas preserve all recognized items',()=>{
  const items=Array.from({length:11},(_,i)=>({...part,name:'样品 '+i,weighing:null}));
  const input={mode:'chat',text:'识别清单',date,photo:null,history:[]};
  const schema=modelRequest(input).text.format.schema;
- assert.ok(matches(schema,{reply:'已识别，等待核对',proposal:{mode:'entry',date,result:{note:'',items}}}));
+ assert.ok(matches(schema,{reply:'已识别，等待核对',proposal:{mode:'entry',date,result:{note:'',items:items.map(item=>({...item,stockSource:'one_off'}))}}}));
  assert.ok(matches(schema,{reply:'已识别，等待核对',proposal:{mode:'purchase',date,result:{note:'',total:null,
   items:items.map(row=>({...row,action:'add',itemCost:null}))}}}));
 });

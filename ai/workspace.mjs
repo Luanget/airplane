@@ -1,8 +1,9 @@
 import {readState,saveState} from '../health/storage.mjs';
 import {readFinance} from '../finance-storage.mjs';
-import {dayIntake,inventoryWithMoves,validDate} from '../health/core.mjs';
+import {dayIntake,inventoryWithMoves,isStockReference,validDate} from '../health/core.mjs';
 import {summarizeFoodHistory} from '../health/food-history.mjs';
-import {foodHistoryReadSchema,ledgerReadSchema,matches} from '../health/contract.mjs';
+import {expenseSummaryReadSchema,foodHistoryReadSchema,ledgerReadSchema,matches} from '../health/contract.mjs';
+import {displayStockQuantity,stockMeasure} from '../health/inventory.mjs';
 
 export const SKILL_LIMIT=320;
 const SKILL_KEY='airplane-ai-skill-v1';
@@ -13,10 +14,10 @@ export function cleanSkill(value) {
  return text;
 }
 export function localWorkspace(){
+ const account={finance:localStorage};
  return {
-  readHealth:()=>readState(),
-  saveHealth:(next,expected)=>saveState(next,expected),
-  finance:localStorage,
+  account,finance:account.finance,readHealth:()=>readState(account),
+  saveHealth:(next,expected)=>saveState(next,expected,account),
   readSkill:()=>localStorage.getItem(SKILL_KEY)??'',
   saveSkill:text=>localStorage.setItem(SKILL_KEY,cleanSkill(text))
  };
@@ -29,9 +30,31 @@ export function shortHistory(turns){
   return short?[{role,text:short}]:[];
  }).reverse();
 }
-export const readLabels={stock:'匹配的库存',meal:'可用食材和今日营养',expenses:'今日收支合计',foods:'指定日期的饮食记录'};
+export const readLabels={stock:'匹配的食品库存',meal:'可用食材和今日营养',expenses:'今日收支合计',foods:'指定日期的饮食记录',expense_summary:'指定时段的支出汇总'};
+export const expenseGroupLabels={category:'分类',day:'日期',month:'月份'};
 
 export async function readLedger(workspace,args,today){
+ if(args.scope==='expense_summary'){
+  const {start,end,groupBy}=args;
+  if(!matches(expenseSummaryReadSchema,{start,end,groupBy})||!validDate(start)||!validDate(end)||end<start||end>today)
+   throw Error('请选择截至今天的有效日期范围');
+  const ledger=readFinance(workspace.finance).payload;
+  const categories=new Map(ledger?.categories.map(row=>[row.id,row.name]));
+  const groups=new Map();
+  let cents=0,count=0;
+  for(const row of ledger?.transactions??[]){
+   if(row.type!=='expense'||row.date<start||row.date>end)continue;
+   const label=groupBy==='category'?(categories.get(row.categoryId)||row.categoryName||'未分类'):
+    groupBy==='month'?row.date.slice(0,7):row.date;
+   const item=groups.get(label)??{cents:0,count:0};
+   const amount=Math.round(Number(row.amount)*100);
+   item.cents+=amount;item.count++;cents+=amount;count++;
+   groups.set(label,item);
+  }
+  const rows=[...groups].map(([label,item])=>({label,expense:item.cents/100,count:item.count}));
+  rows.sort((a,b)=>groupBy==='category'?b.expense-a.expense:a.label.localeCompare(b.label));
+  return {start,end,groupBy,expense:cents/100,count,rows};
+ }
  if(args.scope==='foods'){
   const {date,query}=args;
   if(!matches(foodHistoryReadSchema,{date,query})||!validDate(date)||date>today)
@@ -45,9 +68,9 @@ export async function readLedger(workspace,args,today){
   return {date:today,income:total('income'),expense:total('expense'),count:tx.length};
  }
  const state=await workspace.readHealth(),query=args.query.trim().toLowerCase();
- const inventory=inventoryWithMoves(state).filter(s=>s.active&&(query?s.name?.toLowerCase().includes(query):args.scope==='stock'||s.qty>0))
+ const inventory=inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s)&&(args.scope==='stock'||s.qty>0)&&(!query||s.name?.toLowerCase().includes(query)))
   .sort((a,b)=>Number(b.name?.toLowerCase()===query)-Number(a.name?.toLowerCase()===query));
- const result={stock:inventory.map(s=>({name:s.name,qty:s.qty??null,unit:s.unit}))};
+ const result={stock:inventory.map(s=>({name:s.name,qty:displayStockQuantity(s,s.qty),unit:stockMeasure(s).unit}))};
  if(args.scope==='stock')return result;
  const intake=dayIntake(state,today);
  return {...result,today:{kcal:intake.totals.kcal,protein:intake.totals.protein,

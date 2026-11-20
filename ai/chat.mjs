@@ -1,16 +1,18 @@
 import {displayDay,localDate} from '../calendar.mjs';
 import {hydrateShell} from '../shell.mjs';
 import {installUpdates} from '../updates.mjs';
-import {resumePurchaseUpdate} from '../health/purchase-sync.mjs';
+import {AssistantSyncPending,resumePurchaseUpdate} from '../health/purchase-sync.mjs';
 import {validInput} from '../health/contract.mjs';
 import {healthReview,jpeg} from '../health/assistant.mjs';
 import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
 import {financeReview} from './finance.mjs';
 import {chatInstructions} from './responses.mjs';
-import {cleanSkill,localWorkspace,shortHistory,readLedger,readLabels} from './workspace.mjs';
+import {cleanSkill,localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
 import {foodEditReview,inventoryReview,skillReview} from './operations.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
+import {batchReview} from './batch.mjs';
+import {syncChoiceFields} from '../choice-picker.mjs';
 
 const demo=new URLSearchParams(location.search).get('demo')==='1';
 const workspace=demo?await demoWorkspace(localDate()):localWorkspace();
@@ -18,52 +20,93 @@ const book=threadBook(demo?workspace.finance:localStorage);
 const respond=demo?workspace.respond:recognize;
 const $=selector=>document.querySelector(selector);
 const transcript=$('.chat-transcript'),thread=$('.chat-thread'),review=$('.chat-review'),start=$('.assistant-start');
+const photoResults=$('[data-photo-results]');
 const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
 const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]'),stop=$('[data-stop-request]');
+const retryFollowUp=$('[data-retry-follow-up]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
 const historySearch=historyPanel.querySelector('input');
+const historyConfirmation=$('[data-delete-confirm]'),historyDelete=$('[data-delete-apply]');
 const readPanel=$('[data-read-preview]').closest('section'),share=$('[data-share-read]'),skip=$('[data-skip-read]');
 const consentPanel=$('#assistant-consent'),approve=$('[data-approve-send]'),cancelSend=$('[data-cancel-send]');
 const consentKey='airplane-ai-send-consent-v1';
 const skillForm=$('#assistant-skill form'),skillOutput=skillForm.querySelector('output');
-const keyPanel=$('#assistant-key-panel');
-let busy=false,saving=false,prepared=null,pending=null,activeRequest=null;
+const keyPanel=$('#assistant-key-panel'),settings=$('#assistant-settings-sheet');
+let busy=false,saving=false,prepared=null,pending=null,activeRequest=null,deletingThread=null,followUp=null,photoRun=null;
 let firstSend=!demo&&localStorage.getItem(consentKey)!=='yes';
 
 hydrateShell();
+$('#assistant-settings').onclick=()=>settings.showModal();
+settings.addEventListener('close',()=>{
+ if(location.hash==='#api-key')history.replaceState(history.state,'',location.pathname+location.search);
+});
 if(demo){
  $('.assistant-demo').hidden=false;
+ keyPanel.hidden=false;
+ keyPanel.querySelector('[data-demo-key]').hidden=false;
  for(const link of document.querySelectorAll('.topbar-actions a'))link.search='?demo=1';
  composer.elements.allowRead.checked=true;
 }else{
- window.airplaneAccount={finance:workspace.finance};
+ window.airplaneAccount=workspace.account;
  installUpdates();
  void resumePurchaseUpdate(window.airplaneAccount).catch(()=>{
-  if(!status.textContent)status.textContent='库存中有未完成的采购同步，请先在库存页处理。';
+  if(!status.textContent)status.textContent='有待同步的账本更新，请先在库存页处理。';
  });
  keyPanel.hidden=false;
  const keyStatus=mountKeyForm($('#assistant-key'));
  void readDeviceKey().then(key=>{
   if(!key&&!keyStatus.textContent)keyStatus.textContent='请导入 OpenAI API Key';
  }).catch(err=>{if(!keyStatus.textContent)keyStatus.textContent=err.message;});
- const openKeySettings=()=>{if(location.hash==='#api-key')revealKeySettings();};
- window.addEventListener('hashchange',openKeySettings);
- openKeySettings();
 }
+const openKeySettings=()=>{if(location.hash==='#api-key')revealKeySettings();};
+window.addEventListener('hashchange',openKeySettings);
+openKeySettings();
 
 function revealKeySettings(){
- keyPanel.open=true;keyPanel.scrollIntoView({block:'nearest'});
+ keyPanel.open=true;
+ if(!settings.open)settings.showModal();
+ keyPanel.querySelector('summary').scrollIntoView({block:'nearest'});
 }
 function tell(text){status.textContent=text;}
 function report(err){tell(err.name==='TypeError'?'无法完成请求，请检查网络或本机存储':err.message);}
-async function requestReply(input,options){
- if(demo)return respond(input,options);
+async function requestReply(input,options,userText){
+ const sent=userText?messageNode('user',userText):null;
+ const answer=messageNode('assistant','');
+ answer.classList.add('streaming-reply');answer.hidden=true;answer.setAttribute('aria-live','off');
+ start.hidden=true;
+ if(sent)transcript.append(sent);
+ transcript.append(answer);thread.scrollTop=thread.scrollHeight;
+ const onReply=text=>{
+  const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
+  if(answer.hidden)tell(demo?'正在接收演示回复…':'正在接收 OpenAI 回复…');
+  answer.hidden=false;answer.textContent=text;
+  if(follow)thread.scrollTop=thread.scrollHeight;
+ };
+ const onTool=()=>tell('正在准备本机账本查询…');
  const controller=new AbortController();
  activeRequest=controller;stop.hidden=false;stop.disabled=false;
- try{return await respond(input,{...options,signal:controller.signal});}
- finally{activeRequest=null;stop.hidden=true;}
+ try{
+  const result=await respond(input,{...options,signal:controller.signal,onReply,onTool});
+  if(demo&&result.reply){
+   let text='';
+   for(const part of result.reply.match(/[\s\S]{1,3}/gu)??[]){
+    if(controller.signal.aborted)throw Error('已停止等待演示回复。');
+    text+=part;onReply(text);
+    await new Promise(resolve=>setTimeout(resolve,40));
+   }
+   if(controller.signal.aborted)throw Error('已停止等待演示回复。');
+  }
+  return result;
+ }finally{
+  sent?.remove();answer.remove();start.hidden=!!book.current?.messages.length;
+  activeRequest=null;stop.hidden=true;
+ }
 }
-stop.onclick=()=>{stop.disabled=true;activeRequest?.abort();};
+stop.onclick=()=>{
+ stop.disabled=true;
+ if(photoRun)photoRun.stopped=true;
+ activeRequest?.abort();
+};
 function updateContext(){
  const turns=shortHistory((book.current?.messages??[]).filter(m=>m?.carry&&['user','assistant'].includes(m.role)&&typeof m.text==='string'));
  const chars=turns.reduce((n,row)=>n+row.text.length,0);
@@ -81,7 +124,7 @@ function syncThreads(){
  const query=historySearch.value.trim().toLowerCase();
  const rows=threads.filter(row=>row.title.toLowerCase().includes(query)).map(row=>{
   const li=document.createElement('li'),button=document.createElement('button'),name=document.createElement('strong');
-  button.type='button';name.textContent=row.title;button.append(name);
+  button.type='button';button.className='assistant-history-item';name.textContent=row.title;button.append(name);
   if(row.id===active?.id)button.setAttribute('aria-current','true');
   const last=new Date(row.updatedAt);
   if(Number.isFinite(last.getTime())){
@@ -93,7 +136,16 @@ function syncThreads(){
    try{book.select(row.id);openHistory(false);tell('');renderThread();historyButton.focus();}
    catch(err){report(err);}
   };
-  li.append(button);return li;
+  const remove=document.createElement('button');
+  remove.type='button';remove.className='assistant-history-delete';remove.textContent='删除';
+  remove.setAttribute('aria-label','删除对话 '+row.title);
+  remove.onclick=()=>{
+   if(busy||saving)return;
+   deletingThread=row.id;historyConfirmation.hidden=false;
+   $('[data-delete-label]').textContent='删除「'+row.title+'」这段对话？';
+   historyConfirmation.scrollIntoView({block:'nearest'});
+  };
+  li.append(button,remove);return li;
  });
  empty.textContent=query?'没有符合的对话':'还没有对话记录';
  empty.hidden=rows.length>0;
@@ -101,17 +153,31 @@ function syncThreads(){
 }
 function openHistory(open){
  historyPanel.hidden=!open;historyButton.setAttribute('aria-expanded',String(open));
- if(!open)historySearch.value='';
+ if(!open){historySearch.value='';clearHistoryConfirmation();}
  syncThreads();
 }
+function clearHistoryConfirmation(){deletingThread=null;historyConfirmation.hidden=true;}
+$('[data-delete-cancel]').onclick=clearHistoryConfirmation;
+historyDelete.onclick=()=>{
+ if(!deletingThread||busy||saving)return;
+ const active=book.current?.id===deletingThread;
+ try{
+  book.remove(deletingThread);clearHistoryConfirmation();
+  if(active)renderThread();else syncThreads();
+  historyButton.focus();tell('已删除这段对话。');
+ }catch(err){report(err);}
+};
 historyButton.onclick=()=>openHistory(historyPanel.hidden);
 historySearch.oninput=syncThreads;
 historyPanel.addEventListener('keydown',event=>{
  if(event.key==='Escape'){event.stopPropagation();openHistory(false);historyButton.focus();}
 });
-function bubble(role,text,source){
+function messageNode(role,text){
  const p=document.createElement('p');p.className='chat-bubble '+role;p.textContent=text;
- transcript.append(p);
+ return p;
+}
+function bubble(role,text,source){
+ transcript.append(messageNode(role,text));
  if(typeof source?.label==='string'&&typeof source.text==='string'){
   const details=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');
   details.className='chat-source';title.textContent=source.label;body.textContent=source.text;
@@ -119,12 +185,16 @@ function bubble(role,text,source){
  }
  thread.scrollTop=thread.scrollHeight;
 }
-function append(role,text,carry=true,source){
+function remember(role,text,carry,source){
  try{book.append(role,text,carry,source);}
  catch{tell('浏览器空间不足，对话暂存于当前页面。');}
- start.hidden=true;bubble(role,text,source);syncThreads();updateContext();
+ start.hidden=true;syncThreads();updateContext();
 }
-function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;}
+function append(role,text,carry=true,source){
+ remember(role,text,carry,source);bubble(role,text,source);
+}
+function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;delete review.dataset.syncPending;}
+function clearFollowUp(){followUp=null;retryFollowUp.hidden=true;}
 function clearRead(){pending=null;readPanel.hidden=true;$('[data-read-preview]').textContent='';}
 function clearConsent(){prepared=null;consentPanel.hidden=true;}
 function resetPhoto(){
@@ -135,20 +205,25 @@ function lock(){
  send.disabled=waiting;newChat.disabled=busy||saving;historyButton.disabled=busy||saving;
  for(const button of historyList.querySelectorAll('button'))button.disabled=busy||saving;
  historySearch.disabled=busy||saving;
+ historyDelete.disabled=busy||saving;
  composer.elements.text.disabled=waiting;
  composer.elements.image.disabled=waiting;
  composer.elements.allowRead.disabled=waiting;
  clearPhoto.disabled=waiting;
  share.disabled=busy;skip.disabled=busy;approve.disabled=busy;cancelSend.disabled=busy;
+ retryFollowUp.disabled=waiting;
+ for(const button of photoResults.querySelectorAll('button'))button.disabled=waiting;
+ for(const fields of review.querySelectorAll('.assistant-batch-step'))fields.disabled=waiting||review.dataset.syncPending==='yes';
  for(const b of review.querySelectorAll('button'))b.disabled=waiting;
  for(const b of $('.assistant-examples').querySelectorAll('button'))b.disabled=waiting;
 }
 function renderThread(){
  const messages=book.current?.messages??[];
  transcript.replaceChildren();
+ photoResults.replaceChildren();
  start.hidden=messages.length>0;
  for(const m of messages)if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source);
- clearConsent();clearRead();clearReview();composer.elements.text.value='';resetPhoto();syncThreads();updateContext();lock();
+ clearConsent();clearRead();clearReview();clearFollowUp();composer.elements.text.value='';resetPhoto();syncThreads();updateContext();lock();
 }
 function refreshSkill(){skillForm.elements.skill.value=workspace.readSkill().slice(0,320);updateContext();}
 $('#assistant-skill pre').textContent=chatInstructions;
@@ -166,8 +241,9 @@ newChat.onclick=()=>{
 };
 clearPhoto.onclick=resetPhoto;
 composer.elements.image.onchange=()=>{
- const file=composer.elements.image.files[0];
- $('[data-attachment]').textContent=file?.name??'';clearPhoto.hidden=!file;
+ const files=composer.elements.image.files;
+ $('[data-attachment]').textContent=files.length>1?'已选 '+files.length+' 张照片':files[0]?.name??'';
+ clearPhoto.hidden=!files.length;
 };
 composer.elements.text.addEventListener('keydown',e=>{
  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229&&matchMedia('(pointer:fine)').matches){
@@ -182,11 +258,19 @@ for(const button of document.querySelectorAll('[data-example]')){
  };
 }
 
-async function makeReview(proposal,today){
+async function makeReview(proposal,flow,photoJob){
  clearReview();if(!proposal)return;
- const {mode,result}=proposal;
+ if(photoJob){
+  const label=document.createElement('p');
+  label.className='photo-review-title';label.textContent=photoJob.label;review.append(label);
+ }
+ const {mode,result}=proposal,today=flow.input.date;
+ const willContinue=mode==='batch'&&result.next==='continue';
  let confirm,label;
- if(mode==='finance'){
+ if(mode==='batch'){
+  confirm=await batchReview(review,result,workspace,today,book.current?.foodDate);
+  label=willContinue?'确认全部并继续':'确认全部';
+ }else if(mode==='finance'){
   confirm=financeReview(review,result.entry,today,workspace.finance);
   label='确认记账';
  }else if(mode==='skill'){
@@ -214,33 +298,73 @@ async function makeReview(proposal,today){
    };
   }
  }
- if(!confirm)return;
+ if(!confirm){
+  if(photoJob)settlePhoto(photoJob,'此照片没有可保存的记录。');
+  return;
+ }
  const actions=document.createElement('div');actions.className='chat-actions';
  const apply=document.createElement('button');apply.type='submit';apply.className='primary-button';apply.textContent=label;
  const discard=document.createElement('button');discard.type='button';discard.className='secondary-button';discard.textContent='放弃';
- discard.onclick=clearReview;
+ discard.onclick=()=>{
+  if(photoJob)settlePhoto(photoJob,'已放弃候选。');
+  clearReview();
+ };
+ actions.append(discard);
+ let saveOnly;
+ if(willContinue){
+  saveOnly=document.createElement('button');saveOnly.type='submit';saveOnly.className='secondary-button';
+  saveOnly.textContent='仅保存';actions.append(saveOnly);
+ }
  const out=document.createElement('output');out.setAttribute('role','status');
- actions.append(discard,apply);review.append(actions,out);
+ actions.append(apply);review.append(actions,out);
+ let continuationApproved=false;
  review.onsubmit=async e=>{
   e.preventDefault();if(saving||busy||pending||prepared)return;
+  if(review.dataset.syncPending!=='yes')continuationApproved=willContinue&&e.submitter===apply;
   saving=true;lock();out.textContent='';
-  try{const message=await confirm();clearReview();append('assistant',message,false);}
-  catch(err){out.textContent=err.message;}
+  let resume=false;
+  try{
+   const message=await confirm();
+   if(photoJob)settlePhoto(photoJob,message);
+   clearReview();append('assistant',message,false);
+   if(continuationApproved){
+    followUp={
+     input:{...flow.input,date:localDate(),text:flow.input.text||'继续完成刚才照片中的请求。',history:[],photo:null},
+     options:{skill:flow.options.skill,allowRead:true,applied:result.operations.map(operation=>operation.mode)},
+     steps:[]
+    };
+    resume=true;
+   }
+  }catch(err){
+   out.textContent=err.message;
+   if(err instanceof AssistantSyncPending){
+    review.dataset.syncPending='yes';apply.textContent='继续同步';discard.hidden=true;
+    if(saveOnly)saveOnly.hidden=true;
+   }
+  }
   finally{saving=false;lock();}
+  if(resume)await continueAfterSave();
  };
+ for(const select of review.querySelectorAll('select'))select.dataset.picker='';
+ syncChoiceFields(review);
  review.hidden=false;
  thread.scrollTop=Math.max(0,thread.scrollTop+review.getBoundingClientRect().top-thread.getBoundingClientRect().top-88);
 }
 
-async function complete(response,today,source){
+async function complete(response,flow,source){
  clearRead();clearReview();
  tell('');
  append('assistant',response.reply,!source,source);
- try{await makeReview(response.proposal,today);}
+ try{await makeReview(response.proposal,flow);}
  catch(err){clearReview();report(err);}
 }
 function describeSummary(scope,summary){
  if(scope==='expenses')return summary.date+' · 支出 '+summary.expense+' 元 · 收入 '+summary.income+' 元 · '+summary.count+' 笔';
+ if(scope==='expense_summary')return [
+  summary.start+' 至 '+summary.end,
+  '按'+expenseGroupLabels[summary.groupBy]+'汇总 · 支出 '+summary.expense+' 元 · '+summary.count+' 笔',
+  ...summary.rows.map(row=>row.label+' · '+row.expense+' 元 · '+row.count+' 笔')
+ ].join('\n');
  if(scope==='foods'){
   const rows=summary.foods.map(row=>[row.time,row.meal,row.name,row.portion].filter(Boolean).join(' · '));
   if(!rows.length)rows.push('没有匹配的实际饮食记录');
@@ -256,73 +380,168 @@ function describeSummary(scope,summary){
  }
  return rows.join('\n');
 }
-async function sendMessage(input,{skill,allowRead}){
-  tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
-  const response=await requestReply(input,{skill,allowRead});
-  append('user',[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' '));
-  composer.elements.text.value='';resetPhoto();
-  clearReview();
-  if(response.call){
-   if(!allowRead)throw Error('本轮未允许账本查询');
+function querySource(steps){
+ if(!steps.length)return null;
+ const first=steps[0];
+ const label=steps.length>1?'查看本轮 '+steps.length+' 次查询的数据':
+  first.scope==='foods'?'查看本次饮食记录 · '+first.summary.foods.length+' 条':'查看本次查询数据';
+ return {label,text:steps.map(({scope,summary})=>describeSummary(scope,summary)).join('\n\n')};
+}
+async function showResponse(response,flow){
+ const {input,options,steps}=flow;
+ if(response.call){
+   if(!options.allowRead)throw Error('本轮未允许账本查询');
    const {args,item}=response.call,summary=await readLedger(workspace,args,input.date);
-   pending={input,skill,item,summary,scope:args.scope};
+   pending={input,options,steps,item,summary,scope:args.scope};
    $('[data-read-label]').textContent='助手请求了：'+readLabels[args.scope]+'。';
    $('[data-read-preview]').textContent=describeSummary(args.scope,summary);
    readPanel.hidden=false;thread.scrollTop=thread.scrollHeight;
    tell('核对本轮账本摘要后继续。');
-  }else await complete(response,input.date);
+ }else await complete(response,flow,querySource(steps));
+}
+async function continueAfterSave(){
+ if(!followUp||busy||saving||pending||prepared)return;
+ busy=true;retryFollowUp.hidden=true;lock();
+ tell('账本已保存，正在继续本轮…');
+ try{
+  const flow=followUp;
+  const response=await requestReply(flow.input,flow.options);
+  await showResponse(response,flow);
+  clearFollowUp();
+ }catch(err){
+  tell('账本已保存。'+err.message);
+  retryFollowUp.hidden=false;
+ }finally{busy=false;lock();}
+}
+retryFollowUp.onclick=continueAfterSave;
+function showPhoto(job,text,action=''){
+ job.output.textContent=text;
+ job.button.textContent=action? action+'照片 '+job.index:'';
+ job.button.hidden=!action;
+}
+function settlePhoto(job,message){
+ job.proposal=null;showPhoto(job,job.reply+'\n'+message);
+}
+async function recognizePhotos(jobs,flow,total){
+ const run={stopped:false};
+ photoRun=run;stop.textContent='停止本组识别';
+ try{
+  for(const job of jobs){
+   if(run.stopped)break;
+   showPhoto(job,'识别中…');
+   tell('正在识别照片 '+job.index+' / '+total+'…');
+   stop.hidden=false;stop.disabled=false;
+   try{
+    const photo=await jpeg(job.file);
+    if(run.stopped)throw Error('识别已停止。');
+    const reply=await requestReply({...flow.input,photo},{
+     ...flow.options,photoPosition:{index:job.index,total}
+    });
+    job.file=null;job.proposal=reply.proposal;job.reply=reply.reply;
+    remember('assistant','照片 '+job.index+'\n'+reply.reply,true);
+    showPhoto(job,reply.reply,job.proposal?'核对':'');
+   }catch(err){
+    const message=run.stopped?'识别已停止。':
+     err.name==='EncodingError'?'无法读取这张照片，请重新选择。':err.message;
+    showPhoto(job,message,'重试');
+   }
+  }
+ }finally{
+  photoRun=null;stop.hidden=true;stop.textContent='停止等待';
+  tell(run.stopped?'已暂停，可单独识别剩余照片。':'');
+ }
+}
+async function sendPhotos(input,options,files){
+ const total=files.length;
+ const flow={input,options,steps:[]};
+ append('user',[input.text,'（附 '+total+' 张照片）'].filter(Boolean).join(' '));
+ composer.elements.text.value='';resetPhoto();clearReview();
+ const group=document.createElement('section');
+ group.className='card photo-batch';group.setAttribute('aria-label','照片识别结果');
+ const jobs=files.map((file,i)=>{
+  const row=document.createElement('div'),name=document.createElement('strong'),output=document.createElement('p');
+  const button=document.createElement('button');button.type='button';button.className='text-button';button.disabled=true;
+  const index=i+1,label='照片 '+index+' · '+file.name;
+  row.className='photo-result';name.textContent=label;row.append(name,output,button);group.append(row);
+  const job={file,index,label,output,button};
+  showPhoto(job,'等待识别','识别');
+  button.onclick=async()=>{
+   if(busy||saving||pending||prepared)return;
+   busy=true;lock();
+   try{
+    if(job.file)await recognizePhotos([job],flow,total);
+    else await makeReview(job.proposal,flow,job);
+   }catch(err){clearReview();report(err);}
+   finally{busy=false;lock();}
+  };
+  return job;
+ });
+ photoResults.append(group);thread.scrollTop=thread.scrollHeight;
+ await recognizePhotos(jobs,flow,total);
+}
+async function sendMessage(input,options,files){
+ clearFollowUp();
+ if(files.length>1){await sendPhotos(input,options,files);return;}
+ tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
+ const userText=[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' ');
+ const response=await requestReply(input,options,userText);
+ append('user',userText);
+ composer.elements.text.value='';resetPhoto();
+ clearReview();
+ await showResponse(response,{input,options,steps:[]});
 }
 composer.onsubmit=async e=>{
  e.preventDefault();if(busy||saving||pending||prepared)return;
- const text=composer.elements.text.value.trim(),file=composer.elements.image.files[0];
- if(!text&&!file){tell('请输入消息或添加照片');return;}
+ const text=composer.elements.text.value.trim(),files=[...composer.elements.image.files];
+ if(!text&&!files.length){tell('请输入消息或添加照片');return;}
  busy=true;lock();tell('');
  try{
   if(!demo){
    tell('正在读取本机 API Key…');
    if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
   }
-  const photo=file?await jpeg(file):null,{turns,skill}=updateContext();
+  const photo=files.length===1?await jpeg(files[0]):null,{turns,skill}=updateContext();
   const input={mode:'chat',text,photo,date:localDate(),history:turns};
-  const options={skill,allowRead:composer.elements.allowRead.checked&&!photo};
-  if(!validInput(input))throw Error('请检查消息或照片');
+  const options={skill,allowRead:composer.elements.allowRead.checked&&!files.length};
+  if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
   if(firstSend){
-   prepared={input,options};
+   prepared={input,options,files};
    consentPanel.hidden=false;
    tell('还没发送。请在下方确认首次发送。');
    consentPanel.scrollIntoView({block:'nearest'});
    return;
   }
-  await sendMessage(input,options);
+  await sendMessage(input,options,files);
  }catch(err){report(err);}
  finally{busy=false;lock();}
 };
 approve.onclick=async()=>{
  if(!prepared||busy)return;
- const {input,options}=prepared;
+ const {input,options,files}=prepared;
  busy=true;clearConsent();lock();
  firstSend=false;
  try{localStorage.setItem(consentKey,'yes');}catch{}
- try{await sendMessage(input,options);}
+ try{await sendMessage(input,options,files);}
  catch(err){report(err);}
  finally{busy=false;lock();}
 };
 cancelSend.onclick=()=>{clearConsent();tell('');lock();composer.elements.text.focus();};
 share.onclick=async()=>{
  if(!pending||busy)return;
- const {input,skill,item,summary,scope}=pending;
+ const {input,options,item,summary,scope}=pending;
+ const steps=[...pending.steps,{item,summary,scope}];
  busy=true;lock();tell(demo?'正在生成演示回复…':'账本摘要已发送，正在等待 OpenAI 回复…');
  try{
-  const response=await requestReply(input,{skill,continuation:{item,summary}});
+  const response=await requestReply(input,{...options,continuation:steps});
   if(scope==='foods'){
    try{book.setFoodDate(summary.date);}catch{}
   }
-  const label=scope==='foods'?'查看本次饮食记录 · '+summary.foods.length+' 条':'查看本次查询数据';
-  await complete(response,input.date,{label,text:describeSummary(scope,summary)});
+  await showResponse(response,{input,options,steps});
  }
  catch(err){report(err);}
  finally{busy=false;lock();}
 };
 skip.onclick=()=>{
- clearRead();append('assistant','已取消本轮账本摘要发送。',false);tell('');lock();
+ const source=querySource(pending?.steps??[]);
+ clearRead();tell('');append('assistant','已取消发送这次账本摘要。',false,source);lock();
 };

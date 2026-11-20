@@ -12,6 +12,14 @@ export function threadBook(store){
   list:()=>threads,
   start(){active=null;save();},
   select(id){active=threads.find(thread=>thread.id===id)??null;save();},
+  remove(id){
+   const index=threads.findIndex(thread=>thread.id===id);
+   if(index<0)return;
+   const previous=active,[removed]=threads.splice(index,1);
+   if(active?.id===id)active=null;
+   try{save();}
+   catch(err){threads.splice(index,0,removed);active=previous;throw err;}
+  },
   setFoodDate(date){if(active){active.foodDate=date;save();}},
   append(role,text,carry=true,source){
    if(!active){

@@ -1,6 +1,6 @@
 import {inventoryWithMoves, addFood, localStockChange, round, makeId} from './core.mjs';
 import {localClock} from '../calendar.mjs';
-import {measuredGrams,saveSku} from './inventory.mjs';
+import {measuredGrams,saveSku,stockMeasure} from './inventory.mjs';
 import {nutrientKeys} from './contract.mjs';
 
 const unitOf = u => ({'袋':'包','克':'g','毫升':'mL','ml':'mL'})[u] ?? u;
@@ -18,26 +18,32 @@ export function basis(sku) {
   return [1,explicit?.[1] ?? '份'];
 }
 
-function packageInfo(sku, c) {
+export function packageInfo(sku,c={}) {
   const match = sku?.standard.match(/(\d+(?:\.\d+)?)\s*(g|克|ml|毫升)\s*[/／]\s*(包|袋|盒|瓶|个|份)/i);
   if (match) return {size:+match[1], measure:unitOf(match[2].toLowerCase()), pack:unitOf(match[3])};
   return {size:sku?.packageSize ?? c.packageSize, measure:sku?.packageUnit ?? c.packageUnit,
     pack:unitOf(sku?.pack ?? (packed(c.unit) ? c.unit : packed(sku?.unit) ? sku.unit : c.basisUnit))};
 }
 
-function convert(amount, from, to, pack) {
+function convert(amount, from, to, pack, sku) {
   from = unitOf(from); to = unitOf(to);
   if (from === to) return amount;
+  const measure=stockMeasure(sku);
+  const counted=measure.unit==='个'&&sku?.unit!=='个';
+  const pieces=to==='个'&&counted?measure.factor:1;
+  if(from==='个'&&counted){from=unitOf(sku.unit);amount/=measure.factor;}
+  if(to==='个'&&counted)to=unitOf(sku.unit);
+  if(from===to)return amount*pieces;
   if (pack.size > 0 && pack.measure && packed(pack.pack)) {
-    if (from === pack.pack && to === pack.measure) return amount * pack.size;
-    if (from === pack.measure && to === pack.pack) return amount / pack.size;
+    if (from === pack.pack && to === pack.measure) return amount * pack.size * pieces;
+    if (from === pack.measure && to === pack.pack) return amount / pack.size * pieces;
   }
   return null;
 }
 
-export function manualStockQty(sku, amount) {
-  const [,from] = basis(sku);
-  return convert(amount, from, sku.unit, packageInfo(sku, {unit:from,basisUnit:from}));
+export function quantityInUnit(sku,amount,from,to) {
+  if(!Number.isFinite(amount))return null;
+  return convert(amount,from,to,packageInfo(sku,{unit:from,basisUnit:from}),sku);
 }
 
 // One path handles the preview and the eventual write. No model-supplied totals.
@@ -48,10 +54,10 @@ export function resolveItem(state, c) {
   if (c.sku && !sku) throw Error('库存食品已变更，请重新选择');
   const [n, unit] = sku ? basis(sku) : [c.basisAmount,c.basisUnit];
   const pack = packageInfo(sku,c);
-  const stockQty = sku ? convert(c.amount,c.unit,sku.unit,pack) : null;
-  const labelAmount = convert(c.amount,c.unit,unit,pack);
+  const stockQty = sku ? convert(c.amount,c.unit,sku.unit,pack,sku) : null;
+  const labelAmount = convert(c.amount,c.unit,unit,pack,sku);
   // Fill missing SKU fields only when the model supplied a convertible estimate.
-  const modelAmount = convert(c.amount,c.unit,c.basisUnit,pack);
+  const modelAmount = convert(c.amount,c.unit,c.basisUnit,pack,sku);
   const nutrition = Object.fromEntries(nutrientKeys.map(k => {
     if (sku?.nutrition[k] != null)
       return [k,labelAmount === null ? null : round(sku.nutrition[k]*labelAmount/n,2)];
@@ -84,7 +90,7 @@ export function confirmItems(current, candidates, date, meal, time=localClock())
     } else {
       if (c.action === 'eat' && sku && stockQty === null) throw Error('无法换算扣库数量，请调整单位或选择自定义食物');
       const entry = addFood(next,{date,time,meal,name:sku?.name ?? c.name,portion:`${amount} ${unit}`,
-        ...nutrition,foodId:sku?.id,stockQty,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
+        ...nutrition,foodId:sku?.id,stockQty,amount,amountUnit:unit,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
       entry.source = 'confirmed-assistant';
       entry.uncertainty = c.uncertainty;
     }

@@ -1,11 +1,23 @@
 import {localClock,syncCalendarFields} from '../calendar.mjs';
-import {freshData,readFinance,replaceFinance} from '../finance-storage.mjs';
+import {addConfirmedTransactions,freshData,readFinance,replaceFinance} from '../finance-storage.mjs';
 import {validFinanceEntry} from '../health/contract.mjs';
 
 export function financeReview(container,entry,today,store=localStorage){
  if(!entry)return null;
  const {primary,payload}=readFinance(store);
- const ledger=payload??freshData(),categories=ledger.categories.filter(c=>!c.hidden);
+ const read=financeFields(container,entry,today,payload??freshData());
+ return ()=>{
+  const current=readFinance(store);
+  if(current.primary!==primary)throw Error('账本已变更，请重新生成候选');
+  const next=current.payload??freshData();
+  addConfirmedTransactions(next,[read()]);
+  replaceFinance(store,next,primary);
+  return '财务记录已保存。';
+ };
+}
+export function financeFields(container,entry,today,ledger){
+ if(!entry)return null;
+ const categories=ledger.categories.filter(c=>!c.hidden);
  const title=document.createElement('h3');title.textContent='收支记录';container.append(title);
  const fields=document.createElement('div');fields.className='form-grid';container.append(fields);
  function field(label,control,parent=fields){
@@ -42,17 +54,9 @@ export function financeReview(container,entry,today,store=localStorage){
   const selected=categories.find(c=>c.id===category.value&&c.type===type.value);
   const fields={type:type.value,amount:amount.valueAsNumber,date:date.value,categoryId:category.value};
   if(!selected||!validFinanceEntry(fields,{date:today,categories}))throw Error('请核对收支类型、金额、日期和分类');
-  const current=readFinance(store);
-  if(current.primary!==primary)throw Error('账本已变更，请重新生成候选');
-  const next=current.payload??freshData();
-  if(next.transactions.some(tx=>tx.id===id))throw Error('这条候选已保存');
   const now=new Date();
-  next.transactions.push({...fields,id,note:note.value.trim(),time:localClock(now),createdAt:now.toISOString(),
+  return {...fields,id,note:note.value.trim(),time:localClock(now),createdAt:now.toISOString(),
    categoryName:selected.name,categoryIcon:selected.icon,categoryColor:selected.color,
-   budgetSync:fields.type==='income'&&budget.checked,budgetExcluded:fields.type==='expense'&&!budget.checked});
-  next.prefs??={};
-  next.prefs[fields.type==='income'?'lastIncomeCategoryId':'lastExpenseCategoryId']=selected.id;
-  replaceFinance(store,next,primary);
-  return '财务记录已保存。';
+   budgetSync:fields.type==='income'&&budget.checked,budgetExcluded:fields.type==='expense'&&!budget.checked};
  };
 }

@@ -1,7 +1,8 @@
 import {displayDay,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
-import {dayIntake,inventoryWithMoves,localStockChange,validDate} from '../health/core.mjs';
+import {dayIntake,inventoryWithMoves,isStockReference,localStockChange,validDate} from '../health/core.mjs';
 import {matchFoodRecords,reviseFoodPortion} from '../health/food-history.mjs';
 import {setShoppingItem} from '../health/shopping.mjs';
+import {displayStockQuantity,stockMeasure,storedStockQuantity} from '../health/inventory.mjs';
 import {cleanSkill,SKILL_LIMIT} from './workspace.mjs';
 
 function field(parent,name,control){
@@ -22,11 +23,11 @@ export function skillReview(container,current,suggested){
 export function inventoryReview(container,proposal,current,today){
  const {operation,name,quantity,unit}=proposal.result,shopping=operation==='shopping';
  heading(container,shopping?'更新补货清单':'盘点库存');
- const stock=inventoryWithMoves(current).filter(s=>s.active);
+ const stock=inventoryWithMoves(current).filter(s=>s.active&&!isStockReference(s));
  const item=field(container,'食品',document.createElement('select'));
  item.add(new Option('请选择已有食品',''));
- for(const row of stock)item.add(new Option(row.name+' · '+row.unit,row.id));
- const matches=stock.filter(s=>s.name===name&&s.unit===unit);
+ for(const row of stock)item.add(new Option(row.name+' · '+stockMeasure(row).unit,row.id));
+ const matches=stock.filter(s=>s.name===name&&(s.unit===unit||stockMeasure(s).unit===unit));
  if(matches.length===1)item.value=matches[0].id;
  item.required=true;
  const grid=document.createElement('div');grid.className='form-grid';container.append(grid);
@@ -38,24 +39,30 @@ export function inventoryReview(container,proposal,current,today){
  const selection=()=>stock.find(s=>s.id===item.value);
  function update(){
   const row=selection();
-  const previous=shopping?(current.local.shoppingList??[]).find(x=>x.foodId===row?.id)?.quantity:row?.qty;
+  const stored=shopping?(current.local.shoppingList??[]).find(x=>x.foodId===row?.id)?.quantity:row?.qty;
+  const previous=displayStockQuantity(row,stored);
   preview.textContent=row?
-   (shopping?'原清单':'原库存')+' '+(previous??'未知')+' → '+(qty.value||'待填')+' '+row.unit
+   (shopping?'原清单':'原库存')+' '+(previous??'未知')+' → '+(qty.value||'待填')+' '+stockMeasure(row).unit
    +(date?.value?' · '+displayDay(date.value):''):
    '助手建议「'+name+'」'+quantity+' '+unit+'，请选择食品并核对数量单位。';
  }
- qty.value=item.value?String(quantity):'';
- item.onchange=()=>{qty.value=selection()?.unit===unit?String(quantity):'';update();};
+ function fillQuantity(){
+  const row=selection();
+  qty.value=row&&(row.unit===unit||stockMeasure(row).unit===unit)?
+   String(row.unit===unit?displayStockQuantity(row,quantity):quantity):'';
+  update();
+ }
+ item.onchange=fillQuantity;
  qty.oninput=update;if(date)date.onchange=update;
- update();syncCalendarFields(container);
- return ()=>{
+ fillQuantity();syncCalendarFields(container);
+ return (state=current)=>{
   const row=selection(),value=qty.valueAsNumber;
   if(!row||!Number.isFinite(value)||value<0||value>100000)throw Error('请核对食品和数量');
-  const next=structuredClone(current);
-  if(shopping)setShoppingItem(next,row.id,value);
+  const next=structuredClone(state);
+  if(shopping)setShoppingItem(next,row.id,storedStockQuantity(row,value));
   else {
    if(!validDate(date.value)||date.value>today)throw Error('请核对盘点日期');
-   localStockChange(next,{foodId:row.id,delta:value,date:date.value,time:localClock(),count:true,reason:'助手盘点 · 已确认'});
+   localStockChange(next,{foodId:row.id,delta:storedStockQuantity(row,value),date:date.value,time:localClock(),count:true,reason:'助手盘点 · 已确认'});
   }
   return next;
  };
@@ -79,8 +86,8 @@ export function foodEditReview(container,proposal,current,today,lastFoodDate){
  const preview=document.createElement('div');
  preview.className='food-edit-diff';preview.setAttribute('aria-live','polite');
  container.append(preview);
- function calculate(){
-  return reviseFoodPortion(current,{id:selection.value,date,amount:quantity.valueAsNumber,unit});
+ function calculate(state=current){
+  return reviseFoodPortion(state,{id:selection.value,date,amount:quantity.valueAsNumber,unit});
  }
  function update(){
   preview.replaceChildren();
@@ -100,13 +107,14 @@ export function foodEditReview(container,proposal,current,today,lastFoodDate){
     if(after.nutrition[key]!==null)pair(label,before.nutrition[key]+' → '+after.nutrition[key]+' '+measure);
    }
    pair('当日热量',calories(dayIntake(current,date).totals.kcal)+' → '+calories(dayIntake(next,date).totals.kcal));
-   pair('库存',stock?stock.name+' '+stock.before+' → '+stock.after+' '+stock.unit:'原记录无关联扣库流水，库存不变');
+   const sku=stock&&inventoryWithMoves(current).find(row=>row.id===before.foodId);
+   pair('库存',stock?stock.name+' '+displayStockQuantity(sku,stock.before)+' → '+displayStockQuantity(sku,stock.after)+' '+stockMeasure(sku).unit:'原记录无关联扣库流水，库存不变');
    preview.append(list);
   }catch(err){preview.textContent=err.message;}
  }
  selection.onchange=update;quantity.oninput=update;update();
  return {
-  apply:()=>calculate().next,
+  apply:state=>calculate(state).next,
   label:'确认更正',
   saved:'已更正原饮食记录，并重新计算当日营养和关联库存。'
  };

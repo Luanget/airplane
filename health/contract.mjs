@@ -17,6 +17,9 @@ const item = object({
   weighing:optional(object({before:number(100000,0.001),after:optional(number(100000)),tare:optional(number(100000))}))
 });
 export const resultSchema = object({note:string(400), items:list(item)});
+const chatEntrySchema=object({note:string(400),items:list(object({
+  ...item.properties,stockSource:choice('one_off','inventory')
+}))});
 export const activitySchema=object({note:string(400),activity:optional(object({
  name:string(80,1),km:optional(number(1000)),minutes:optional(number(1440)),kcal:optional(number(20000)),
  energyKind:choice('activity','total'),quality:choice('estimated','device'),includedInBase:choice('yes','no'),
@@ -45,7 +48,8 @@ export function matches(s, x) {
     case 'null': return x === null;
     case 'number': return Number.isFinite(x) && x >= s.minimum && x <= s.maximum;
     case 'string': return typeof x === 'string' && (s.enum ? s.enum.includes(x) : x.length >= s.minLength && (s.maxLength===undefined||x.length<=s.maxLength));
-    case 'array': return Array.isArray(x) && (s.maxItems===undefined||x.length<=s.maxItems) && x.every(v => matches(s.items,v));
+    case 'array': return Array.isArray(x) && x.length>=(s.minItems??0)
+      && (s.maxItems===undefined||x.length<=s.maxItems) && x.every(v => matches(s.items,v));
     case 'object': return x !== null && typeof x === 'object' && !Array.isArray(x)
       && Object.keys(x).length === s.required.length && s.required.every(k => Object.hasOwn(x,k) && matches(s.properties[k],x[k]));
     default: return false;
@@ -63,16 +67,20 @@ const conversationTurn=object({role:choice('user','assistant'),text:string(1600,
 const chatInput=object({mode:choice('chat'),text:string(1600),date:string(10,10),
   photo:optional(string(720000)),history:list(conversationTurn,8)});
 const proposal=(mode,result)=>object({mode:choice(mode),date:optional(string(10,10)),result});
-export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
-  {type:'null'},proposal('finance',financeSchema),proposal('activity',activitySchema),
-  proposal('purchase',purchaseSchema),proposal('entry',resultSchema),proposal('plan',resultSchema),
+const ledgerOperations=[
+  proposal('finance',financeSchema),proposal('activity',activitySchema),
+  proposal('purchase',purchaseSchema),proposal('entry',chatEntrySchema),proposal('plan',resultSchema),
   proposal('food_edit',object({name:string(80,1),amount:number(100000,0.001),unit,
    meal:optional(string(24,1)),time:optional(string(5,5))})),
-  proposal('inventory',object({operation:choice('count','shopping'),name:string(80,1),quantity:number(100000),unit})),
-  proposal('skill',object({text:string(320,1)}))
+  proposal('inventory',object({operation:choice('count','shopping'),name:string(80,1),quantity:number(100000),unit}))
+];
+export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
+  {type:'null'},...ledgerOperations,proposal('skill',object({text:string(320,1)})),
+  proposal('batch',object({operations:{...list({anyOf:ledgerOperations}),minItems:1},next:choice('done','continue')}))
 ]}});
 export const ledgerReadSchema=object({scope:choice('stock','meal','expenses'),query:string()});
 export const foodHistoryReadSchema=object({date:string(10,10),query:string()});
+export const expenseSummaryReadSchema=object({start:string(10,10),end:string(10,10),groupBy:choice('category','day','month')});
 const jpegPhoto=photo=>photo?.startsWith('data:image/jpeg;base64,/9j/') &&
   /^[A-Za-z0-9+/]+={0,2}$/.test(photo.slice(23));
 export function validFinanceEntry(entry,input) {

@@ -1,4 +1,7 @@
+export const APP_VERSION='0.9.0';
 export const shellGlyphs = {
+ close: '<path d="m6 6 12 12M18 6 6 18"/>',
+ check: '<path d="m5 12 4 4L19 6"/>',
  download: '<path d="M12 3v12M7 10l5 5 5-5M4 19h16"/>',
  chevron: '<path d="m9 6 6 6-6 6"/>',
  plane: '<path d="M3 14.5 21 3l-6.2 18-4.1-6.2L3 14.5Z"/><path d="m10.7 14.8 4.1-4.1"/>',
@@ -13,14 +16,43 @@ export const shellGlyphs = {
  bag: '<path d="M5 8h14l-1 13H6L5 8Z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/>',
  sparkles: '<path d="M11 3l1.7 5.3L18 10l-5.3 1.7L11 17l-1.7-5.3L4 10l5.3-1.7L11 3ZM19 13l.9 2.1L22 16l-2.1.9L19 19l-.9-2.1L16 16l2.1-.9L19 13ZM5 15v4m-2-2h4"/>',
 };
+export function shellIcon(name){
+ return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shellGlyphs[name]??''}</svg>`;
+}
 export function hydrateShell(){
  for(const el of document.querySelectorAll('[data-shell-icon]')){
-  const paths=shellGlyphs[el.dataset.shellIcon];
-  if(paths)el.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+  if(shellGlyphs[el.dataset.shellIcon])el.innerHTML=shellIcon(el.dataset.shellIcon);
  }
  document.querySelectorAll('dialog.bottom-sheet').forEach(dialog=>bindSheetSwipe(dialog));
  document.querySelectorAll('dialog [data-sheet-close]').forEach(button=>{
   button.onclick=()=>button.closest('dialog').close();
+ });
+}
+
+let confirmationSheet;
+export function confirmAction({title,message,action='确认',danger=false}){
+ if(!confirmationSheet){
+  confirmationSheet=document.createElement('dialog');
+  confirmationSheet.className='modal bottom-sheet confirmation-sheet';
+  confirmationSheet.setAttribute('aria-labelledby','confirmation-title');
+  confirmationSheet.innerHTML=`
+   <div class="modal-grabber" aria-hidden="true"></div>
+   <div class="modal-head"><button type="button" class="cancel">取消</button><h2 id="confirmation-title"></h2><span></span></div>
+   <section class="card"><p></p><button type="button" data-confirm></button></section>`;
+  document.body.append(confirmationSheet);
+  bindSheetSwipe(confirmationSheet);
+  confirmationSheet.querySelector('.cancel').onclick=()=>confirmationSheet.close();
+  confirmationSheet.querySelector('[data-confirm]').onclick=()=>confirmationSheet.close('confirmed');
+ }
+ const sheet=confirmationSheet;
+ if(sheet.open)return Promise.resolve(false);
+ sheet.querySelector('h2').textContent=title;sheet.querySelector('p').textContent=message;
+ const button=sheet.querySelector('[data-confirm]');
+ button.textContent=action;button.className=danger?'danger-button':'primary-button';
+ sheet.returnValue='';
+ return new Promise(resolve=>{
+  sheet.addEventListener('close',()=>resolve(sheet.returnValue==='confirmed'),{once:true});
+  sheet.showModal();
  });
 }
 
@@ -46,7 +78,7 @@ export function bindSheetSwipe(modal,backdrop,dismiss=()=>modal.close()){
     return true;
   };
   const begin=(point,target,force=false)=>{
-    if(target?.closest?.('.drag-handle'))return false;
+    if(target?.closest?.('.drag-handle,.inline-picker-panel'))return false;
     // Arm the gesture from the whole sheet, including controls. Nothing is
     // prevented on touchstart, so a normal tap still behaves like a tap. Only
     // after a clearly downward movement do we take over and dismiss the sheet.

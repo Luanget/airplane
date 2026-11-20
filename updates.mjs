@@ -1,9 +1,19 @@
+import {shellIcon} from './shell.mjs';
+
 const scope = new URL('./', import.meta.url).href;
+let manualView=null;
+function showManualStatus(message,ready=false){
+  if(!manualView?.panel.isConnected||!manualView.button.getClientRects().length)return false;
+  const {panel,status,action}=manualView;
+  panel.hidden=false;status.textContent=message;action.hidden=!ready;
+  return true;
+}
 function toast(message, {duration=2500}={}) {
+  if(showManualStatus(message))return;
   let el = document.querySelector('.update-status');
   if (!el) {
     el = document.createElement('div');
-    el.className = 'update-status';
+    el.className = 'toast update-status';
     el.setAttribute('role','status');
     document.body.append(el);
   }
@@ -61,11 +71,12 @@ function showUpdateAvailable(worker=null,{force=false}={}){
   if(worker)pendingUpdateWorker=worker;
   if(updateReminderDismissed&&!force)return;
   if(force)updateReminderDismissed=false;
+  if(showManualStatus('新版已准备好',true)){hideUpdateBanner();return;}
   if(updateBannerShown&&document.querySelector('.update-banner'))return;
   updateBannerShown=true;
   document.querySelector('.update-banner')?.remove();
   const d=document.createElement('div');d.className='update-banner';
-  d.innerHTML=`<span><strong>Airplane 有新版本</strong><small>已在后台准备好</small></span><button class="update-banner-action" type="button">更新</button><button class="update-banner-close" type="button" aria-label="稍后更新">×</button>`;
+  d.innerHTML=`<span><strong>Airplane 有新版本</strong><small>已在后台准备好</small></span><button class="update-banner-action" type="button">更新</button><button class="update-banner-close" type="button" aria-label="稍后更新">${shellIcon('close')}</button>`;
   document.body.appendChild(d);
   d.querySelector('.update-banner-action').onclick=()=>{hideUpdateBanner();activateWaitingServiceWorker();};
   d.querySelector('.update-banner-close').onclick=()=>{updateReminderDismissed=true;hideUpdateBanner();};
@@ -85,7 +96,7 @@ function observeServiceWorkerRegistration(registration){
   });
 }
 
-export async function checkForAppUpdate(showToast=false){
+async function checkForAppUpdate(showToast=false){
   if(!('serviceWorker' in navigator)){if(showToast)toast('当前环境不支持程序更新');return;}
   try{
     const registration=airplaneRegistration||await navigator.serviceWorker.getRegistration(scope);
@@ -93,7 +104,7 @@ export async function checkForAppUpdate(showToast=false){
     airplaneRegistration=registration;
     observeServiceWorkerRegistration(registration);
     await registration.update();
-    localStorage.setItem(UPDATE_CHECK_KEY,String(Date.now()));
+    try{localStorage.setItem(UPDATE_CHECK_KEY,String(Date.now()));}catch{}
     if(registration.waiting){showUpdateAvailable(registration.waiting,{force:showToast});return;}
     if(showToast){
       if(registration.installing){toast('发现新版，正在后台准备…',{duration:2600});}
@@ -103,6 +114,28 @@ export async function checkForAppUpdate(showToast=false){
     console.warn('Airplane update check failed',err);
     if(showToast)toast('暂时无法连接更新服务器，继续使用本地版本');
   }
+}
+
+export function bindUpdateCheck(button){
+  if(!button)return;
+  const panel=document.createElement('div'),status=document.createElement('output'),action=document.createElement('button');
+  panel.className='update-inline';panel.hidden=true;
+  status.setAttribute('aria-live','polite');
+  action.type='button';action.className='primary-button';action.textContent='更新';action.hidden=true;
+  panel.append(status,action);button.after(panel);
+  const view={button,panel,status,action};
+  button.closest('dialog')?.addEventListener('close',()=>{
+    panel.hidden=true;
+    if(manualView===view)manualView=null;
+  });
+  action.onclick=activateWaitingServiceWorker;
+  button.onclick=async()=>{
+    manualView=view;
+    hideUpdateBanner();
+    showManualStatus('正在检查更新…');button.disabled=true;
+    try{await checkForAppUpdate(true);}
+    finally{button.disabled=false;}
+  };
 }
 
 function lastUpdateCheckAt(){
@@ -137,6 +170,7 @@ async function registerAirplaneServiceWorker(){
   try{
     navigator.serviceWorker.addEventListener('controllerchange',()=>{
       pendingUpdateWorker=null;hideUpdateBanner();
+      if(!swReloading)showManualStatus('已切换到新版本');
       if(!swReloading)return;
       clearTimeout(updateReloadFallbackTimer);
       // Give the newly activated worker a brief moment to claim the client and

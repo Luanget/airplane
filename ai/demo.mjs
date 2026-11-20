@@ -35,24 +35,67 @@ export async function demoWorkspace(today){
  }
  const workspace={account,finance,readHealth:()=>readState(account),saveHealth:(next,expected)=>saveState(next,expected,account),
   readSkill:()=>finance.getItem('skill')??'',saveSkill:value=>finance.setItem('skill',value)};
- async function respond(input,{allowRead,continuation}={}){
+ async function respond(input,{allowRead,continuation=[],applied=[],photoPosition}={}){
+  const latest=continuation.at(-1);
   const text=input.text;
   const focus=inventoryWithMoves(await workspace.readHealth()).find(s=>text.includes(s.name)),name=focus?.name??'燕麦';
   const quantity=Number(text.match(/(\d+(?:\.\d+)?)\s*(?:g|克)/i)?.[1]??300);
   const propose=(reply,mode,result)=>({reply,proposal:{mode,result,date:null}});
-  const call=(scope,query='')=>({call:{args:{scope,query},item:{call_id:'demo'}}});
+  if(input.photo){
+   const name=photoPosition?.index%2===0?'牛奶':'燕麦',unit='g';
+   const item={name,sku:null,stockSource:'one_off',action:'eat',amount:name==='牛奶'?180:60,unit,
+    packageSize:null,packageUnit:null,basisAmount:100,basisUnit:unit,
+    nutrients:{kcal:name==='牛奶'?62:375,protein:null,carbs:null,fat:null,sodium:null},
+    uncertainty:'固定演示候选。',weighing:null};
+   return propose('演示候选为'+name+'。','entry',{note:'',items:[item]});
+  }
+  const call=(scope,query='')=>({call:{args:{scope,query},item:{call_id:'demo-'+scope}}});
+  if(text.includes('消费习惯')){
+   if(allowRead&&!latest)return {call:{args:{scope:'expense_summary',start:input.date.slice(0,7)+'-01',end:input.date,groupBy:'category'},item:{call_id:'demo-expense-summary'}}};
+   const data=latest?.summary;
+   return {reply:data?'本月示例账本记录了 '+data.count+' 笔，总支出 '+data.expense+' 元。'+
+    (data.rows[0]?'支出最多的是「'+data.rows[0].label+'」。':''):'可开启本轮账本查询，按实际汇总分析。',proposal:null};
+  }
+  if(text.includes('查库存和今日支出')){
+   if(allowRead&&!latest)return call('stock');
+   if(latest?.scope==='stock')return call('expenses');
+   const stock=continuation.find(step=>step.scope==='stock')?.summary.stock;
+   const expense=latest?.summary.expense;
+   if(stock&&expense!==undefined)return {reply:'查到 '+stock.length+' 种食品，今天已支出 '+expense+' 元。',proposal:null};
+   return {reply:'可开启本轮账本查询，逐项查看库存和今日支出。',proposal:null};
+  }
   const chineseDate=text.match(/(\d{1,2})月(\d{1,2})日/);
   const date=text.match(/\d{4}-\d{2}-\d{2}/)?.[0]??(chineseDate?
    input.date.slice(0,4)+'-'+chineseDate[1].padStart(2,'0')+'-'+chineseDate[2].padStart(2,'0'):
    text.includes('前天')?addDays(input.date,-2):
    text.includes('昨天')?addDays(input.date,-1):text.includes('今天')?input.date:null);
+  const dinnerItem=(row,amount)=>({name:row.name,sku:null,action:'plan',amount,unit:'g',
+   packageSize:null,packageUnit:null,basisAmount:100,basisUnit:'g',
+   nutrients:{kcal:null,protein:null,carbs:null,fat:null,sodium:null},
+   uncertainty:'演示搭配，使用本地食品营养基础计算。',weighing:null});
+  const expense=Number(text.match(/(\d+(?:\.\d+)?)\s*元/)?.[1]);
+  if(text.includes('牛奶')&&date&&Number.isFinite(expense)&&/安排晚餐/.test(text)){
+   if(!applied.length)return propose('请一起核对牛奶更正和午餐支出，保存后我会用更新后的库存安排晚餐。','batch',{
+    next:'continue',operations:[
+     {mode:'food_edit',date,result:{name:'牛奶',amount:quantity,unit:'g',meal:null,time:null}},
+     {mode:'finance',date:null,result:{note:'',entry:{type:'expense',amount:expense,date:input.date,note:'演示午餐',categoryId:'餐饮'}}}
+    ]
+   });
+   if(!latest)return call('meal');
+   const {stock}=latest.summary,milk=stock.find(row=>row.name==='牛奶');
+   const items=stock.filter(row=>row.name!=='牛奶'&&row.unit==='g'&&row.qty>0)
+    .map(row=>dinnerItem(row,Math.min(row.qty,row.name==='鸡胸肉'?180:60)));
+   return propose((milk?'更新后的牛奶库存是 '+milk.qty+' '+milk.unit+'。':'')+'这里是基于最新库存的晚餐计划。','plan',{
+    note:'计划可稍后转为实际摄入。',items
+   });
+  }
   if(focus&&/改成|改为|更正/.test(text)&&/\d\s*(?:g|克)\b/i.test(text.replace('克','g'))){
    return {reply:'我会按你选中的原记录更正份量，请核对下面的变化。',proposal:{mode:'food_edit',date,
     result:{name,amount:quantity,unit:'g',meal:null,time:null}}};
   }
   if(date&&/吃了(?:什么|啥)|喝了什么|饮食记录|查.*饮食/.test(text)){
-   if(allowRead&&!continuation)return {call:{args:{scope:'foods',date,query:focus?.name??''},item:{call_id:'demo-foods'}}};
-   const rows=continuation?.summary.foods;
+   if(allowRead&&!latest)return {call:{args:{scope:'foods',date,query:focus?.name??''},item:{call_id:'demo-foods'}}};
+   const rows=latest?.summary.foods;
    return {reply:rows?.length?'记录里有'+rows.map(row=>row.name+' '+row.portion).join('、')+'。':
     rows?'这一天没有匹配的实际饮食记录。':'请开启本轮账本查询。',proposal:null};
   }
@@ -62,25 +105,23 @@ export async function demoWorkspace(today){
    return propose('金额已提取。可以核对日期、分类和预算选项。','finance',{note:'',entry:{type,amount,date:today,note:'演示收支',categoryId:type==='income'?'工资':'餐饮'}});
   }
   if(/盘点|补货/.test(text)){
-   if(allowRead&&!continuation)return call('stock',name);
+   if(allowRead&&!latest)return call('stock',name);
    return propose('可以核对数量，再应用到演示账本。','inventory',{operation:text.includes('补货')?'shopping':'count',name,quantity,unit:'g'});
   }
   if(/晚餐|搭配|规划/.test(text)){
-   if(allowRead&&!continuation)return call('meal');
-   const candidates=(continuation?.summary.stock??[{name:'鸡胸肉'},{name:'燕麦'}]).filter(row=>row.name!=='牛奶');
-   const items=candidates.map((s,i)=>({name:s.name,sku:null,action:'plan',amount:i===0?60:180,unit:'g',
-    packageSize:null,packageUnit:null,basisAmount:100,basisUnit:'g',nutrients:{kcal:null,protein:null,carbs:null,fat:null,sodium:null},
-    uncertainty:'演示搭配，使用本地食品营养基础计算。',weighing:null}));
+   if(allowRead&&!latest)return call('meal');
+   const candidates=(latest?.summary.stock??[{name:'鸡胸肉'},{name:'燕麦'}]).filter(row=>row.name!=='牛奶');
+   const items=candidates.map((row,i)=>dinnerItem(row,i===0?60:180));
    return propose('这里是一份可以调整的晚餐计划。','plan',{note:'计划可稍后转为实际摄入。',items});
   }
   if(/查.*库存/.test(text)){
-   if(allowRead&&!continuation)return call('stock',focus?.name??'');
-   const rows=continuation?.summary.stock;
+   if(allowRead&&!latest)return call('stock',focus?.name??'');
+   const rows=latest?.summary.stock;
    return {reply:rows?.length?rows.map(row=>row.name+' '+(row.qty??'数量未知')+' '+row.unit).join('，'):'可开启本轮账本查询，查看演示库存。',proposal:null};
   }
   if(/今天.*(?:花|收支)|查.*支出/.test(text)){
-   if(allowRead&&!continuation)return call('expenses');
-   const sum=continuation?.summary;
+   if(allowRead&&!latest)return call('expenses');
+   const sum=latest?.summary;
    return {reply:sum?'今天在演示账本记了 '+sum.count+' 笔，支出 '+sum.expense+' 元，收入 '+sum.income+' 元。':'可开启本轮账本查询，读取演示日汇总。',proposal:null};
   }
   return {reply:'演示支持盘点、补货、晚餐计划、记账和修改 Skill。可以选一项示例试试。',proposal:null};

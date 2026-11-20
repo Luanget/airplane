@@ -24,12 +24,24 @@ body[data-module="health"] fieldset { min-width:0 }
 .panel, .form-panel, .inventory-list { margin:14px 0 }
 .panel > p, .panel-note, .panel form { margin-top:10px }
 .panel-note, .panel p, .form-hint, .event-empty, .notice, .preview { font-size:13px; line-height:1.55 }
-#weight-chart, #weight-detail-chart { display:block; width:100%; max-height:230px }
-.health-trend-link { display:block; color:inherit; text-decoration:none }
-.health-trend-link .panel-title strong { font-size:17px }
-.health-trend-link .panel-title span,.health-trend-back span { display:grid; place-items:center; color:var(--muted) }
-.health-trend-link .panel-title svg,.health-trend-back svg { width:17px; height:17px }
-.health-trend-link:focus-visible,.health-tx-row:focus-visible,.health-trend-back:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+.weight-card svg[role=slider] { display:block; width:100%; max-height:220px; margin-top:4px; touch-action:pan-y; cursor:ew-resize; user-select:none; -webkit-tap-highlight-color:transparent }
+.weight-card svg[role=slider]:focus:not(:focus-visible) { outline:none }
+.weight-card svg text { fill:var(--muted); font-size:10px }
+.weight-card .chart-grid { stroke:var(--line) }
+.weight-line { fill:none; stroke:var(--green); stroke-width:2.3; stroke-linejoin:round; stroke-linecap:round }
+.weight-crosshair { stroke:var(--muted); stroke-width:1; stroke-dasharray:3 3 }
+.weight-marker { fill:var(--surface); stroke:var(--green); stroke-width:2.5 }
+body[data-module="health"] .weight-chart-value { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 8px; width:fit-content; margin:4px 0 2px; padding:3px 8px; border-radius:8px; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums }
+.weight-chart-value strong { color:var(--text); font-size:14px }
+.health-trend-link { min-height:34px; color:inherit; text-decoration:none }
+.health-trend-link strong { font-size:17px }
+.health-trend-link span,.health-trend-back span { display:grid; place-items:center; color:var(--muted) }
+.health-trend-link svg,.health-trend-back svg { width:17px; height:17px }
+.health-trend-link:focus-visible,.health-tx-row:focus-visible,.health-trend-back:focus-visible,.weight-card svg:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+@supports selector(.weight-card:has(svg:focus-visible)) {
+ .weight-card svg[role=slider]:focus { outline:none }
+ .weight-card:has(svg[role=slider]:focus-visible) .weight-chart-value { box-shadow:0 0 0 2px var(--green) }
+}
 .health-trend-link:active { background:var(--surface-2) }
 .health-trend-back { display:inline-flex; gap:4px; align-items:center; text-decoration:none }
 .health-trend-back svg { transform:rotate(180deg) }
@@ -37,11 +49,21 @@ body[data-module="health"] fieldset { min-width:0 }
 .health-ledger .section-head { justify-content:flex-start; gap:10px }
 .health-ledger .section-head .muted { margin-inline-start:auto; font-size:13px; white-space:nowrap }
 .health-ledger .day-group+.day-group { margin-top:12px }
+.meal-group { margin-top:12px }
+.meal-group h3 { margin:0 0 5px 3px; font-size:13px; font-weight:700; color:var(--muted) }
 .health-ledger-empty { padding:16px }
-.health-tx-row { width:100%; text-align:left }
+.health-tx-row { width:100%; min-height:48px; padding:9px 12px; text-align:left }
 .health-tx-row .category-symbol { color:var(--green); background:var(--green-soft) }
 .health-tx-row :is(.tx-title,.tx-sub,.tx-money,.tx-time) { display:block }
 .health-tx-value { white-space:nowrap }
+.diet-row { display:grid; gap:4px; justify-content:stretch }
+.diet-main { display:flex; justify-content:space-between; align-items:baseline; gap:8px; min-width:0 }
+.diet-main .tx-title { min-width:0; white-space:normal; overflow-wrap:anywhere }
+.diet-nutrients { display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; font-size:12px; line-height:1.45; color:var(--muted); font-variant-numeric:tabular-nums }
+.diet-nutrients::-webkit-scrollbar { display:none }
+.diet-nutrients span,.diet-status { white-space:nowrap }
+.diet-nutrients span:first-child { color:var(--text); font-weight:650 }
+.diet-status { padding:1px 7px; border-radius:10px; color:var(--muted); background:var(--surface-2); font-size:11px }
 .cycle-total, .event-value, .stock-qty { white-space:nowrap; font-variant-numeric:tabular-nums }
 .event-row, .inv-row {
   display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -60,13 +82,19 @@ body[data-module="health"] fieldset { min-width:0 }
 .health-sheet .entry-fields { margin-top:12px }
 .health-sheet > .modal-head { position:sticky; top:-12px; z-index:2; background:var(--bg) }
 #import-preview { scroll-margin-top:52px }
+.backup-options>*+* { margin-top:8px }
+.backup-scopes { display:flex; flex-wrap:wrap; gap:6px 16px }
+.backup-options .text-button { padding-inline:0; font-size:13px }
+.backup-preview { padding:12px; border-radius:12px; background:var(--surface-2); overflow-wrap:anywhere }
+.backup-preview>*+* { margin-top:6px }
 .health-types { grid-template-columns:repeat(3,1fr) }
 .health-types button.active { background:var(--surface); color:var(--green) }
 body[data-module="health"] [data-shell] label:not(.day-picker-value) { display:block; color:var(--muted); font-size:13px }
 body[data-module="health"] [data-shell] :is(input,select,textarea):not([type=checkbox],[data-short-date]) {
-  display:block; width:100%; min-width:0; min-height:42px; margin:5px 0 12px;
+  display:block; width:100%; min-width:0; min-height:44px; margin:6px 0 12px;
   padding:8px 10px; border:1px solid var(--line); border-radius:12px; background:var(--surface-2); color:var(--text); font-size:16px
 }
+body[data-module="health"] [data-shell] .inline-picker-panel .choice-search { width:calc(100% - 16px); margin:8px; background:var(--surface-2) }
 body[data-module="health"] [data-shell] label.checkbox { display:flex; gap:8px; align-items:center; margin:10px 0 }
 .form-panel summary { cursor:pointer; font-weight:650 }
 .form-panel[open] > form { margin-top:14px }
@@ -86,8 +114,6 @@ body[data-module="health"] [data-shell] label.checkbox { display:flex; gap:8px; 
 .entry-fields details { margin-top:12px }
 .entry-fields summary { color:var(--muted); font-size:13px; cursor:pointer }
 .entry-fields details[open] > summary { margin-bottom:10px }
-body[data-module="health"] :is(form,main) .calendar-field { display:grid; margin:5px 0 12px; border:1px solid var(--line); background:var(--surface-2); min-height:42px }
-body[data-module="health"] [data-shell] .calendar-field input:is([type=date],[type=time]) { margin:0; padding:0; min-height:0 }
 .shopping-row .checkbox { flex:1; min-width:0; min-height:44px; overflow-wrap:anywhere; cursor:pointer }
 .shopping-row input[type=checkbox] { flex:none; width:18px; height:18px; margin:0; accent-color:var(--green) }
 body[data-module="health"] [data-shell] .shopping-row input[type=number] { width:78px; margin:0 }
@@ -95,9 +121,24 @@ body[data-module="health"] [data-shell] .shopping-row input[type=number] { width
 .inventory-heading { margin:0 0 6px }
 .inventory-food { min-height:48px; width:100%; text-align:left; font-size:14px }
 .inventory-food strong { min-width:0; overflow-wrap:anywhere; font-weight:650 }
+.stock-name { min-width:0 }
+.stock-name small,.stock-group summary small { display:block; margin-top:2px; color:var(--muted); font-size:12px; font-weight:400 }
+.stock-group { border-bottom:1px solid var(--line) }
+.stock-group:last-child { border-bottom:0 }
+.stock-group summary { padding:12px 0; cursor:pointer; font-size:14px }
+.stock-group summary small { display:inline; margin-inline-start:8px }
+.stock-group .inventory-food { padding-inline:10px }
+#unknown-stock-list { margin-top:8px }
+#diet-reference button { margin-top:8px }
 .inventory-food .stock-qty { color:var(--muted) }
 .inventory-food .stock-qty.low { color:var(--red) }
 .inventory-food:active { background:var(--surface-2) }
 .inventory-food:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
-.inventory-tool { margin-top:10px; padding-top:10px; border-top:1px solid var(--line) }
+.form-panel:has(> .setting-row) { padding:0 }
+.form-panel:has(> .setting-row) > :is(form, div, section, p, button) { margin:10px 14px }
+.inventory-tool + .inventory-tool { border-top:1px solid var(--line) }
+.inventory-tool > summary.setting-row { padding-inline-start:22px }
+.inventory-tool > :is(form, div) { margin:10px 14px }
+#purchase-form [data-lines] fieldset { margin:0 0 10px; padding:12px 12px 4px; border:1px solid var(--line); border-radius:14px }
+#purchase-form [data-lines] fieldset > button { grid-column:1 / -1; justify-self:end }
 .inventory-purchase-log { margin-top:14px; padding-top:10px; border-top:1px solid var(--line) }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {normalizeLedger, dayIntake, cycleForDate, energyForDay, addFood, inventoryWithMoves, localStockChange, newState, weightTrend, isActualStatus} from '../health/core.mjs';
+import {normalizeLedger, dayIntake, cycleForDate, energyForDay, addFood, inventoryWithMoves, localStockChange, newState, weightTrend, isActualStatus, carbReference} from '../health/core.mjs';
 
 const synthetic = () => ({
   tables: {
@@ -44,6 +44,17 @@ test('historical import applies cycle parameters, closes on next day',()=>{
  assert.equal(energyForDay(s,'2024-01-02','2024-01-03').deficit,1800);
  assert.equal(cycleForDate(s,'2024-01-03','2024-01-03').deficit,1800);
  assert.equal(weightTrend(s).last.kg,79.7);
+});
+test('legacy nutrition preferences set the ordinary-day carbohydrate reference',()=>{
+ const raw=synthetic();
+ raw.tables.rules.push({Key:'04_diet_targets_preferences',状态:'active',当前值:'普通日约1800kcal；蛋白质125–145g；脂肪尽量≥40–55g'});
+ const {settings}=normalizeLedger(raw);
+ assert.equal(settings.calorieTarget,1800);
+ assert.equal(settings.fatMin,40);
+ assert.deepEqual(carbReference(settings),{low:195,high:215});
+ raw.tables.cycle_parameters.calorieTarget=2200;
+ assert.equal(normalizeLedger(raw).settings.calorieTarget,2200);
+ assert.equal(carbReference({...settings,calorieTarget:500}),null);
 });
 test('confirmed additions adjust energy, plans cannot reduce stock',()=>{
  const s=normalizeLedger(synthetic());

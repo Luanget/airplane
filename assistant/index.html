@@ -20,32 +20,10 @@
       <div class="topbar-actions">
         <a class="icon-button" href="../index.html" data-shell-icon="wallet" aria-label="财务" title="财务"></a>
         <a class="icon-button" href="../health/" data-shell-icon="health" aria-label="健康" title="健康"></a>
+        <button type="button" class="icon-button" data-shell-icon="settings" id="assistant-settings" aria-label="打开设置" aria-haspopup="dialog"></button>
       </div>
     </header>
     <main class="assistant-workspace" id="airplane-chat">
-      <aside class="assistant-sidebar" aria-label="助手设置">
-        <section class="assistant-demo card" hidden>
-          <strong>演示账本</strong>
-          <p>使用示例数据和预设回复，不消耗 OpenAI 额度。点上方财务或健康可查看演示账本的变化。</p>
-        </section>
-        <details class="card assistant-panel" id="assistant-key-panel" hidden>
-          <summary>API Key</summary>
-          <form id="assistant-key" class="assistant-fields"></form>
-        </details>
-        <details class="card assistant-panel" id="assistant-skill">
-          <summary>Skill</summary>
-          <form class="assistant-fields">
-            <label>个人偏好<textarea name="skill" rows="3" maxlength="320" placeholder="例如：晚餐用常见食材，少油，优先高蛋白。"></textarea></label>
-            <div class="chat-actions"><button type="submit" class="secondary-button">保存 Skill</button><output role="status"></output></div>
-          </form>
-          <details class="assistant-prompt"><summary>查看内置提示词</summary><pre></pre></details>
-        </details>
-        <details class="card assistant-panel assistant-context">
-          <summary>本轮上下文</summary>
-          <p data-context-size></p>
-          <p>发送范围包括本轮消息、选中的照片、当天日期、Skill 和最近四条短消息。账本摘要另行确认。</p>
-        </details>
-      </aside>
       <section class="assistant-conversation card" aria-label="助手对话">
         <div class="assistant-toolbar">
           <div class="assistant-toolbar-row">
@@ -62,14 +40,22 @@
             </label>
             <ul data-thread-list></ul>
             <p data-thread-empty hidden></p>
+            <div class="assistant-delete-confirmation" data-delete-confirm hidden>
+              <p data-delete-label></p>
+              <div class="chat-actions"><button type="button" class="secondary-button" data-delete-cancel>取消</button><button type="button" class="danger-button" data-delete-apply>确认删除</button></div>
+            </div>
           </section>
         </div>
         <div class="chat-thread">
+          <p class="assistant-demo" hidden>演示使用示例账本和预设回复，不消耗 OpenAI 额度。</p>
           <section class="assistant-start">
             <h2>今天想记录什么？</h2>
             <p>可以用一句话记收支、吃了什么、买了什么或盘点食材。</p>
             <div class="assistant-examples" aria-label="示例">
               <button type="button" class="secondary-button" data-example="昨天吃了什么" data-use-ledger>查昨天饮食</button>
+              <button type="button" class="secondary-button" data-example="查库存和今日支出" data-use-ledger>查库存和支出</button>
+              <button type="button" class="secondary-button" data-example="按分类看看本月的消费习惯" data-use-ledger>分析本月消费</button>
+              <button type="button" class="secondary-button" data-example="更正昨天的牛奶为 300g，补记今天午餐 28 元，然后按更新后的库存安排晚餐" data-use-ledger>更正饮食、记账并安排晚餐</button>
               <button type="button" class="secondary-button" data-example="查一下燕麦，然后盘点为 300 g" data-use-ledger>盘点库存</button>
               <button type="button" class="secondary-button" data-example="用库存安排晚餐" data-use-ledger>安排晚餐</button>
               <button type="button" class="secondary-button" data-example="午餐花了 28 元">记一笔账</button>
@@ -77,6 +63,7 @@
             </div>
           </section>
           <div class="chat-transcript" role="log" aria-label="对话" aria-live="polite"></div>
+          <div class="photo-results" data-photo-results></div>
           <section class="card assistant-read" aria-label="账本摘要" hidden>
             <h3>发送账本摘要</h3><p data-read-label></p><pre data-read-preview></pre>
             <div class="chat-actions"><button type="button" class="secondary-button" data-skip-read>取消本轮</button><button type="button" class="primary-button" data-share-read>发送摘要</button></div>
@@ -86,20 +73,49 @@
         <form class="chat-composer">
           <label><span class="sr-only">消息</span><textarea name="text" rows="2" maxlength="1600" placeholder="可以补充日期、数量或金额……"></textarea></label>
           <div class="chat-actions">
-            <label class="secondary-button chat-attach">添加照片<input name="image" type="file" accept="image/*"></label>
+            <label class="secondary-button chat-attach">添加照片<input name="image" type="file" accept="image/*" multiple></label>
             <span data-attachment></span><button type="button" class="text-button" data-remove-photo hidden>移除照片</button>
             <button type="submit" class="primary-button">发送</button>
           </div>
-          <label class="assistant-query"><input type="checkbox" name="allowRead"> 允许本轮查询账本<span>最多一次，确认摘要后才发送</span></label>
+          <label class="assistant-query"><input type="checkbox" name="allowRead"> 允许本轮查询账本<span>每次核对摘要后才发送</span></label>
           <div class="assistant-request-status"><output data-status aria-live="polite"></output><button type="button" class="text-button" data-stop-request hidden>停止等待</button></div>
+          <button type="button" class="text-button" data-retry-follow-up hidden>重试后续请求</button>
           <section class="assistant-send-confirmation" id="assistant-consent" aria-labelledby="assistant-consent-title" hidden>
             <h3 id="assistant-consent-title">首次发送给 OpenAI</h3>
-            <p>会发送本轮消息、所选照片、设备日期、个人 Skill 和近期对话。账本摘要仍需单独确认。</p>
+            <p>会发送本轮消息、设备日期、个人 Skill 和近期对话。已选照片逐张识别。账本摘要仍需单独确认。</p>
             <div class="chat-actions"><button type="button" class="secondary-button" data-cancel-send>返回编辑</button><button type="button" class="primary-button" data-approve-send>确认发送</button></div>
           </section>
         </form>
       </section>
     </main>
+    <dialog class="modal bottom-sheet assistant-settings-sheet" id="assistant-settings-sheet" aria-labelledby="assistant-settings-title">
+      <div class="modal-grabber" aria-hidden="true"></div>
+      <div class="modal-head"><button type="button" class="cancel" data-sheet-close autofocus>关闭</button><h2 id="assistant-settings-title">设置</h2><span></span></div>
+      <div class="stack settings-modal-body">
+        <details class="card assistant-panel" id="assistant-key-panel" hidden>
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="sparkles"></span><span class="setting-copy setting-title">API Key</span><span class="chevron" data-shell-icon="chevron"></span></summary>
+          <form id="assistant-key" class="assistant-fields"></form>
+          <div class="assistant-panel-body" data-demo-key hidden><p>演示使用预设回复，无需导入 Key。</p></div>
+        </details>
+        <details class="card assistant-panel" id="assistant-skill">
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">Skill</span><span class="chevron" data-shell-icon="chevron"></span></summary>
+          <div class="assistant-panel-body">
+            <form class="assistant-fields">
+              <label>个人偏好<textarea name="skill" rows="3" maxlength="320" placeholder="例如：晚餐用常见食材，少油，优先高蛋白。"></textarea></label>
+              <div class="chat-actions"><button type="submit" class="secondary-button">保存 Skill</button><output role="status"></output></div>
+            </form>
+            <details class="assistant-prompt"><summary>查看内置提示词</summary><pre></pre></details>
+          </div>
+        </details>
+        <details class="card assistant-panel assistant-context">
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="activity"></span><span class="setting-copy setting-title">本轮上下文</span><span class="chevron" data-shell-icon="chevron"></span></summary>
+          <div class="assistant-panel-body">
+            <p data-context-size></p>
+            <p>发送范围包括本轮消息、选中的照片、当天日期、Skill 和最近四条短消息。账本摘要另行确认。</p>
+          </div>
+        </details>
+      </div>
+    </dialog>
   </div>
   <script type="module" src="../ai/chat.mjs"></script>
 </body>

@@ -1,9 +1,13 @@
 import {readFinance} from '../finance-storage.mjs';
-import {inventoryWithMoves,numeric} from './core.mjs';
+import {syncChoiceFields} from '../choice-picker.mjs';
+import {confirmAction} from '../shell.mjs';
+import {inventoryWithMoves,isStockReference} from './core.mjs';
 import {cents,newPurchaseId,orderBatchId,purchaseForTransaction,purchaseTransactionId,recordPurchase,revisePurchase} from './purchases.mjs';
 import {projectedExpense,readPendingPurchase,updatePurchaseLedgers,resumePurchaseUpdate,abandonPurchaseUpdate} from './purchase-sync.mjs';
 import {settleShopping} from './shopping.mjs';
 import {displayDay,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
+import {displayStockQuantity,stockMeasure,storedStockQuantity} from './inventory.mjs';
+import {stockName,stockUnit} from './presentation.mjs';
 
 export function attachPurchases({getState,commit,setState,notify,switchTab,today}) {
  const account=window.airplaneAccount;
@@ -23,22 +27,32 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   Object.assign(el,{type:'button',className:'btn btn-text',textContent:text,...attrs});
   el.onclick=handler;return el;
  }
+ const foods=retainedId=>inventoryWithMoves(getState()).filter(s=>s.active&&!isStockReference(s)||s.id===retainedId);
+ function setFoodChoices(select,id){
+  select.replaceChildren(...foods(id).map(s=>new Option(stockName(s)+' · '+stockUnit(stockMeasure(s).unit),s.id)));
+  if([...select.options].some(option=>option.value===id))select.value=id;
+ }
  function addLine(item={}){
   const row=document.createElement('fieldset');row.className='form-grid';
   if(item.batchId)row.dataset.batchId=item.batchId;
-  const sku=document.createElement('select');sku.name='foodId';
-  for(const food of inventoryWithMoves(getState()).filter(s=>s.active||s.id===item.foodId))
-   sku.add(new Option(food.name+' · '+food.unit,food.id));
-  if(item.foodId)sku.value=item.foodId;
+  const sku=document.createElement('select');sku.name='foodId';sku.dataset.picker='选择食品';sku.dataset.pickerSearch='';
+  setFoodChoices(sku,item.foodId);
   const input=(name,type,value,required=false)=>{
    const el=document.createElement('input');Object.assign(el,{name,type,required,value:value??''});
    if(type==='number')Object.assign(el,{min:name==='quantity'?'0.000001':'0',step:name==='quantity'?'any':'0.01'});
    return el;
   };
-  row.append(label('食品',sku),label('数量',input('quantity','number',item.quantity,true)),
+  const food=()=>foods(sku.value).find(x=>x.id===sku.value),qty=input('quantity','number',displayStockQuantity(food(),item.quantity),true);
+  const qtyTitle=document.createElement('span');
+  const explainQuantity=()=>{
+   const unit=stockUnit(stockMeasure(food()).unit);
+   qtyTitle.textContent=unit?'数量（'+unit+'）':'数量';
+  };
+  explainQuantity();sku.onchange=()=>{qty.value='';explainQuantity();};
+  row.append(label('食品',sku),label(qtyTitle,qty),
    label('该项金额 ¥',input('cost','number',item.costCents==null?'':item.costCents/100)),label('到期日',input('expires','date',item.expires)));
   row.append(action('移除该项',()=>{if(lines.children.length>1)row.remove();}));
-  lines.append(row);syncCalendarFields(row);
+  lines.append(row);syncCalendarFields(row);syncChoiceFields(row);
  }
  function refreshLinks(){
   if(editing)return;
@@ -74,6 +88,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
    return p;
   });
   output.replaceChildren(...els);refreshLinks();
+  syncChoiceFields(form);
  }
  function reset(items=[]){
   editing=null;shopping=new Set(items.map(i=>i.foodId));
@@ -89,16 +104,20 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   button.textContent='保存采购更正';cancelEdit.hidden=false;
   form.elements.financeId.disabled=true;form.elements.createExpense.disabled=true;
   form.elements.date.value=order.date;form.elements.time.value=normalizeClock(order.time);form.elements.total.value=(order.totalCents/100).toFixed(2);form.elements.note.value=order.note;
-  lines.replaceChildren();order.items.forEach((r,i)=>addLine({...r,batchId:orderBatchId(order,r,i)}));
+  lines.replaceChildren();order.items.forEach((r,i)=>addLine({...r,batchId:orderBatchId(order,r,i)}));syncChoiceFields(form);
   reveal();syncCalendarFields(form);
  }
  function readItems(){
-  return [...lines.children].map(row=>({
-   foodId:row.querySelector('[name=foodId]').value,quantity:numeric(row.querySelector('[name=quantity]').value),
+  const foods=new Map(inventoryWithMoves(getState()).map(row=>[row.id,row]));
+  return [...lines.children].map(row=>{
+   const foodId=row.querySelector('[name=foodId]').value;
+   return {
+   foodId,quantity:storedStockQuantity(foods.get(foodId),row.querySelector('[name=quantity]').value),
    costCents:row.querySelector('[name=cost]').value===''?null:cents(row.querySelector('[name=cost]').value),
    expires:row.querySelector('[name=expires]').value||null,
    ...(row.dataset.batchId?{batchId:row.dataset.batchId}:{})
-  }));
+   };
+  });
  }
  async function showPending(){
   try {pendingPanel.hidden=!(await readPendingPurchase(account));}catch(err){notify(err.message);}
@@ -107,9 +126,10 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   const current=getState(),{next,order:updated}=revisePurchase(current,order.id,fields);
   const tx=ledger().find(t=>t.id===purchaseTransactionId(order));
   const change=projectedExpense(order,updated,tx);
-  const text=updated?'保存采购更正并同步关联支出？':'撤销这笔采购和其关联支出？';
+  const message=updated?'保存采购和关联支出的修改？':'撤销这笔采购及其关联支出？';
   const amounts=change?'\n支出 '+change.before.amount+' 元 → '+(change.after?.amount??0)+' 元。':'';
-  if(!confirm(text+amounts))return;
+  if(!await confirmAction({title:updated?'核对采购修改':'撤销采购',message:message+amounts,
+   action:updated?'确认修改':'确认撤销',danger:!updated}))return;
   const saved=await updatePurchaseLedgers(account,next,current.revision??0,change);
   setState(saved);reset();notify(updated?'采购已更正':'采购已撤销');
  }
@@ -146,13 +166,13 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   finally{saving=false;button.disabled=false;await showPending();}
  };
  pendingPanel.querySelector('[data-resume]').onclick=async()=>{
-  try {const saved=await resumePurchaseUpdate(account);setState(saved);notify('采购更正与财务已同步');}
+  try {const saved=await resumePurchaseUpdate(account);setState(saved);notify('财务与健康账本已同步');}
   catch(err){notify(err.message);}
   finally{await showPending();}
  };
  pendingPanel.querySelector('[data-abandon]').onclick=async()=>{
-  if(!confirm('放弃待处理的采购更正？'))return;
-  try {const saved=await abandonPurchaseUpdate(account);setState(saved);notify('已放弃本次更正');}
+  if(!await confirmAction({title:'放弃更新',message:'放弃尚未写入的账本更新？',action:'确认放弃',danger:true}))return;
+  try {const saved=await abandonPurchaseUpdate(account);setState(saved);notify('已放弃本次更新');}
   catch(err){notify(err.message);}
   finally{await showPending();}
  };
@@ -169,11 +189,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
  return {
   openOrder(items){reset(items);reveal();},
   render(){
-   for(const select of lines.querySelectorAll('[name=foodId]')){
-    const previous=select.value;
-    select.replaceChildren(...inventoryWithMoves(getState()).filter(s=>s.active||s.id===previous).map(s=>new Option(s.name+' · '+s.unit,s.id)));
-    if([...select.options].some(o=>o.value===previous))select.value=previous;
-   }
+   for(const select of lines.querySelectorAll('[name=foodId]'))setFoodChoices(select,select.value);
    render();
   }
  };

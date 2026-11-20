@@ -1,7 +1,8 @@
-import {readFinance,replaceFinance} from '../finance-storage.mjs';
+import {addConfirmedTransactions,freshData,readFinance,replaceFinance} from '../finance-storage.mjs';
 import {finishPurchaseUpdate,readPurchaseUpdate,readState,saveState,stagePurchaseUpdate} from './storage.mjs';
 
 export const readPendingPurchase=readPurchaseUpdate;
+export class AssistantSyncPending extends Error {}
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const transaction=(payload,id)=>payload?.transactions.find(row=>row.id===id)??null;
 export function projectedExpense(order,updated,before){
@@ -15,22 +16,45 @@ export function projectedExpense(order,updated,before){
  if(before.note===order.note||before.note==='食品采购')after.note=updated.note||'食品采购';
  return same(before,after)?null:{id:before.id,before,after};
 }
-function status(payload,change){
- const row=transaction(payload,change.id);
+function status(finance,change){
+ if(change.kind==='assistant'){
+  const rows=change.entries.map(entry=>transaction(finance.payload,entry.id));
+  if(rows.every((row,index)=>same(row,change.entries[index])))return 'applied';
+  if(rows.every(row=>row===null))return finance.primary===change.expected?'ready':'stale';
+  return 'conflict';
+ }
+ const row=transaction(finance.payload,change.id);
  if(same(row,change.after))return 'applied';
  if(same(row,change.before))return 'ready';
  return 'conflict';
 }
 async function settle(account,job){
  const finance=readFinance(account.finance);
- const phase=status(finance.payload,job.change);
- if(phase==='conflict')throw Error('关联支出在另一页面有变更，请核对后再处理待确认采购');
- if(phase==='ready'){
-  const {id,after}=job.change;
-  finance.payload.transactions=after?finance.payload.transactions.map(row=>row.id===id?after:row):finance.payload.transactions.filter(row=>row.id!==id);
-  replaceFinance(account.finance,finance.payload,finance.primary);
+ const change=job.change,assistant=change.kind==='assistant';
+ const phase=status(finance,change);
+ if(phase==='conflict')throw Error('财务记录在另一页面有变更，请核对待同步的账本更新');
+ if(phase==='stale'){
+  await finishPurchaseUpdate(account,job.id,false);
+  throw Error('财务账本已变更，请重新生成候选');
  }
- return finishPurchaseUpdate(account,job.id,true);
+ if(phase==='ready'){
+  const next=finance.payload??freshData();
+  if(assistant)addConfirmedTransactions(next,change.entries);
+  else {
+   const {id,after}=change;
+   next.transactions=after?next.transactions.map(row=>row.id===id?after:row):next.transactions.filter(row=>row.id!==id);
+  }
+  try{replaceFinance(account.finance,next,finance.primary);}
+  catch(err){
+   if(assistant)await finishPurchaseUpdate(account,job.id,false);
+   throw err;
+  }
+ }
+ try{return await finishPurchaseUpdate(account,job.id,true);}
+ catch(err){
+  if(assistant)throw new AssistantSyncPending('财务已保存，健康账本待同步。请继续同步。',{cause:err});
+  throw err;
+ }
 }
 function locked(account,fn){
  return globalThis.navigator?.locks?.request('airplane-purchases:'+(account.id??'device'),fn)??fn();
@@ -39,6 +63,16 @@ export async function updatePurchaseLedgers(account,state,expected,change){
  if(!change)return saveState(state,expected,account);
  return locked(account,async()=>{
   const job=await stagePurchaseUpdate(account,state,expected,change);
+  return settle(account,job);
+ });
+}
+export function updateAssistantLedgers(account,state,revision,expected,entries){
+ return locked(account,async()=>{
+  const pending=await readPurchaseUpdate(account);
+  if(pending?.change.kind==='assistant'&&same(pending.change.entries.map(row=>row.id),entries.map(row=>row.id)))
+   return settle(account,pending);
+  if(readFinance(account.finance).primary!==expected)throw Error('财务账本已变更，请重新生成候选');
+  const job=await stagePurchaseUpdate(account,state,revision,{kind:'assistant',expected,entries});
   return settle(account,job);
  });
 }
@@ -53,8 +87,9 @@ export function abandonPurchaseUpdate(account){
   const job=await readPurchaseUpdate(account);
   if(!job)return readState(account);
   const finance=readFinance(account.finance);
-  if(status(finance.payload,job.change)==='applied')
-   throw Error('财务更新已写入，请完成待确认采购');
+  const phase=status(finance,job.change);
+  if(phase==='applied'||job.change.kind==='assistant'&&phase==='conflict')
+   throw Error('部分或全部财务更新已写入，请先核对并完成同步');
   return finishPurchaseUpdate(account,job.id,false);
  });
 }

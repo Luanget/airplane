@@ -1,16 +1,15 @@
 import {bindDayPicker,displayDay,localDate as localISO,localClock,normalizeClock,syncCalendarFields} from './calendar.mjs';
-import {bindSheetSwipe,shellGlyphs} from './shell.mjs';
+import {APP_VERSION,bindSheetSwipe,shellGlyphs} from './shell.mjs';
 import {readState as readHealthState} from './health/storage.mjs';
 import {purchaseForTransaction,purchaseTransactionId} from './health/purchases.mjs';
 import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,DEFAULT_CATEGORIES,freshData,replaceFinance,validateFinanceBackup} from './finance-storage.mjs';
-import {checkForAppUpdate} from './updates.mjs';
+import {bindUpdateCheck} from './updates.mjs';
 
 // STORAGE_KEY is intentionally permanent. Never rename it in a normal app update.
 // Keeping one stable key lets new program versions reuse the user's existing ledger.
 const financeStore = window.airplaneAccount.finance;
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
-const APP_VERSION = '0.9.0';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
@@ -537,7 +536,7 @@ function bindSettingsEvents(){
   document.querySelector('[data-action="import"]')?.addEventListener('click',()=>document.getElementById('importInput').click());
   document.querySelector('[data-action="restore-pre-snapshot"]')?.addEventListener('click',restorePreRestoreSnapshot);
   document.querySelector('[data-action="storage-persist"]')?.addEventListener('click',()=>ensurePersistentStorage(true));
-  document.querySelector('[data-action="check-update"]')?.addEventListener('click',()=>{closeModal({runDismiss:false});checkForAppUpdate(true);});
+  bindUpdateCheck(document.querySelector('[data-action="check-update"]'));
   document.querySelector('[data-action="reset"]')?.addEventListener('click',resetAll);
 }
 
@@ -1236,7 +1235,7 @@ function refreshFinanceLedger(){
 }
 window.addEventListener('storage',refreshFinanceLedger);
 window.addEventListener('airplane:finance-saved',refreshFinanceLedger);
-if(window.airplanePendingPurchase)toast('有待处理的采购更正，请在健康库存页完成同步',{duration:5500});
+if(window.airplanePendingPurchase)toast('有待同步的账本更新，请在健康库存页处理',{duration:5500});
 const purchaseQuery=new URL(location.href).searchParams.get('purchase');
 if(purchaseQuery&&!recoveryRequired)readHealthState().then(health=>{
   const order=(health.local.purchases??[]).find(p=>p.id===purchaseQuery);
