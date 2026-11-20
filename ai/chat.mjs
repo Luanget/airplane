@@ -7,13 +7,17 @@ import {healthReview,jpeg} from '../health/assistant.mjs';
 import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
 import {financeReview} from './finance.mjs';
 import {chatInstructions} from './responses.mjs';
-import {localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
+import {localWorkspace,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
 import {foodEditReview,inventoryReview,portionReview,skillReview} from './operations.mjs';
 import {mountSkillSettings} from './skills.mjs';
 import {mountModelSettings,readChatModel} from './models.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 import {batchReview} from './batch.mjs';
+import {contextFor,HISTORY_OPTIONS,readHistoryOption,saveHistoryOption} from './context.mjs';
+import {appDataReview,readAppData} from './data.mjs';
+import {deleteReview} from './deletion.mjs';
+import {displayUsage,totalUsage} from './usage.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
 
 const demo=new URLSearchParams(location.search).get('demo')==='1';
@@ -34,18 +38,27 @@ let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null
 
 hydrateShell();
 const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
-$('#assistant-settings').onclick=()=>{settings.showModal();refreshModels();refreshSkills();};
-function onSettingsBackdrop(event){
- if(event.target!==settings)return false;
- const {left,top,right,bottom}=settings.getBoundingClientRect();
- return event.clientX<left||event.clientX>right||event.clientY<top||event.clientY>bottom;
+$('#assistant-settings').onclick=()=>{settings.showModal();refreshModels();refreshSkills();void refreshUsage();};
+async function refreshUsage(){
+ if(demo)return;
+ const node=$('[data-local-usage]');
+ try{
+  node.textContent=displayUsage(await totalUsage());
+  node.title='从此版本起，按本机收到的 token 用量估算。合计覆盖本机所有导入过的 Key。';
+  node.hidden=!node.textContent;
+ }catch{node.hidden=true;}
 }
-let backdropPress=false;
-settings.addEventListener('pointerdown',event=>{backdropPress=onSettingsBackdrop(event);});
-settings.addEventListener('click',event=>{
- if(backdropPress&&onSettingsBackdrop(event))settings.close();
- backdropPress=false;
-});
+window.addEventListener('airplane-ai-usage',()=>{if(settings.open)void refreshUsage();});
+const historyOptions=$('[data-history-options]');
+historyOptions.replaceChildren(...HISTORY_OPTIONS.map(option=>{
+ const button=document.createElement('button');
+ button.type='button';button.textContent=option.label;
+ button.onclick=()=>{
+  try{saveHistoryOption(workspace.finance,option.id);updateContext();}
+  catch(err){report(err);}
+ };
+ return button;
+}));
 settings.addEventListener('close',()=>{
  if(location.hash==='#api-key')history.replaceState(history.state,'',location.pathname+location.search);
 });
@@ -116,12 +129,30 @@ stop.onclick=()=>{
  activeRequest?.abort();
 };
 function updateContext(){
- const turns=shortHistory((book.current?.messages??[]).filter(m=>m?.carry&&['user','assistant'].includes(m.role)&&typeof m.text==='string'));
+ const budget=readHistoryOption(workspace.finance);
+ const {history:turns,summary,compact}=contextFor(book.current,budget);
+ [...historyOptions.children].forEach((button,index)=>button.setAttribute('aria-pressed',String(budget===HISTORY_OPTIONS[index])));
  const chars=turns.reduce((n,row)=>n+row.text.length,0);
  const skills=workspace.skills.active();
- const skillChars=skills.reduce((total,skill)=>total+skill.text.length,0);
- $('[data-context-size]').textContent='历史 '+turns.length+' 条 · '+chars+'/900 字，已启用 '+skills.length+' 个 Skill · '+skillChars+' 字。';
- return {turns,skills};
+ $('[data-context-size]').textContent='历史 '+turns.length+' 条 · '+chars+'/'+budget.chars+' 字'+
+  (summary?' · 已压缩 '+summary.length+' 字':'')+' · '+skills.length+' 个 Skill';
+ return {turns,summary,compact,skills};
+}
+async function prepareContext(date,model){
+ const current=updateContext();
+ if(!current.compact||demo)return current;
+ const id=book.current.id,controller=new AbortController();
+ activeRequest=controller;stop.hidden=false;stop.disabled=false;
+ tell('正在压缩较早的对话…');
+ try{
+  const {summary}=await recognize({mode:'chat',text:'整理这段对话',history:current.compact.history,date,photo:null},
+   {model,compacting:true,contextSummary:current.summary,signal:controller.signal});
+  book.setSummary(id,summary,current.compact.through);
+  return updateContext();
+ }catch(err){
+  if(controller.signal.aborted)throw err;
+  return current;
+ }finally{activeRequest=null;stop.hidden=true;}
 }
 function syncThreads(){
  const active=book.current;
@@ -177,6 +208,9 @@ historyDelete.onclick=()=>{
  }catch(err){report(err);}
 };
 historyButton.onclick=()=>openHistory(historyPanel.hidden);
+document.addEventListener('pointerdown',event=>{
+ if(!historyPanel.hidden&&!historyPanel.contains(event.target)&&!historyButton.contains(event.target))openHistory(false);
+});
 historySearch.oninput=syncThreads;
 historyPanel.addEventListener('keydown',event=>{
  if(event.key==='Escape'){event.stopPropagation();openHistory(false);historyButton.focus();}
@@ -271,6 +305,19 @@ async function makeReview(proposal,flow,photoJob){
  if(mode==='batch'){
   confirm=await batchReview(review,result,workspace,today,book.current?.foodDate);
   label=willContinue?'确认全部并继续':'确认全部';
+ }else if(mode==='app_data_edit'){
+  const apply=await appDataReview(review,workspace,book,result,today);
+  confirm=async()=>{
+   const message=await apply();
+   if(result.dataset==='conversations')renderThread();
+   if(result.dataset==='assistant_settings'){refreshModels();updateContext();}
+   if(result.dataset==='skills')refreshSkills();
+   return message;
+  };
+  label=result.action==='delete'?'确认撤销或删除':'确认更新';
+ }else if(mode==='delete_record'){
+  confirm=await deleteReview(review,proposal,workspace,today,book.current?.foodDate);
+  label='确认删除';
  }else if(mode==='finance'){
   confirm=financeReview(review,result.entry,today,workspace.finance);
   label='确认记账';
@@ -307,6 +354,7 @@ async function makeReview(proposal,flow,photoJob){
  }
  const actions=document.createElement('div');actions.className='chat-actions';
  const apply=document.createElement('button');apply.type='submit';apply.className='primary-button';apply.textContent=label;
+ if(mode==='delete_record'||mode==='app_data_edit'&&result.action==='delete')apply.classList.add('delete-apply');
  const discard=document.createElement('button');discard.type='button';discard.className='secondary-button';discard.textContent='放弃';
  discard.onclick=()=>{
   if(photoJob)settlePhoto(photoJob,'已放弃候选。');
@@ -329,11 +377,13 @@ async function makeReview(proposal,flow,photoJob){
   try{
    const message=await confirm();
    if(photoJob)settlePhoto(photoJob,message);
-   clearReview();append('assistant',message,false);
+   clearReview();
+   if(mode==='app_data_edit'&&result.dataset==='conversations'&&!book.current)tell(message);
+   else append('assistant',message,false);
    if(continuationApproved){
     followUp={
      input:{...flow.input,date:localDate(),text:flow.input.text||'继续完成刚才照片中的请求。',history:[],photo:null},
-     options:{...flow.options,applied:result.operations.map(operation=>operation.mode)},
+     options:{...flow.options,contextSummary:'',applied:result.operations.map(operation=>operation.mode)},
      steps:[]
     };
     resume=true;
@@ -363,6 +413,7 @@ async function complete(response,flow,source){
  catch(err){clearReview();report(err);}
 }
 function describeSummary(scope,summary){
+ if(scope==='app_data')return JSON.stringify(summary,null,2);
  if(scope==='expenses')return summary.date+' · 支出 '+summary.expense+' 元 · 收入 '+summary.income+' 元 · '+summary.count+' 笔';
  if(scope==='weight'){
   const kg=value=>value===null?'待补':value+' kg';
@@ -428,7 +479,8 @@ async function resolveResponse(response,flow){
    if(queried.has(key))throw Error('助手重复查询同一范围，请重试或缩小问题。');
    queried.add(key);
    tell('正在查询'+readLabels[args.scope]+'…');
-   const summary=await readLedger(workspace,args,input.date);
+   const summary=args.scope==='app_data'?await readAppData(workspace,book,args):
+    await readLedger(workspace,args,input.date);
    steps.push({item,summary,scope:args.scope});
    response=await requestReply(input,{...options,continuation:steps});
    if(args.scope==='foods')try{book.setFoodDate(summary.date);}catch{}
@@ -540,9 +592,10 @@ composer.onsubmit=async e=>{
    tell('正在读取本机 API Key…');
    if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
   }
-  const photo=files.length===1?await jpeg(files[0]):null,{turns,skills}=updateContext();
-  const input={mode:'chat',text,photo,date:localDate(),history:turns};
-  const options={model:readChatModel(workspace.finance).id,skills,allowRead:composer.elements.allowRead.checked};
+  const photo=files.length===1?await jpeg(files[0]):null,date=localDate(),model=readChatModel(workspace.finance).id;
+  const {turns,skills,summary}=await prepareContext(date,model);
+  const input={mode:'chat',text,photo,date,history:turns};
+  const options={model,skills,contextSummary:summary,allowRead:composer.elements.allowRead.checked};
   if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
  }catch(err){report(err);}

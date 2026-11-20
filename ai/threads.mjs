@@ -12,6 +12,14 @@ export function threadBook(store){
   list:()=>threads,
   start(){active=null;save();},
   select(id){active=threads.find(thread=>thread.id===id)??null;save();},
+  rename(id,title){
+   const row=threads.find(thread=>thread.id===id);
+   if(!row)throw Error('对话已变更');
+   const previous=row.title;
+   row.title=title;
+   try{save();}
+   catch(err){row.title=previous;throw err;}
+  },
   remove(id){
    const index=threads.findIndex(thread=>thread.id===id);
    if(index<0)return;
@@ -19,6 +27,13 @@ export function threadBook(store){
    if(active?.id===id)active=null;
    try{save();}
    catch(err){threads.splice(index,0,removed);active=previous;throw err;}
+  },
+  setSummary(id,summary,through){
+   if(active?.id!==id)return;
+   const previous=active.context;
+   active.context={summary,through};
+   try{save();}
+   catch(err){active.context=previous;throw err;}
   },
   setFoodDate(date){if(active){active.foodDate=date;save();}},
   append(role,text,carry=true,source){

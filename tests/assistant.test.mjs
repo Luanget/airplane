@@ -6,6 +6,10 @@ import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validat
 import {addBatch,saveSku} from '../health/inventory.mjs';
 import {summarizeFoodHistory,reviseFoodPortion} from '../health/food-history.mjs';
 import {readLedger} from '../ai/workspace.mjs';
+import {contextFor,HISTORY_OPTIONS} from '../ai/context.mjs';
+import {dataEdit,readAppData} from '../ai/data.mjs';
+import {healthDeletion} from '../ai/deletion.mjs';
+import {estimatedCost,displayUsage} from '../ai/usage.mjs';
 import {skillLibrary} from '../ai/skills.mjs';
 import {confirmItems,resolveItem} from '../health/candidates.mjs';
 import {matches,resultSchema,validInput,assistantInput} from '../health/contract.mjs';
@@ -23,8 +27,8 @@ test('default rules, legacy preferences and individual Skills remain independent
  const data=new Map([['airplane-ai-skill-v1','保留旧的个人偏好']]);
  const library=skillLibrary({getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value)});
  const defaults=library.list().filter(item=>item.preset);
- assert.equal(defaults.length,5);
- assert.equal(library.active().length,5);
+ assert.equal(defaults.length,6);
+ assert.equal(library.active().length,6);
  assert.equal(library.active().at(-1).text,'保留旧的个人偏好');
  assert.equal(data.size,1);
  const stock=defaults.find(item=>item.id==='l-stock');
@@ -289,4 +293,105 @@ test('six-day boundary, next-day closing and missing days, with imported energy-
   assert.equal(energyForDay(next,date,'2030-01-03').tdee,2200);
   assert.equal(cycleForDate(next,date,'2030-01-03').unreported,1);
   assert.ok(!validDate('2030-02-30')); assert.ok(!validateAppState({...state,local:{foods:[]}}));
+});
+
+test('assistant deletes a plan independently and restores only stock linked to the deleted intake',()=>{
+ const state=newState(),sku=saveSku(state,{name:'测试食品',unit:'g',basisUnit:'g',basisAmount:100,kcal:100});
+ addBatch(state,{foodId:sku.id,date,quantity:500,costCents:1000});
+ const actual=addFood(state,{name:sku.name,date,foodId:sku.id,stockQty:120,kcal:120});
+ const plan=addFood(state,{name:sku.name,date,status:'plan',foodId:sku.id,stockQty:130,kcal:130});
+ const withoutPlan=healthDeletion(state,'foods',[plan.id]);
+ assert.equal(dayIntake(withoutPlan,date).totals.kcal,120);
+ assert.equal(inventoryWithMoves(withoutPlan)[0].qty,380);
+ const cleared=healthDeletion(withoutPlan,'foods',[actual.id]);
+ assert.equal(dayIntake(cleared,date).totals.kcal,null);
+ assert.equal(inventoryWithMoves(cleared)[0].qty,500);
+ assert.equal(cleared.local.foods.length,0);
+ assert.equal(state.local.foods.length,2);
+ assert.throws(()=>healthDeletion(cleared,'foods',[actual.id]),/原记录已变更/);
+ const input={mode:'chat',text:'删除那条计划',date,history:[],photo:null};
+ const result={reply:'请核对。',proposal:{mode:'delete_record',date,result:{kind:'plan',query:'测试食品',meal:null}}};
+ const response={status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(result)}]}]};
+ assert.deepEqual(parseResult(response,input),result);
+});
+
+test('old messages become a rolling summary and recent messages are retained in full',()=>{
+ const long=Array.from({length:50},(_,i)=>({role:'user',carry:true,text:i+'营'.repeat(400)+'尾'}));
+ const thread={messages:long};
+ const plan=contextFor(thread);
+ assert.ok(plan.history.length>20);
+ assert.deepEqual(plan.history.at(-1),{role:'user',text:long.at(-1).text});
+ assert.ok(plan.compact.history.length>0);
+ assert.equal(plan.compact.history[0].text,long[0].text);
+ assert.deepEqual(contextFor(thread,HISTORY_OPTIONS[0]).history,[]);
+ assert.equal(contextFor(thread,HISTORY_OPTIONS[2]).history.length,50);
+ const memo='保留的目标和待完成事项';
+ const next=contextFor({...thread,context:{summary:memo,through:plan.compact.through}});
+ assert.equal(next.summary,memo);
+ assert.equal(next.compact,null);
+ assert.equal(next.history[0].text,long[plan.compact.through].text);
+ assert.equal(thread.messages.length,50);
+ const input={mode:'chat',text:'整理这段对话',date,photo:null,history:plan.compact.history};
+ const req=modelRequest(input,{compacting:true,contextSummary:memo});
+ assert.equal(req.text.format.name,'airplane_context_summary');
+ assert.equal(req.tools,undefined);
+ assert.deepEqual(JSON.parse(req.input[0].content[0].text),{summary:memo,older:plan.compact.history});
+ assert.equal(JSON.parse(modelRequest(input,{contextSummary:memo}).input[0].content[0].text).contextSummary,memo);
+});
+
+test('app data changes preview against the specific dataset and preserve unrelated fields',async()=>{
+ const original=newState();
+ let state=original;
+ const workspace={
+  readHealth:async()=>state,
+  saveHealth:async(next,revision)=>{
+   assert.equal(revision,state.revision??0);
+   state={...next,revision:revision+1};
+  }
+ };
+ const appData=(dataset,id,action,changes)=>({dataset,id,action,changes:JSON.stringify(changes)});
+ const settings=await readAppData(workspace,null,{dataset:'health_settings',id:null,date:null,query:''});
+ assert.equal(settings.rows[0].baselineTdee,original.settings.baselineTdee);
+ const candidate=await dataEdit(workspace,null,appData('health_settings',null,'update',{cycleDays:6}),date);
+ assert.equal(candidate.previous.cycleDays,7);
+ assert.equal(candidate.updated.cycleDays,6);
+ assert.equal(state.settings.cycleDays,7);
+ await candidate.commit();
+ assert.equal(state.settings.cycleDays,6);
+ assert.equal(state.settings.calorieTarget,original.settings.calorieTarget);
+ await assert.rejects(dataEdit(workspace,null,appData('health_settings',null,'update',{cycleDays:5.5}),date),/cycleDays/);
+ await assert.rejects(dataEdit(workspace,null,{...appData('health_settings',null,'update',{}),changes:'{"__proto__":{"deleted":true}}'},date),/__proto__/);
+ const add=await dataEdit(workspace,null,appData('weights',null,'add',{kg:72.2,date,isMorning:true}),date);
+ await add.commit();
+ const event=state.local.weights[0];
+ const update=await dataEdit(workspace,null,appData('weights',event.id,'update',{kg:71.5}),date);
+ await update.commit();
+ assert.equal(state.local.weights.length,1);
+ assert.equal(state.local.weights[0].id,event.id);
+ assert.equal(state.local.weights[0].kg,71.5);
+ const del=await dataEdit(workspace,null,appData('weights',event.id,'delete',{}),date);
+ await del.commit();
+ assert.equal(state.local.weights.length,0);
+ const plan=await dataEdit(workspace,null,appData('foods',null,'add',{
+  date:addDays(date,1),name:'明天的计划',status:'plan',meal:'晚餐',nutrition:{kcal:200}
+ }),date);
+ await plan.commit();
+ const edit=await dataEdit(workspace,null,appData('foods',plan.updated.id,'update',{name:'改过的计划'}),date);
+ await edit.commit();
+ assert.equal(state.local.foods[0].status,'plan');
+ assert.equal(dayIntake(state,addDays(date,1)).totals.kcal,null);
+ const guide=await readAppData(workspace,null,{dataset:'guide',id:null,date:null,query:'foods'});
+ assert.deepEqual(guide.options.foodStatus,['actual','plan','cancelled']);
+
+});
+
+test('local USD estimates count regular, cached and written tokens once at model rates',()=>{
+ const usage={input_tokens:1000,output_tokens:100,
+  input_tokens_details:{cached_tokens:100,cache_write_tokens:200,cache_write_tokens_details:{ttl_12h_tokens:50}}};
+ assert.equal(estimatedCost('gpt-6-luna',usage),152250000);
+ assert.equal(estimatedCost('gpt-6.1-terra',usage),1517500000);
+ assert.equal(estimatedCost('gpt-6.2-sol',{input_tokens:300000,output_tokens:10000}),1350000000000);
+ assert.equal(estimatedCost('gpt-6-luna',{input_tokens:5,output_tokens:1,input_tokens_details:{cached_tokens:10}}),null);
+ assert.equal(displayUsage(null),'');
+ assert.equal(displayUsage(152250000),'本机已用约 US$0.000152');
 });

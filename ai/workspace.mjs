@@ -13,15 +13,7 @@ export function localWorkspace(){
   skills:skillLibrary(account.finance)
  };
 }
-export function shortHistory(turns){
- let remaining=900;
- return turns.slice(-4).reverse().flatMap(({role,text})=>{
-  const short=text.slice(0,Math.min(320,remaining));
-  remaining-=short.length;
-  return short?[{role,text:short}]:[];
- }).reverse();
-}
-export const readLabels={stock:'匹配的食品库存',meal:'可用食材和今日营养',expenses:'今日收支合计',foods:'指定日期的饮食记录',expense_summary:'指定时段的支出汇总',weight:'本机晨重趋势',cycle:'当前减脂周期'};
+export const readLabels={app_data:'指定的本机数据',stock:'匹配的食品库存',meal:'可用食材和今日营养',expenses:'今日收支合计',foods:'指定日期的饮食记录',expense_summary:'指定时段的支出汇总',weight:'本机晨重趋势',cycle:'当前减脂周期'};
 export const expenseGroupLabels={category:'分类',day:'日期',month:'月份'};
 
 export async function readLedger(workspace,args,today){

@@ -3,6 +3,7 @@ import {readResponseStream,ResponseStreamError} from './stream.mjs';
 import {readKey,importKey,forgetKey} from './keys.mjs';
 import {localDate} from '../calendar.mjs';
 import {readChatModel} from './models.mjs';
+import {recordUsage} from './usage.mjs';
 
 const keyFields=`  <p>用自己的 OpenAI Key 调用选定模型。Key 加密保存在本机。</p>
   <label>OpenAI API Key<input name="key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="sk-…"></label>
@@ -112,6 +113,9 @@ export async function recognize(input,{signal,onReply,onTool,...options}={}) {
   clearTimeout(timeout);signal?.removeEventListener('abort',cancel);
  }
  if(!response.ok)throw apiError(response,body,request.model);
+ void recordUsage(body,request.model).then(saved=>{
+  if(saved)window.dispatchEvent(new Event('airplane-ai-usage'));
+ }).catch(()=>{});
  if(body?.status==='incomplete')throw Error('OpenAI 返回了未完成的响应。可以重试，原账本数据仍保留。');
  if(body?.status==='failed')throw Error('OpenAI 在生成回复时失败，请稍后重试。');
  try{
@@ -120,7 +124,7 @@ export async function recognize(input,{signal,onReply,onTool,...options}={}) {
    if(!options.allowRead)throw Error();
    return {call};
   }
-  return parseResult(body,input);
+  return parseResult(body,input,options);
  }
  catch{throw Error('已收到 OpenAI 响应，但无法读取回复或候选格式。');}
 }

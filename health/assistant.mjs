@@ -1,11 +1,39 @@
 import {localClock,syncCalendarFields} from '../calendar.mjs';
 import {cents,newPurchaseId,recordPurchase} from './purchases.mjs';
 import {displayStockQuantity,saveSku,stockMeasure} from './inventory.mjs';
-import {inventoryWithMoves,isOnHand,isStockReference,recordEvent,numeric,validDate} from './core.mjs';
+import {addFood,availableBatches,carbReference,dayIntake,inventoryWithMoves,isOnHand,isStockReference,recordEvent,numeric,validDate} from './core.mjs';
 import {confirmItems, resolveItem} from './candidates.mjs';
 import {matches, resultSchema, activitySchema, purchaseSchema, units, nutrientKeys} from './contract.mjs';
 
 const labels = {kcal:'热量 kcal',protein:'蛋白质 g',carbs:'碳水 g',fat:'脂肪 g',sodium:'钠 mg'};
+const planLabels={kcal:['','kcal'],protein:['蛋白','g'],carbs:['碳水','g'],fat:['脂肪','g'],sodium:['钠','mg']};
+const amountText=value=>value.toLocaleString('zh-CN',{maximumFractionDigits:1});
+function planNutrition(values,partial=[]){
+ return nutrientKeys.map(key=>{
+  const [name,unit]=planLabels[key],value=values[key];
+  return [name,value==null?(name?'待补':'热量待补'):(partial.includes(key)?'至少 ':'')+amountText(value)+' '+unit].filter(Boolean).join(' ');
+ }).join(' · ');
+}
+function costText(known,partial){
+ return known===null?'成本待补':(partial?'已知成本':'估算成本')+' ¥'+known.toFixed(2);
+}
+function forecastPlan(state,items,date){
+ const next={...state,local:{...state.local,stockMoves:[...state.local.stockMoves]}};
+ return items.map(item=>{
+  if(!item)return null;
+  const {sku,stockQty,nutrition,amount,unit}=resolveItem(state,item);
+  let cost=null;
+  let note='';
+  if(sku&&stockQty>0){
+   const portion=availableBatches(next,sku.id,date).find(batch=>
+    (batch.portion||batch.parent)&&Math.abs(batch.remaining-stockQty)<1e-6);
+   try{
+    cost=addFood(next,{date,name:sku.name,foodId:sku.id,batchId:portion?.id,stockQty}).cost;
+   }catch{note='库存份量需核对';}
+  }else if(sku)note='库存单位需核对';
+  return {nutrition,cost,amount,unit,note};
+ });
+}
 const actions = {eat:'已吃',plan:'计划',add:'入库',remove:'出库',label:'保存标签'};
 export async function jpeg(file) {
   if (!file || !file.type.startsWith('image/') || file.size > 16*1024*1024) throw Error('请选择 16 MB 以内的照片');
@@ -39,7 +67,7 @@ function field(parent, title, options={}) {
   return el;
 }
 const pairs = values => values.map(x=>[x,x]);
-function editRow(container, original, state, mode) {
+function editRow(container, original, state, mode, onPlanChange) {
   const {stockSource,...c} = structuredClone(original);
   const plan=mode==='plan';
   const block = document.createElement('fieldset');
@@ -61,16 +89,17 @@ function editRow(container, original, state, mode) {
   const summary = document.createElement('summary'); summary.textContent='规格与基准营养'; details.append(summary);
   const params=document.createElement('div'); params.className='form-grid'; details.append(params);
   const output = document.createElement('p');
+  const source=document.createElement('p');
+  const showPlan=item=>{
+    output.textContent=item?[item.amount+' '+item.unit,planNutrition(item.nutrition),costText(item.cost,false),item.note].filter(Boolean).join(' · '):'未计入这餐';
+    source.textContent=c.uncertainty;
+  };
   function update() {
     name.textContent=' '+(c.name||'食品');
+    if(plan){onPlanChange();return;}
     try {
       if (c.action==='eat'&&stockSource==='inventory'&&!c.sku)throw Error('请选择本次使用的在库食品');
       const {sku,stockQty,nutrition,amount,unit} = resolveItem(state,c);
-      if(plan){
-        output.textContent=[amount+' '+unit,nutrition.kcal==null?null:Number(nutrition.kcal.toFixed(1))+' kcal',
-          ...[['protein','蛋白'],['carbs','碳水'],['fat','脂肪']].flatMap(([key,label])=>nutrition[key]==null?[]:[label+' '+Number(nutrition[key].toFixed(1))+' g'])].filter(Boolean).join(' · ');
-        return;
-      }
       const delta = c.action==='plan' ? '计划不扣库' : sku ? `库存变化 ${stockQty==null?'待核对':(c.action==='add'?'+':'−')+Number(displayStockQuantity(sku,stockQty).toFixed(3))+' '+stockMeasure(sku).unit}` : c.action==='add' ? '创建库存食品' : '未关联库存';
       output.textContent = amount+' '+unit+' ｜ '+Object.entries(nutrition).map(([k,v])=>labels[k]+' '+(v??'待补')).join(' · ') + ' ｜ '+delta;
     } catch (err) { output.textContent=err.message; }
@@ -110,15 +139,17 @@ function editRow(container, original, state, mode) {
   }
   if(plan){
     const edit=document.createElement('details'),title=document.createElement('summary');
-    title.textContent='调整份量与营养';edit.append(title,grid,desc,details);
-    block.append(output,edit);
+    title.textContent='调整份量与营养';edit.append(title,grid,details);
+    block.append(output,source,edit);
+    keep.addEventListener('change',update);
   }else block.append(desc,grid,details,output);
-  container.append(block); update();
-  return () => {
+  container.append(block); if(!plan)update();
+  const read = () => {
     if(!keep.checked)return null;
     if(c.action==='eat'&&stockSource==='inventory'&&!c.sku)throw Error('请选择本次使用的在库食品');
     return c;
   };
+  return {read,showPlan};
 }
 
 function editActivity(panel,item){
@@ -166,7 +197,42 @@ export function healthReview(container, proposal, state, today) {
   const activities=mode==='activity'?editActivity(extras,result.activity):null;
   const totalField=mode==='purchase'?field(extras,'实付总额 ¥',{type:'number',value:result.total}):null;
   if(totalField)totalField.required=true;
-  const rows=(result.items??[]).map(c=>editRow(container,c,state,mode));
+  const rows=(result.items??[]).map(c=>editRow(container,c,state,mode,updatePlan));
+  const totals=document.createElement('p'),logged=document.createElement('p'),projected=document.createElement('p'),targets=document.createElement('p');
+  function updatePlan(){
+    const items=rows.map(row=>row.read());
+    let parts;
+    try{parts=forecastPlan(state,items,date.value);}
+    catch(err){
+      totals.textContent=err.message;logged.textContent='';projected.textContent='';targets.textContent='';
+      rows.forEach(row=>row.showPlan(null));
+      return;
+    }
+    rows.forEach((row,index)=>row.showPlan(parts[index]));
+    const selected=parts.filter(Boolean);
+    if(!selected.length){totals.textContent='请勾选计划食材';logged.textContent='';projected.textContent='';targets.textContent='';return;}
+    const aggregate=(key,values)=>[key,values.every(v=>v==null)?null:values.reduce((sum,v)=>sum+(v??0),0)];
+    const mealValues=Object.fromEntries(nutrientKeys.map(key=>aggregate(key,selected.map(row=>row.nutrition[key]))));
+    const mealMissing=nutrientKeys.filter(key=>selected.some(row=>row.nutrition[key]==null));
+    const costs=selected.map(row=>row.cost),knownCost=aggregate('cost',costs)[1];
+    totals.textContent='整餐 · '+planNutrition(mealValues,mealMissing)+' · '+costText(knownCost,costs.includes(null));
+
+    const actual=dayIntake(state,date.value);
+    logged.textContent=actual.reported?'已记录 · '+planNutrition(actual.totals,actual.incomplete):'当天暂无实际摄入记录';
+    const dayValues=Object.fromEntries(nutrientKeys.map(key=>aggregate(key,[actual.totals[key],mealValues[key]])));
+    const dayMissing=new Set([...mealMissing,...actual.incomplete,...nutrientKeys.filter(key=>actual.totals[key]==null)]);
+    projected.textContent='若吃完 · '+planNutrition(dayValues,[...dayMissing]);
+    const {calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget}=state.settings;
+    const carbs=carbReference(state.settings);
+    targets.textContent=['当日参考',calorieTarget+' kcal','蛋白 '+proteinMin+'–'+proteinMax+' g',
+     '脂肪 ≥'+fatMin+' g',carbs&&'碳水 '+carbs.low+'–'+carbs.high+' g','钠 '+sodiumTarget+' mg'].filter(Boolean).join(' · ');
+  }
+  if(mode==='plan'){
+    const summary=document.createElement('section');summary.className='assistant-plan-totals';
+    summary.append(totals,logged,projected,targets);container.append(summary);
+    date.addEventListener('change',updatePlan);
+    updatePlan();
+  }
   syncCalendarFields(container);
   return {
     label:mode==='plan'?'保存为饮食计划':mode==='purchase'?'确认采购入库':'确认保存',
@@ -180,7 +246,7 @@ export function healthReview(container, proposal, state, today) {
         recordEvent(next,'activities',{...activity,date:date.value,time,includedInBase:activity.energyKind==='activity'&&activity.includedInBase==='yes'});
         return next;
       }
-      const items=rows.map(read=>read()).filter(Boolean);
+      const items=rows.map(row=>row.read()).filter(Boolean);
       const purchase=mode==='purchase',total=purchase?numeric(totalField.value):null;
       if(!items.length||!matches(purchase?purchaseSchema:resultSchema,{items,note:'',...(purchase?{total}:{})}))
         throw Error('请勾选候选并核对份量和营养字段');

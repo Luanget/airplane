@@ -90,17 +90,14 @@
         </details>
         <details class="card assistant-panel" id="assistant-model-panel">
           <summary class="setting-row">
-            <span class="mini-icon" data-shell-icon="chart"></span>
-            <span class="setting-copy"><span class="setting-title">模型与用量</span><span class="setting-sub" data-current-model></span></span>
+            <span class="mini-icon" data-shell-icon="settings"></span>
+            <span class="setting-copy"><span class="setting-title">模型</span><span class="setting-sub" data-current-model></span></span>
             <span class="chevron" data-shell-icon="chevron"></span>
           </summary>
           <div class="assistant-panel-body">
             <div class="segmented assistant-model-options" role="group" aria-label="选择模型" data-model-options></div>
+            <p data-local-usage hidden></p>
             <output role="status"></output>
-            <div class="assistant-billing-links">
-              <a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">API 余额</a>
-              <a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">用量明细</a>
-            </div>
           </div>
         </details>
         <details class="card assistant-panel" id="assistant-skill">
@@ -124,8 +121,9 @@
         <details class="card assistant-panel assistant-context">
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="activity"></span><span class="setting-copy setting-title">本轮上下文</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
+            <div class="segmented assistant-model-options" role="group" aria-label="聊天历史范围" data-history-options></div>
             <p data-context-size></p>
-            <p>OpenAI 会收到本轮消息、选中的照片、当天日期、已启用的 Skill 和最近四条短消息。开启查询时，还会收到本轮所需的账本摘要。</p>
+            <p>较长对话会把早期消息压缩成摘要，接续聊天时带上摘要和近期原文。压缩会额外调用一次模型。完整对话保存在本机。</p>
           </div>
         </details>
       </div>

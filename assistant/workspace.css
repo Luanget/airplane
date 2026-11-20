@@ -11,8 +11,6 @@
 .assistant-panel p+p { margin-top:8px }
 .assistant-model-options { grid-template-columns:repeat(3,minmax(0,1fr)) }
 .assistant-model-options [aria-pressed=true] { color:var(--text); background:var(--surface); box-shadow:var(--shadow) }
-.assistant-billing-links { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px }
-.assistant-billing-links a { display:inline-flex; align-items:center; padding:0 6px; min-height:44px; color:var(--text); font-size:13px; text-decoration:underline; text-underline-offset:3px }
 .assistant-prompt { margin-top:12px; font-size:13px }
 .assistant-prompt summary { color:var(--muted); cursor:pointer; padding-block:6px }
 .assistant-prompt pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; line-height:1.5 }
@@ -134,3 +132,15 @@
 
 .assistant-request-status { display:flex; align-items:center; gap:8px; justify-content:space-between }
 .assistant-request-status button { flex:none }
+
+.assistant-panel [data-local-usage]:not([hidden]), .assistant-panel [data-context-size] { margin-top:8px; font-size:12px }
+.assistant-delete-list { display:grid; gap:6px; margin-top:8px }
+.assistant-delete-list > label { display:flex; align-items:center; gap:10px; padding:8px; min-height:44px; margin:0; border:1px solid var(--line); border-radius:10px }
+.assistant-delete-list input { flex:none }
+.assistant-delete-list strong, .assistant-delete-list small { display:block; overflow-wrap:anywhere }
+.assistant-delete-list small, .chat-review .assistant-delete-preview { font-size:12px; color:var(--muted) }
+.chat-review .delete-apply { background:var(--red); color:white }
+.assistant-plan-totals { border-top:1px solid var(--line); margin-top:10px; padding-top:5px }
+.chat-review .assistant-plan-totals p { margin:4px 0; font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums }
+
+.assistant-data-review { margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.5 }

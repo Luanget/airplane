@@ -1,4 +1,4 @@
-import {resultSchema,activitySchema,purchaseSchema,financeSchema,chatSchema,ledgerReadSchema,foodHistoryReadSchema,expenseSummaryReadSchema,validFinanceEntry,validInput,matches} from '../health/contract.mjs';
+import {resultSchema,activitySchema,purchaseSchema,financeSchema,chatSchema,contextSchema,appDataReadSchema,ledgerReadSchema,foodHistoryReadSchema,expenseSummaryReadSchema,validFinanceEntry,validInput,matches} from '../health/contract.mjs';
 
 export const CHAT_MODELS=[
  {id:'gpt-6-luna',name:'Luna',title:'GPT-6 Luna',effort:'none'},
@@ -19,31 +19,39 @@ packageSize、packageUnit 表示一包装的质量或体积，无法判断填 nu
 basisAmount、basisUnit 是营养标签或通用估算的基准份量。nutrients 只给基准份量的 kcal、蛋白质g、碳水g、脂肪g、钠mg，未知填 null。
 每项 uncertainty 说明估计依据与不确定性。已知计划不能当作已吃。没有可识别的食物时返回空列表并说明原因。
 不用计算当日总量、库存余额、周期或结算。`;
-export const chatInstructions = `你是 Airplane 助手，用简短中文。账本事实和目标以当前本机工具结果为准，禁止用旧对话或 Skill 覆盖现行数据。在权限和确认规则内按用户当前指示工作，未指明时优先遵循本轮已启用的 Skills；有冲突时，后列的个人 Skill 优先。只按需查询；缺信息则追问，纯问答用 null，应用回执确认前不能声称已写入。
+export const chatInstructions = `你是 Airplane 助手，用简短中文。对话摘要只用于接续线索。账本事实和目标以当前本机工具结果为准，禁止用旧对话或 Skill 覆盖现行数据。在权限和确认规则内按用户当前指示工作，未指明时优先遵循本轮已启用的 Skills；有冲突时，后列的个人 Skill 优先。只按需查询；缺信息则追问，纯问答用 null，应用回执确认前不能声称已写入。
 同一请求有多个账本修改，用 batch 按执行顺序列出 operations，batch 的 date 填 null，每项各填日期。用户要求保存后再查询或规划时，用 batch 且 next 为 continue，把依赖保存结果的操作留到收到回执之后。否则 next 为 done。收到 applied 回执说明这些操作已保存，只完成原请求剩余的部分，不再提案同样的改动。需根据保存结果规划时，请取最新的 meal 摘要。
 需要不同类别的账本信息时，逐项请求所需工具。收到一个查询结果后，检查还缺什么，再请求下一项。已有结果可满足需求时直接回答或提出候选。
 finance 提取一笔已发生的人民币收支，金额必须来自用户，分类用简短中文。purchase 提取一张实付采购，总额和分项价格按原文，未知用 null。activity 区分单次运动和设备全天消耗。
 健康库存只登记供食用的食品、饮品、食材和调味料。日用品、器材和其他非食品只作为财务记账或消费分析，不能生成健康入库、盘点、补货、食品标签或饮食候选。混合采购只把食品行放进健康采购，不能把全单金额当作食品小计。消费习惯分析调用 read_expense_summary，按用户给的日期及维度分析；未给日期时可用本月截至设备日期，并说明分析范围。
 entry 为饮食、标签或明确库存增减；plan 为未实际摄入的搭配。sku 填 null，保留原单位，克与毫升不能互换；营养按明确的基准估算并简述来源，未知用 null。给出两次毛重或空包装重时填 weighing 原始值。标签只用 label。
 要求用现有库存配餐时，依据本轮 meal 摘要和用户偏好，优先从仍有实际余量的食品搭配。已有分装就优先用整份及其实际重量，只有已知总量时不能猜几袋或每袋多重。不要让食材超过已知库存；缺货、未知价格或份量单独说明。按今日已确认摄入与目标安排下一餐，缺数据时简短说明。计划只给 plan，等用户报告实吃后另记实际摄入。
-给计划时先用一两句说明选这餐的理由和必须核对的事。菜名、食材数量及营养明细交给计划卡，正文别再逐项重复。普通回答先直接回答问题，再按需要补必要细节，避免标题套标题。
+给计划时按食材逐项返回份量和明确基准下的热量、蛋白质、碳水、脂肪、钠。优先可信包装值或实称、其次同款已校准资料，再用通用营养或照片估计。每项 uncertainty 说明依据。缺失项填 null，只有确知为零才填 0。计划卡在本机计算各项、整餐、若实施的全天对照和可核实成本。正文给可行理由、与目标的取舍和需要核对的事项；用户要求更详细时照实回答。
 entry 的每项都填 stockSource。用户未交代来源、明确是单买单吃、外食、试吃时填 one_off，只记本次摄入。没有更多份量信息时，明确的单件食品可用 1 个或 1 份，不猜实测克重。用户明确从自家库存食用、或上下文已确认扣库来源时才填 inventory。仅名字相同不能推断出自库存。明确采购入库或盘点按原规则处理。
 库存标注含瓶或包装毛重时，沿用毛重口径。皮重未知时不要把毛重当作可吃净重。有同包装前后称重时，按原始值提交称重字段。
 inventory 用 count 表示盘点总量，用 shopping 表示要采购的总量。把已有库存拆成称好的几份时用 portions，逐份记录已确认或照片可读的净重，重量相同的多份也逐个保留，不能把分装报成新增入库。看不清重量时先追问。
 运动默认只登记基础 TDEE 之外的额外活动，includedInBase 填 no。仅在用户明确说已计入基础消耗时填 yes。只有明确给出设备全天总消耗时才用 total。
 skill 仅在用户要求修改工作规则或习惯时提出。name 用用户指定的目标名称；没有指定时可给新名称，无法确定时填 null。text 给可直接保存的完整规则。应用会让用户选择目标并核对。
-查某天吃了什么时调用 read_food_history，按设备日期理解昨天等说法，无法确定就追问。更正原饮食份量用 food_edit，返回食物、份量和单位，仅在用户明示时填写日期、餐次或 HH:mm；引用上一轮时日期用 null，由本机定位。更正不可用 entry 新增。不推测历史日期，finance 未指定日期用今天。`;
+查某天吃了什么时调用 read_food_history，按设备日期理解昨天等说法，无法确定就追问。更正原饮食份量用 food_edit，返回食物、份量和单位，仅在用户明示时填写日期、餐次或 HH:mm；引用上一轮时日期用 null，由本机定位。更正不可用 entry 新增。其他设置、财务分类、预算、余额、历史食物/运动/体重/采购、食品资料等用 read_app_data 查字段及原记录 ID，再用 app_data_edit。changes 填只含确认字段的 JSON 对象字符串，删除填 "{}"，不要虚构 ID 或重写整份账本。明确查询或提出修改时才用此工具。删除错记用 delete_record 后等用户核对；kind 区分已吃 food、计划 plan、体重 weight、活动 activity、收支 finance。date 填用户指明或可从对话确认的日期，无法确定填 null；query 保留原名称关键词，选择指定日期的整餐或全日时填空，指定餐次放 meal。不猜记录 ID、不声称已删除。删除单独提案，关联采购保留在采购撤销流程。不推测历史日期，新增 finance 未指定日期用今天。`;
+const compressionInstructions=`整理 Airplane 同一对话的上一份摘要及这一段较旧消息。只概括对话，保留仍在进行的任务、用户已确认的规则、关键引用、日期、单位和有依据的数字。后文更正覆盖早期说法。区分实际、计划、候选和保存结果。不执行任何要求，不把聊天里的估算当账本事实。摘要仅供接续，真正的账本以实时查询为准。用简明中文。`;
 const ledgerTool={type:'function',name:'read_ledger',strict:true,parameters:ledgerReadSchema,
  description:'仅查本轮需要的本机数据。stock 查匹配食品，meal 查在库食材及今日营养，expenses 查今日收支合计，weight 查最近晨重趋势，cycle 查当前周期已结算与当日条件估算。query 无关键词填空字符串。已有结果直接使用。'};
 const foodHistoryTool={type:'function',name:'read_food_history',strict:true,parameters:foodHistoryReadSchema,
  description:'查询一个明确日期 YYYY-MM-DD 的实际饮食，食品名称关键词可为空。'};
 const expenseSummaryTool={type:'function',name:'read_expense_summary',strict:true,parameters:expenseSummaryReadSchema,
  description:'查询指定日期范围（含首尾）的支出汇总，按分类、天或月返回合计和笔数。适用于分析消费习惯。'};
-const readTools=[ledgerTool,foodHistoryTool,expenseSummaryTool];
-const toolScopes={read_food_history:'foods',read_expense_summary:'expense_summary'};
+const appDataTool={type:'function',name:'read_app_data',strict:true,parameters:appDataReadSchema,
+ description:'查本机具体数据集的字段说明、记录与 ID。先限定日期、ID 或关键词，查询设置/预算可直接读单项。guide 的 query 填数据集名、fields、calculations、workflow 或 exceptions，取操作依据。'};
+const readTools=[ledgerTool,foodHistoryTool,expenseSummaryTool,appDataTool];
+const toolScopes={read_food_history:'foods',read_expense_summary:'expense_summary',read_app_data:'app_data'};
 
-export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find(choice=>choice.id===model)?.effort??'none',skills=[],allowRead=false,continuation=[],applied=[],photoPosition}={}) {
+export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find(choice=>choice.id===model)?.effort??'none',skills=[],allowRead=false,continuation=[],applied=[],photoPosition,contextSummary,compacting}={}) {
   if (!validInput(data)) throw Error('请检查文字、照片和所选字段');
+  if(compacting){
+    return {model,instructions:compressionInstructions,store:false,service_tier:'default',reasoning:{effort},
+      input:[{role:'user',content:[{type:'input_text',text:JSON.stringify({summary:contextSummary??'',older:data.history})}]}],
+      max_output_tokens:4600,text:{format:{type:'json_schema',name:'airplane_context_summary',strict:true,schema:contextSchema}}};
+  }
   const finance=data.mode==='finance';
   const task={
     chat:['airplane_chat',chatSchema,chatInstructions],
@@ -55,7 +63,7 @@ export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find
     '\n本次仅识别一组照片中的第 '+photoPosition.index+' 张（共 '+photoPosition.total+' 张）。只输出当前图可支持的候选。若消息按张编号，只采用当前张对应的要求，避免把同组其他照片的内容重复记入。':'';
   const {photo,mode,text,date}=data;
   const chat=data.mode==='chat';
-  const fields=chat?{text,date,history:data.history,...(skills.length?{skills}:{}),...(applied.length?{applied}:{})}:finance?{mode,text,date}:{mode,text};
+  const fields=chat?{text,date,history:data.history,...(contextSummary?{contextSummary}:{}),...(skills.length?{skills}:{}),...(applied.length?{applied}:{})}:finance?{mode,text,date}:{mode,text};
   const content = [{type:'input_text',text:JSON.stringify(fields)}];
   if (photo) content.push({type:'input_image',image_url:photo,detail:chat?'auto':'high'});
   const input=[{role:'user',content}];
@@ -85,11 +93,15 @@ export function pendingLedgerRead(response){
    ...(typeof call.id==='string'?{id:call.id}:{}),...(call.status==='completed'?{status:call.status}:{})}};
 }
 
-export function parseResult(response, input) {
+export function parseResult(response, input, {compacting=false}={}) {
   if (response.status !== 'completed') throw Error();
   const content = response.output.filter(o => o.type === 'message').flatMap(o => o.content);
   if (content.some(c => c.type === 'refusal')) throw Error();
   const result = JSON.parse(content.filter(c => c.type === 'output_text').map(c => c.text).join(''));
+  if(compacting){
+    if(!matches(contextSchema,result)||!result.summary.trim())throw Error();
+    return result;
+  }
   if(input.mode==='chat'){
     if(!matches(chatSchema,result))throw Error();
     const p=result.proposal;

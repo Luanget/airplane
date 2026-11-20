@@ -1,4 +1,4 @@
-export const APP_VERSION='0.9.0';
+export const APP_VERSION='0.9.1';
 export const shellGlyphs = {
  close: '<path d="m6 6 12 12M18 6 6 18"/>',
  check: '<path d="m5 12 4 4L19 6"/>',
@@ -57,6 +57,20 @@ export function confirmAction({title,message,action='确认',danger=false}){
 }
 
 export function bindSheetSwipe(modal,backdrop,dismiss=()=>modal.close()){
+  const surface=backdrop??modal;
+  const isOutside=event=>{
+    if(event.target!==surface)return false;
+    const {left,right,top,bottom}=modal.getBoundingClientRect();
+    return event.clientX<left||event.clientX>=right||event.clientY<top||event.clientY>=bottom;
+  };
+  let pressed=false;
+  surface.addEventListener('pointerdown',event=>{pressed=event.isPrimary&&event.button===0&&isOutside(event);});
+  surface.addEventListener('pointercancel',()=>{pressed=false;});
+  surface.addEventListener('click',event=>{
+    const dismissTap=pressed&&isOutside(event);
+    pressed=false;
+    if(dismissTap)dismiss('backdrop');
+  });
   const backdropStyle=backdrop?.style;
   const grabber=modal.querySelector('.modal-grabber');
   let startX=0,startY=0,lastY=0,startAt=0,tracking=false,dragging=false,forceHandle=false;
@@ -119,7 +133,7 @@ export function bindSheetSwipe(modal,backdrop,dismiss=()=>modal.close()){
     if(dy>Math.min(92,modal.clientHeight*.13)||velocity>.56){
       modal.style.transition='transform .16s ease-in';
       modal.style.transform='translateY(110%)';
-      setTimeout(()=>{dismiss();reset();},140);
+      setTimeout(()=>{dismiss('swipe');reset();},140);
     }else reset();
   };
 

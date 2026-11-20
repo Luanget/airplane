@@ -94,6 +94,7 @@ try {
   const backup=JSON.parse(readFileSync(await (await downloading).path(),'utf8'));
   assert.deepEqual(backup.data,JSON.parse(before));
   await page.locator('#importInput').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
+  await page.getByRole('dialog',{name:'恢复财务备份'}).getByRole('button',{name:'确认恢复'}).click();
   await page.waitForFunction(()=>localStorage.getItem('airplane-pre-restore-v1'));
   assert.deepEqual(JSON.parse(await ledger()),backup.data);
   console.log('PASS old finance budget, transaction, backup/restore and user-approved PWA upgrade');
@@ -101,6 +102,12 @@ try {
   await ctx.setOffline(true);
   await page.goto(base+'health/?test=offline');
   assert.equal(await page.getByText('去导入',{exact:true}).count(),0);
+  await page.locator('#health-settings').click();
+  await page.mouse.click(8,8);
+  await page.locator('#health-settings-sheet').waitFor({state:'hidden'});
+  await page.locator('#add-health').click();
+  await page.mouse.click(8,8);
+  await page.locator('#health-entry').waitFor({state:'hidden'});
   await page.locator('#health-settings').click();
   await page.locator('#check-update').click();
   await page.locator('#health-settings-sheet .update-inline').waitFor();
@@ -349,11 +356,11 @@ try {
   const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
 
   const calls=[],testKey='sk-fixture-browser-only';
-  const enabledSkills=['L · 记录与纠错','L · 配餐与营养','L · 库存与采购','原有个人偏好','测试个人 Skill'];
+  const enabledSkills=['L · 数据与纠错规范','L · 记录与纠错','L · 配餐与营养','L · 库存与采购','原有个人偏好','测试个人 Skill'];
   await page.evaluate(()=>localStorage.setItem('airplane-ai-skill-v1','合成旧用户偏好'));
   const batchText='盘点合成新食品为 90g，补记 43 元午餐，再查更新后的库存';
   let resumeAttempts=0;
-  let firstPhotoAttempts=0;
+  let firstPhotoAttempts=0,compactions=0;
   let expectedModel='gpt-6-luna';
   let releaseDelayed,markDelayed;
   const delayedStarted=new Promise(resolve=>{markDelayed=resolve;});
@@ -368,6 +375,15 @@ try {
     assert.equal(body.reasoning.effort,expectedModel==='gpt-6.2-sol'?'low':'none');
     assert.equal(body.store,false);assert.equal(body.stream,true);assert.equal(body.text.format.strict,true);
     const input=JSON.parse(content[0].text);
+    const mockResult=value=>route.fulfill({headers,json:{status:'completed',output:[{type:'message',
+      content:[{type:'output_text',text:JSON.stringify(value)}]}]}});
+    if(body.text.format.name==='airplane_context_summary'){
+      compactions++;
+      assert.equal(body.tools,undefined);
+      assert.equal(input.summary,'');
+      assert.match(input.older[0].text,/合成历史0/);
+      return mockResult({summary:'测试摘要：使用合成饮食规则。'});
+    }
     const connectionTest=input.text.startsWith('这是连接测试');
     const fields=['date','history','text'];
     if(!connectionTest){
@@ -376,11 +392,27 @@ try {
       assert.ok(input.skills.every(item=>Object.keys(item).sort().join(',')==='name,text'));
     }
     if(input.applied)fields.push('applied');
+    if(input.contextSummary)fields.push('contextSummary');
     assert.deepEqual(Object.keys(input).sort(),fields.sort());
     assert.ok(!content[0].text.includes('synthetic legacy entry'));
     assert.ok(!content[0].text.includes('private synthetic'));
     calls.push({...input,photo:content[1]?.image_url});
     if(input.text==='合成餐点')assert.ok(body.tools.some(tool=>tool.name==='read_ledger'));
+    if(input.text==='验证压缩后接续'){
+      assert.equal(input.contextSummary,'测试摘要：使用合成饮食规则。');
+      assert.ok(input.history.some(row=>row.text.startsWith('合成历史49')));
+      return mockResult({reply:'压缩后的对话已接续。',proposal:null});
+    }
+    if(input.text==='把周期改为六天'){
+      if(body.input.length===1)return route.fulfill({headers,json:{status:'completed',output:[
+        {type:'function_call',name:'read_app_data',call_id:'fixture-settings',
+         arguments:JSON.stringify({dataset:'health_settings',id:null,date:null,query:''})}
+      ]}});
+      const info=JSON.parse(body.input.at(-1).output);
+      assert.equal(info.fields.cycleDays,'cycleDays');
+      const change={dataset:'health_settings',id:null,action:'update',changes:JSON.stringify({cycleDays:6})};
+      return mockResult({reply:'请确认周期调整。',proposal:{mode:'app_data_edit',date:null,result:change}});
+    }
     if(input.text==='记录照片里的合成分装'){
       assert.equal(content[1].type,'input_image');
       return route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',
@@ -445,7 +477,15 @@ try {
       return route.fulfill({headers,json:{status:'completed',output:[{type:'function_call',name:'read_ledger',
         call_id:'batch-stock',arguments:'{"scope":"stock","query":"合成新食品"}'}]}});
     }
-    if(input.text.startsWith('这是连接测试'))return route.fulfill({headers,json:fixtureReply});
+    if(input.text.startsWith('这是连接测试'))return route.fulfill({headers,json:{...fixtureReply,id:'resp_fixture_cost',
+      usage:{input_tokens:1000,output_tokens:100,input_tokens_details:{cached_tokens:100,cache_write_tokens:200}}}});
+    if(input.text==='删除合成计划'||input.text==='删除合成午餐支出'){
+      assert.deepEqual(input.history,[]);
+      const finance=input.text.endsWith('支出');
+      return route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',
+        text:JSON.stringify({reply:'勾选要删除的原记录。',proposal:{mode:'delete_record',date:input.date,
+          result:{kind:finance?'finance':'plan',query:finance?'午餐':'合成餐点',meal:null}}})}]}]}});
+    }
     if(input.text==='模拟等待'){
       await new Promise(resolve=>{releaseDelayed=resolve;markDelayed();});
       await route.fulfill({headers,json:fixtureReply}).catch(()=>{});
@@ -525,7 +565,10 @@ try {
   await say('用我描述的合成蔬菜规划一餐');await review.waitFor();
   assert.equal(calls[1].history[0].text,'合成餐点');
   const planCard=review.locator('.assistant-plan-item');
-  await planCard.getByText(/120 g.*120 kcal/).waitFor();
+  await planCard.getByText(/120 g.*120 kcal.*蛋白 12 g.*碳水 12 g.*脂肪 3.6 g.*钠 12 mg/).waitFor();
+  await review.getByText(/^整餐.*钠 12 mg/).waitFor();
+  await review.getByText(/^若吃完/).waitFor();
+  await planCard.getByText('合成测试估值',{exact:true}).waitFor();
   assert.equal(await planCard.getByLabel('数量',{exact:true}).isVisible(),false);
   await planCard.getByText('调整份量与营养',{exact:true}).click();
   await planCard.getByLabel('数量',{exact:true}).waitFor();
@@ -587,22 +630,24 @@ try {
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
   await openAssistantSettings();
   const modelPanel=assistantSettings.locator('#assistant-model-panel');
-  await modelPanel.getByText('模型与用量',{exact:true}).click();
+  await modelPanel.getByText('模型',{exact:true}).click();
   assert.equal(await modelPanel.getByRole('button',{name:'Luna',exact:true}).getAttribute('aria-pressed'),'true');
-  assert.equal(await modelPanel.getByRole('link',{name:'API 余额'}).getAttribute('href'),
-    'https://platform.openai.com/settings/organization/billing/overview');
-  assert.equal(await modelPanel.getByRole('link',{name:'用量明细'}).getAttribute('href'),'https://platform.openai.com/usage');
+  assert.equal(await assistantSettings.getByRole('link',{name:/API 余额|用量明细/}).count(),0);
   await modelPanel.getByRole('button',{name:'Terra',exact:true}).click();
   expectedModel='gpt-6.1-terra';
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByRole('button',{name:'发送连接测试'}).click();
   await access.getByText('GPT-6.1 Terra · 连接正常。',{exact:true}).waitFor();
+  await modelPanel.getByText('本机已用约 US$0.001455',{exact:true}).waitFor();
+  await access.getByRole('button',{name:'发送连接测试'}).click();
+  await access.getByText('GPT-6.1 Terra · 连接正常。',{exact:true}).waitFor();
+  await modelPanel.getByText('本机已用约 US$0.001455',{exact:true}).waitFor();
   await modelPanel.getByRole('button',{name:'Sol',exact:true}).click();
   expectedModel='gpt-6.2-sol';
   await closeAssistantSettings();
   await page.reload();
   await openAssistantSettings();
-  await modelPanel.getByText('模型与用量',{exact:true}).click();
+  await modelPanel.getByText('模型',{exact:true}).click();
   assert.equal(await modelPanel.getByRole('button',{name:'Sol',exact:true}).getAttribute('aria-pressed'),'true');
   await closeAssistantSettings();
   await form.locator('[name=allowRead]').uncheck();
@@ -715,13 +760,71 @@ try {
   assert.deepEqual(await photographedPortions(),{qty:2,portions:[0.3,0.7]});
   console.log('PASS separate photos, individual retry, candidate confirmation and same-name one-off intake');
   await openAssistantSettings();
+  const contextPanel=assistantSettings.locator('.assistant-context');
+  await contextPanel.getByText('本轮上下文',{exact:true}).click();
+  await contextPanel.getByRole('button',{name:'仅本轮'}).click();
+  await contextPanel.getByText(/历史 0 条 · 0\/0 字/).waitFor();
+  await closeAssistantSettings();
+  const planBeforeDeletion=await foodCount();
+  await say('删除合成计划');
+  await review.getByText('核对要删除的饮食计划',{exact:true}).waitFor();
+  assert.equal(await review.getByRole('checkbox').count(),1);
+  await review.getByRole('button',{name:'确认删除'}).click();
+  await review.getByText('请先勾选要删除的记录',{exact:true}).waitFor();
+  assert.equal(await foodCount(),planBeforeDeletion);
+  await review.getByRole('checkbox',{name:/合成餐点/}).check();
+  await review.getByRole('button',{name:'确认删除'}).click();
+  await chat.getByText('已删除 1 条饮食计划。',{exact:true}).waitFor();
+  assert.equal(await foodCount(),planBeforeDeletion-1);
+
+  const beforeFinanceDeletion=JSON.parse(await ledger());
+  await say('删除合成午餐支出');
+  await review.getByText('核对要删除的收支记录',{exact:true}).waitFor();
+  await review.getByRole('checkbox',{name:/午餐.*¥28/}).check();
+  await review.getByRole('button',{name:'确认删除'}).click();
+  await chat.getByText('已删除 1 条收支记录。',{exact:true}).waitFor();
+  const afterFinanceDeletion=JSON.parse(await ledger());
+  assert.equal(afterFinanceDeletion.transactions.length,beforeFinanceDeletion.transactions.length-1);
+  assert.deepEqual(afterFinanceDeletion.budgets,beforeFinanceDeletion.budgets);
+  console.log('PASS selectable chat history, local USD accumulation, and confirmed plan and expense deletion');
+  await say('把周期改为六天');
+  await review.getByText('核对健康设置变更',{exact:true}).waitFor();
+  const cycleDays=()=>page.evaluate(async()=>(await (await import('../health/storage.mjs')).readState()).settings.cycleDays);
+  assert.notEqual(await cycleDays(),6);
+  await review.getByRole('button',{name:'确认更新'}).click();
+  await chat.getByText('健康设置已更新。',{exact:true}).waitFor();
+  assert.equal(await cycleDays(),6);
+
+  await page.evaluate(()=>{
+    localStorage.setItem('airplane-ai-history-v1','rolling');
+    const key='airplane-ai-conversations-v1',book=JSON.parse(localStorage.getItem(key));
+    const thread=book.threads.find(row=>row.id===book.active);
+    thread.messages=Array.from({length:50},(_,i)=>({role:'user',carry:true,text:'合成历史'+i+'营'.repeat(400)}));
+    localStorage.setItem(key,JSON.stringify(book));
+  });
+  await page.reload();
+  await say('验证压缩后接续');
+  await chat.getByText('压缩后的对话已接续。',{exact:true}).waitFor();
+  assert.equal(compactions,1);
+  await page.reload();
+  await say('验证压缩后接续');
+  await page.waitForFunction(()=>document.querySelectorAll('.chat-bubble.assistant').length===2);
+  assert.equal(compactions,1);
+  assert.equal(await chat.getByText(/^合成历史0营/).count(),1);
+  await chat.locator('[data-toggle-threads]').click();
+  await chat.getByRole('region',{name:'对话记录',exact:true}).waitFor();
+  await page.locator('.topbar h1').click();
+  await chat.getByRole('region',{name:'对话记录',exact:true}).waitFor({state:'hidden'});
+  console.log('PASS app data candidate confirmation, automatic compaction, reload reuse and outside history dismissal');
+  const callsBeforeKeyRemoval=calls.length;
+  await openAssistantSettings();
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await closeAssistantSettings();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
   await access.waitFor();
-  assert.equal(calls.length,21);
+  assert.equal(calls.length,callsBeforeKeyRemoval);
   await closeAssistantSettings();
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();
@@ -848,7 +951,13 @@ try {
   await purchaseRow('11.00').filter({hasText:'已关联支出'}).waitFor();
   assert.equal(JSON.parse(await ledger()).transactions.find(t=>t.id.startsWith('expense-purchase-')).amount,11);
   await purchaseRow('11.00').getByRole('button',{name:'撤销采购'}).click();
-  await page.getByRole('dialog',{name:'撤销采购'}).getByRole('button',{name:'确认撤销'}).click();
+  const withdraw=page.getByRole('dialog',{name:'撤销采购'});
+  await withdraw.waitFor();
+  await page.mouse.click(8,8);
+  await withdraw.waitFor({state:'hidden'});
+  assert.equal(JSON.parse(await ledger()).transactions.find(t=>t.id.startsWith('expense-purchase-')).amount,11);
+  await purchaseRow('11.00').getByRole('button',{name:'撤销采购'}).click();
+  await withdraw.getByRole('button',{name:'确认撤销'}).click();
   await purchaseRow('11.00').filter({hasText:'已撤销'}).waitFor();
   assert.equal(JSON.parse(await ledger()).transactions.length,count);
   assert.equal(await quantity(),6);
@@ -881,6 +990,7 @@ try {
   await page.reload();await page.getByRole('button',{name:'导出原始副本'}).waitFor();
   assert.equal(await ledger(),'{');
   await page.locator('#importInput').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
+  await page.getByRole('dialog',{name:'恢复财务备份'}).getByRole('button',{name:'确认恢复'}).click();
   await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
   assert.deepEqual(JSON.parse(await ledger()),backup.data);
   // The demo uses its own stored thread and ledger through the same review UI.
