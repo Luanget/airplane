@@ -306,7 +306,20 @@ try {
     const date=getComputedStyle(top.querySelector('.calendar-field'));
     return [getComputedStyle(top.querySelector('h1')).fontSize,date.minHeight,date.borderWidth,date.color];
   });
+  const buttonLayout=()=>page.locator('.topbar-actions .icon-button').evaluateAll(buttons=>{
+    return buttons.map(button=>{
+      const {x,y,width,height}=button.getBoundingClientRect();
+      const icon=button.querySelector('svg').getBoundingClientRect();
+      return {x,y,width,height,iconX:icon.x-x,iconY:icon.y-y,iconWidth:icon.width,iconHeight:icon.height};
+    });
+  });
   const financeStyle=await headerStyle();
+  const financeButtons=await buttonLayout();
+  assert.ok(financeButtons.every(button=>button.width===44&&button.height===44&&button.iconX===11&&button.iconY===11));
+  const moduleBadge=page.locator('.topbar .brand-mark svg');
+  assert.equal(await page.locator('.topbar h1').textContent(),'账本');
+  const financeBadge=await moduleBadge.innerHTML();
+  const healthBadge=await page.locator('.topbar-actions [aria-label="健康"] svg').innerHTML();
   assert.equal(await page.locator('.day-picker .calendar-value').textContent(),shortDay(today));
   await page.setViewportSize({width:320,height:568});
   const dayTrigger=page.locator('.day-picker .calendar-trigger');
@@ -355,6 +368,10 @@ try {
   await page.locator('.day-picker .calendar-value').waitFor();
   assert.equal(await page.locator('.day-picker .calendar-value').textContent(),shortDay(today));
   assert.deepEqual(await headerStyle(),financeStyle);
+  assert.deepEqual(await buttonLayout(),financeButtons);
+  assert.equal(await page.locator('.topbar h1').textContent(),'健康');
+  assert.equal(await moduleBadge.innerHTML(),healthBadge);
+  assert.equal(await page.locator('.topbar-actions [aria-label="账本"] svg').innerHTML(),financeBadge);
   assert.equal(await page.locator('[data-account]').count(),0);
   const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
 
@@ -536,6 +553,11 @@ try {
     await form.getByRole('button',{name:'发送',exact:true}).click();
   }
   await page.locator('.topbar-actions [data-open-ai]').click();
+  await moduleBadge.waitFor();
+  assert.equal(await page.locator('.topbar h1').textContent(),'AI 助手');
+  assert.deepEqual(await buttonLayout(),financeButtons);
+  assert.equal(await moduleBadge.innerHTML(),aiIcon);
+  assert.equal(await page.locator('.topbar-actions [aria-label="账本"] svg').innerHTML(),financeBadge);
   assert.equal(await access.isVisible(),false);
   assert.ok(await form.locator('[name=allowRead]').isChecked());
   await openAssistantSettings();
@@ -634,7 +656,7 @@ try {
   await page.getByRole('button',{name:'合成新食品'}).waitFor();
 
   // Both modules use the same assistant and the same previously imported key.
-  await page.getByRole('link',{name:'财务',exact:true}).click();
+  await page.getByRole('link',{name:'账本',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.day-picker .calendar-value'));
   assert.equal(await page.locator('.topbar-actions [data-open-ai] svg').innerHTML(),aiIcon);
   await page.getByRole('button',{name:'打开设置',exact:true}).click();
@@ -643,7 +665,7 @@ try {
   await access.waitFor();
   await closeAssistantSettings();
   await page.waitForFunction(()=>!location.hash);
-  await page.getByRole('link',{name:'财务',exact:true}).click();
+  await page.getByRole('link',{name:'账本',exact:true}).click();
   await page.locator('.topbar-actions [data-open-ai]').click();await chat.waitFor();
   assert.equal(await access.isVisible(),false);
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
@@ -893,7 +915,7 @@ try {
   assert.equal(calls.length,callsBeforeKeyRemoval);
   await closeAssistantSettings();
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
-  await page.getByRole('link',{name:'财务',exact:true}).click();
+  await page.getByRole('link',{name:'账本',exact:true}).click();
   assert.equal(Number((await page.locator('.balance-value').textContent()).replace(/[^0-9.\-]/g,'')),assistantBalance);
   console.log('PASS assistant balance lookup matches the finance card and sends only the total');
   console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');

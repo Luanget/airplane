@@ -1,5 +1,4 @@
 .assistant-shell { width:min(100%,780px); min-height:100dvh; margin:0 auto }
-.assistant-shell .brand-row h1 { font-size:clamp(18px,5.5vw,24px); white-space:nowrap }
 .assistant-workspace { padding-bottom:calc(12px + var(--safe-bottom)) }
 .assistant-demo { margin:2px 0 6px; color:var(--muted); font-size:12px }
 .assistant-settings-sheet > .modal-head { position:sticky; top:-12px; z-index:2; background:var(--bg) }
@@ -141,9 +140,6 @@
 .assistant-conversation .chat-composer { border-top:1px solid var(--line); padding-top:8px }
 .assistant-workspace .chat-attach { flex:none }
 @media (max-width:390px) {
- .assistant-shell .topbar { gap:8px }
- .assistant-shell .topbar-actions { gap:6px }
- .assistant-shell .brand-row { gap:6px }
  .assistant-conversation { padding:10px }
  .assistant-start { padding:12px 0 }
  .assistant-examples { gap:6px }

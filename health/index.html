@@ -8,6 +8,7 @@
   <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)">
   <meta name="description" content="Airplane 健康模块：离线记录饮食、体重、运动与库存。">
   <link rel="manifest" href="../manifest.webmanifest">
+  <meta name="apple-mobile-web-app-title" content="Airplane">
   <link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
   <title>Airplane · 健康</title>
   <link rel="stylesheet" href="../styles.css">
@@ -18,7 +19,7 @@
   <div data-shell class="app-shell">
     <header class="topbar">
       <div>
-        <div class="brand-row"><span class="brand-mark" data-shell-icon="plane"></span><h1>Airplane</h1></div>
+        <div class="brand-row"><span class="brand-mark" data-shell-icon="health"></span><h1>健康</h1></div>
         <div class="month-switcher day-picker">
           <button type="button" data-day-step="-1" class="month-step month-step-prev" data-shell-icon="chevron" aria-label="前一天"></button>
           <label class="day-picker-value"><span class="sr-only">查看日期</span><input id="report-date" type="date" data-short-date></label>
@@ -27,7 +28,7 @@
       </div>
       <div class="topbar-actions">
         <a class="icon-button" href="../assistant/" data-open-ai data-shell-icon="sparkles" aria-label="AI 助手" title="AI 助手"></a>
-        <a class="icon-button" data-module-link data-shell-icon="wallet" href="../index.html" title="财务" aria-label="财务"></a>
+        <a class="icon-button" data-module-link data-shell-icon="wallet" href="../index.html" title="账本" aria-label="账本"></a>
         <button class="icon-button" id="health-settings" data-shell-icon="settings" type="button" aria-label="打开设置"></button>
       </div>
     </header>
