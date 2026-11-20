@@ -72,11 +72,12 @@ try {
   assert.equal(await page.getByText('去导入',{exact:true}).count(),0);
   await page.locator('#health-settings').click();
   const fixtureDay=await page.locator('#report-date').inputValue();
+  const otherFixtureDay=fixtureDay.slice(0,8)+(fixtureDay.endsWith('-01')?'02':'01');
   const synthetic={tables:{
     food_events:['早餐','午餐（外食）','晚餐（计划）'].map((meal,i)=>({
-      日期:i===2?fixtureDay.slice(0,8)+(fixtureDay.endsWith('-01')?'02':'01'):fixtureDay,
+      日期:i===2?otherFixtureDay:fixtureDay,
       餐次:meal,'食物/饮品':'合成菜单'+i,'份量/重量':'1 份',状态:'计划'
-    })),
+    })).concat({日期:fixtureDay,餐次:'晚餐','食物/饮品':'合成同日晚餐',状态:'已吃','份量/重量':'1234 g',时间:'19:58',kcal:15}),
     weight_events:[
       {日期:'2020-01-01',数值:80,纳入趋势:'是'},
       {日期:'2020-01-04',数值:79.7,纳入趋势:'是'}
@@ -121,7 +122,11 @@ try {
   await page.getByRole('region',{name:'晚餐',exact:true}).getByText('合成菜单2').waitFor();
   await page.getByRole('heading',{name:'饮食',exact:true}).waitFor();
   assert.equal(await page.locator('#local-events .diet-status').count(),3);
-  assert.equal(await page.locator('#local-events .diet-nutrients').count(),0);
+  const mealOrder=await page.locator('#local-events .day-group').filter({hasText:'合成同日晚餐'}).locator('.meal-group h3').allTextContents();
+  assert.deepEqual(mealOrder,['晚餐','午餐','早餐']);
+  const dietRow=page.getByRole('button',{name:/合成同日晚餐/});
+  assert.equal(await dietRow.locator('.diet-nutrients span').count(),5);
+  assert.doesNotMatch(await dietRow.innerText(),/1234|19:58/);
   await page.getByRole('link',{name:'体重趋势',exact:true}).click();
   await page.getByRole('heading',{name:'体重趋势',exact:true}).waitFor();
   const detailChart=page.getByRole('slider',{name:'查看历史晨重'});
@@ -229,6 +234,7 @@ try {
   const calls=[],testKey='sk-fixture-browser-only';
   const batchText='盘点合成新食品为 90g，补记 43 元午餐，再查更新后的库存';
   let resumeAttempts=0;
+  let firstPhotoAttempts=0;
   let releaseDelayed,markDelayed;
   const delayedStarted=new Promise(resolve=>{markDelayed=resolve;});
   const aiIcon=await page.locator('.topbar-actions [data-open-ai] svg').innerHTML();
@@ -244,6 +250,19 @@ try {
     assert.ok(!content[0].text.includes('synthetic legacy entry'));
     assert.ok(!content[0].text.includes('private synthetic'));
     calls.push({...input,photo:content[1]?.image_url});
+    if(input.text==='识别合成两张照片'){
+      assert.equal(content.length,2);
+      assert.equal(content[1].type,'input_image');
+      const photoIndex=Number(body.instructions.match(/照片中的第 (\d) 张/)?.[1]);
+      assert.ok([1,2].includes(photoIndex));
+      if(photoIndex===1&&++firstPhotoAttempts===1)
+        return route.fulfill({status:503,headers,json:{error:{code:'synthetic'}}});
+      const item={sku:null,name:'合成库存',amount:1,unit:'包',action:'eat',stockSource:photoIndex===1?'inventory':'one_off',
+        packageSize:null,packageUnit:null,basisAmount:1,basisUnit:'包',
+        nutrients:{kcal:100,protein:5,carbs:10,fat:3,sodium:30},uncertainty:'合成照片估值',weighing:null};
+      return route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',
+        text:JSON.stringify({reply:'已识别合成图 '+photoIndex+'。',proposal:{mode:'entry',date:null,result:{note:'',items:[item]}}})}]}]}});
+    }
     if(input.text==='模拟额度不足'){
       return route.fulfill({status:429,headers:{...headers,'Access-Control-Expose-Headers':'X-Request-ID','X-Request-ID':'req_fixture'},
         json:{error:{code:'insufficient_quota'}}});
@@ -309,6 +328,7 @@ try {
     }
     const isPlan=input.text.includes('规划'),stock=input.text.includes('入库'),finance=input.text.includes('28 元');
     const item={sku:'fixture',name:stock?'合成新食品':'合成餐点',action:stock?'add':'eat',amount:120,unit:'g',packageSize:null,packageUnit:null,
+      ...(isPlan?{}:{stockSource:'one_off'}),
       basisAmount:100,basisUnit:'g',nutrients:{kcal:100,protein:10,carbs:10,fat:3,sodium:10},uncertainty:'合成测试估值',weighing:null};
     let proposal={mode:isPlan?'plan':'entry',date:null,result:{note:'供测试',items:[item]}};
     if(finance)proposal={mode:'finance',date:null,result:{note:'',entry:{type:'expense',amount:28,date:input.date,note:'午餐',categoryId:'餐饮'}}};
@@ -469,10 +489,42 @@ try {
   await batchSummary.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('已按分类查看本月支出。',{exact:true}).waitFor();
   assert.equal(await ledger(),savedBatch);
+  const twoImages=await page.evaluate(()=>['red','blue'].map(color=>{
+   const canvas=document.createElement('canvas');canvas.width=canvas.height=40;
+   const paint=canvas.getContext('2d');paint.fillStyle=color;paint.fillRect(0,0,40,40);
+   return canvas.toDataURL('image/png').split(',')[1];
+  }));
+  const beforePhotos=await foodCount();
+  await form.locator('[type=file]').setInputFiles(twoImages.map((base64,i)=>({
+   name:'image-'+i+'.png',mimeType:'image/png',buffer:Buffer.from(base64,'base64')
+  })));
+  await say('识别合成两张照片');
+  const photos=chat.getByRole('region',{name:'照片识别结果'});
+  await photos.getByRole('button',{name:'核对照片 2'}).click();
+  assert.equal(await foodCount(),beforePhotos);
+  assert.equal(await review.getByLabel('匹配食品').inputValue(),'');
+  await review.getByRole('button',{name:'确认保存'}).click();
+  await photos.getByText(/记录已保存/).waitFor();
+  assert.equal(await foodCount(),beforePhotos+1);
+  assert.equal(await page.evaluate(async()=>{
+    const state=await (await import('../health/storage.mjs')).readState();
+    return (await import('../health/core.mjs')).inventoryWithMoves(state).find(row=>row.id==='fixture').qty;
+  }),4);
+  await photos.getByRole('button',{name:'重试照片 1'}).click();
+  await photos.getByRole('button',{name:'核对照片 1'}).click();
+  assert.equal(await review.getByLabel('匹配食品').inputValue(),'fixture');
+  await review.getByRole('button',{name:'放弃'}).click();
+  await photos.getByText(/已放弃候选/).waitFor();
+  assert.equal(await photos.getByRole('button',{name:/核对照片/}).count(),0);
+  const photoCalls=calls.filter(call=>call.text==='识别合成两张照片');
+  assert.equal(photoCalls.length,3);
+  assert.notEqual(photoCalls[0].photo,photoCalls[1].photo);
+  assert.equal(photoCalls[0].photo,photoCalls[2].photo);
+  console.log('PASS separate photos, individual retry, candidate confirmation and same-name one-off intake');
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
-  assert.equal(calls.length,17);
+  assert.equal(calls.length,20);
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();
   console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');
@@ -598,6 +650,7 @@ try {
   await chat.getByRole('region',{name:'账本摘要'}).getByText(/牛奶 · 250 g/).waitFor();
   await chat.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('记录里有燕麦 60 g、牛奶 250 g。',{exact:true}).waitFor();
+  await chat.getByText('查看本次饮食记录 · 2 条',{exact:true}).waitFor();
   await page.reload();
   await chat.getByText('查看本次饮食记录 · 2 条',{exact:true}).click();
   await chat.locator('.chat-source').getByText(/牛奶 · 250 g/).waitFor();
@@ -647,7 +700,9 @@ try {
   await page.getByRole('link',{name:'健康',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#hero-goal').textContent.includes('kcal'));
   await page.getByRole('button',{name:'前一天'}).click();
-  await page.locator('#local-events').getByRole('button',{name:/牛奶.*300\.0 g.*186\.0 kcal/}).waitFor();
+  const milkRow=page.locator('#local-events').getByRole('button',{name:/牛奶.*186\.0 kcal/});
+  await milkRow.waitFor();
+  assert.doesNotMatch(await milkRow.innerText(),/300\.0 g|08:15/);
   await page.getByRole('link',{name:'AI 助手'}).click();
   const demoLedger=()=>page.evaluate(async()=>{
     const {demoWorkspace}=await import('../ai/demo.mjs'),{localDate}=await import('../calendar.mjs');

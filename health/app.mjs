@@ -9,7 +9,7 @@ import {shellGlyphs} from '../shell.mjs';
 import {checkForAppUpdate} from '../updates.mjs';
 import {newState,normalizeLedger,validateAppState,DEFAULT_SETTINGS,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,addDays,isStockReference,importedDietTargets,carbReference} from './core.mjs';
 import {readState,saveState,exportState} from './storage.mjs';
-import {mealOrder,timelineGroup,eatingState,compactPortion,stockName,stockUnit,stockGroups} from './presentation.mjs';
+import {mealOrder,timelineGroup,eatingState,stockName,stockUnit,stockGroups} from './presentation.mjs';
 import {renderWeightChart} from './weight-chart.mjs';
 const $=id=>document.getElementById(id);
 const E=s=>String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -137,7 +137,7 @@ function monthGroups(types,month){
  return groups;
 }
 function dietRow(row){
- const status=eatingState(row),time=normalizeClock(row.time),portion=compactPortion(row.portion);
+ const status=eatingState(row);
  const badge={plan:'计划',cancelled:'已取消',unknown:'待确认'}[status];
  const nutrients=[['kcal','','kcal'],['protein','蛋白','g'],['fat','脂肪','g'],['carbs','碳水','g'],['sodium','钠','mg']];
  const values=status==='actual'?nutrients.map(([key,label,unit])=>{
@@ -147,7 +147,6 @@ function dietRow(row){
  }).join(''):'';
  return `<button type="button" class="tx-row tx-row-interactive health-tx-row diet-row" data-edit-id="${E(row.id)}" data-type="food">
   <span class="diet-main"><span class="tx-title">${E(row.name)}</span>${badge?`<span class="diet-status">${badge}</span>`:''}</span>
-  ${portion||time?`<span class="diet-meta">${portion?`<span>${E(portion)}</span>`:''}${time?`<span>${time}</span>`:''}</span>`:''}
   ${values?`<span class="diet-nutrients">${values}</span>`:''}
  </button>`;
 }

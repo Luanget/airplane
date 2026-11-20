@@ -40,7 +40,7 @@ function field(parent, title, options={}) {
 }
 const pairs = values => values.map(x=>[x,x]);
 function editRow(container, original, state, mode) {
-  const c = structuredClone(original);
+  const {stockSource,...c} = structuredClone(original);
   const block = document.createElement('fieldset');
   const legend = document.createElement('legend');
   const keep = document.createElement('input');
@@ -49,7 +49,7 @@ function editRow(container, original, state, mode) {
   const desc = document.createElement('p'); desc.textContent=c.uncertainty; block.append(desc);
   const grid = document.createElement('div'); grid.className='form-grid'; block.append(grid);
   const stock = inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s));
-  if (!c.sku) {
+  if (!c.sku&&(c.action!=='eat'||stockSource==='inventory')) {
     const exact=stock.filter(s=>s.name.trim()===c.name.trim());
     if (exact.length===1) c.sku=exact[0].id;
   }

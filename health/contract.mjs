@@ -17,6 +17,9 @@ const item = object({
   weighing:optional(object({before:number(100000,0.001),after:optional(number(100000)),tare:optional(number(100000))}))
 });
 export const resultSchema = object({note:string(400), items:list(item)});
+const chatEntrySchema=object({note:string(400),items:list(object({
+  ...item.properties,stockSource:choice('one_off','inventory')
+}))});
 export const activitySchema=object({note:string(400),activity:optional(object({
  name:string(80,1),km:optional(number(1000)),minutes:optional(number(1440)),kcal:optional(number(20000)),
  energyKind:choice('activity','total'),quality:choice('estimated','device'),includedInBase:choice('yes','no'),
@@ -66,7 +69,7 @@ const chatInput=object({mode:choice('chat'),text:string(1600),date:string(10,10)
 const proposal=(mode,result)=>object({mode:choice(mode),date:optional(string(10,10)),result});
 const ledgerOperations=[
   proposal('finance',financeSchema),proposal('activity',activitySchema),
-  proposal('purchase',purchaseSchema),proposal('entry',resultSchema),proposal('plan',resultSchema),
+  proposal('purchase',purchaseSchema),proposal('entry',chatEntrySchema),proposal('plan',resultSchema),
   proposal('food_edit',object({name:string(80,1),amount:number(100000,0.001),unit,
    meal:optional(string(24,1)),time:optional(string(5,5))})),
   proposal('inventory',object({operation:choice('count','shopping'),name:string(80,1),quantity:number(100000),unit}))

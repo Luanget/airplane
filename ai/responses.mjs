@@ -20,6 +20,8 @@ export const chatInstructions = `你是 Airplane 助手，用简短中文。只�
 finance 提取一笔已发生的人民币收支，金额必须来自用户，分类用简短中文。purchase 提取一张实付采购，总额和分项价格按原文，未知用 null。activity 区分单次运动和设备全天消耗。
 健康库存只登记供食用的食品、饮品、食材和调味料。日用品、器材和其他非食品只作为财务记账或消费分析，不能生成健康入库、盘点、补货、食品标签或饮食候选。混合采购只把食品行放进健康采购，不能把全单金额当作食品小计。消费习惯分析调用 read_expense_summary，按用户给的日期及维度分析；未给日期时可用本月截至设备日期，并说明分析范围。
 entry 为饮食、标签或明确库存增减；plan 为未实际摄入的搭配。sku 填 null，保留原单位，克与毫升不能互换；营养按明确的基准估算并简述来源，未知用 null。给出两次毛重或空包装重时填 weighing 原始值。标签只用 label。
+entry 的每项都填 stockSource。用户未交代来源、明确是单买单吃、外食、试吃时填 one_off，只记本次摄入。没有更多份量信息时，明确的单件食品可用 1 个或 1 份，不猜实测克重。用户明确从自家库存食用、或上下文已确认扣库来源时才填 inventory。仅名字相同不能推断出自库存。明确采购入库或盘点按原规则处理。
+库存标注含瓶或包装毛重时，沿用毛重口径。皮重未知时不要把毛重当作可吃净重。有同包装前后称重时，按原始值提交称重字段。
 inventory 用 count 表示盘点总量，用 shopping 表示要采购的总量。skill 仅在用户要求修改习惯时给出可直接替换的完整个人偏好。
 查某天吃了什么时调用 read_food_history，按设备日期理解昨天等说法，无法确定就追问。更正原饮食份量用 food_edit，返回食物、份量和单位，仅在用户明示时填写日期、餐次或 HH:mm；引用上一轮时日期用 null，由本机定位。更正不可用 entry 新增。不推测历史日期，finance 未指定日期用今天。`;
 const ledgerTool={type:'function',name:'read_ledger',strict:true,parameters:ledgerReadSchema,
@@ -31,7 +33,7 @@ const expenseSummaryTool={type:'function',name:'read_expense_summary',strict:tru
 const readTools=[ledgerTool,foodHistoryTool,expenseSummaryTool];
 const toolScopes={read_food_history:'foods',read_expense_summary:'expense_summary'};
 
-export function modelRequest(data,{model=MODEL,maxOutput,effort='none',skill='',allowRead=false,continuation=[],applied=[]}={}) {
+export function modelRequest(data,{model=MODEL,maxOutput,effort='none',skill='',allowRead=false,continuation=[],applied=[],photoPosition}={}) {
   if (!validInput(data)) throw Error('请检查文字、照片和所选字段');
   const finance=data.mode==='finance';
   const task={
@@ -40,6 +42,8 @@ export function modelRequest(data,{model=MODEL,maxOutput,effort='none',skill='',
     purchase:['purchase_candidate',purchaseSchema,'提取一张实付订单的食品和份量。总金额、分项价格只按用户明示，未知为 null。食品动作使用 add。'],
   }[data.mode];
   const prompt=data.mode==='chat'?chatInstructions:finance?financeInstructions:instructions+(task?'\n'+task[2]:'');
+  const photoInstruction=data.photo&&photoPosition?
+    '\n本次仅识别一组照片中的第 '+photoPosition.index+' 张（共 '+photoPosition.total+' 张）。只输出当前图可支持的候选。若消息按张编号，只采用当前张对应的要求，避免把同组其他照片的内容重复记入。':'';
   const {photo,mode,text,date}=data;
   const chat=data.mode==='chat';
   const fields=chat?{text,date,history:data.history,...(skill?{skill:skill.slice(0,320)}:{}),...(applied.length?{applied}:{})}:finance?{mode,text,date}:{mode,text};
@@ -53,7 +57,7 @@ export function modelRequest(data,{model=MODEL,maxOutput,effort='none',skill='',
     tools:readTools,parallel_tool_calls:false,tool_choice:'auto'
   }:{};
   const outputLimit=maxOutput??(chat?null:4096);
-  return {model, instructions:prompt, input, ...tools,store:false,
+  return {model, instructions:prompt+photoInstruction, input, ...tools,store:false,
     service_tier:'default',reasoning:{effort},...(outputLimit===null?{}:{max_output_tokens:outputLimit}),
     text:{format:{type:'json_schema',name:task?.[0]??(finance?'transaction_candidate':'food_candidates'),strict:true,schema:task?.[1]??(finance?financeSchema:resultSchema)}}};
 }

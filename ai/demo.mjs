@@ -35,12 +35,20 @@ export async function demoWorkspace(today){
  }
  const workspace={account,finance,readHealth:()=>readState(account),saveHealth:(next,expected)=>saveState(next,expected,account),
   readSkill:()=>finance.getItem('skill')??'',saveSkill:value=>finance.setItem('skill',value)};
- async function respond(input,{allowRead,continuation=[],applied=[]}={}){
+ async function respond(input,{allowRead,continuation=[],applied=[],photoPosition}={}){
   const latest=continuation.at(-1);
   const text=input.text;
   const focus=inventoryWithMoves(await workspace.readHealth()).find(s=>text.includes(s.name)),name=focus?.name??'燕麦';
   const quantity=Number(text.match(/(\d+(?:\.\d+)?)\s*(?:g|克)/i)?.[1]??300);
   const propose=(reply,mode,result)=>({reply,proposal:{mode,result,date:null}});
+  if(input.photo){
+   const name=photoPosition?.index%2===0?'牛奶':'燕麦',unit='g';
+   const item={name,sku:null,stockSource:'one_off',action:'eat',amount:name==='牛奶'?180:60,unit,
+    packageSize:null,packageUnit:null,basisAmount:100,basisUnit:unit,
+    nutrients:{kcal:name==='牛奶'?62:375,protein:null,carbs:null,fat:null,sodium:null},
+    uncertainty:'固定演示候选。',weighing:null};
+   return propose('演示候选为'+name+'。','entry',{note:'',items:[item]});
+  }
   const call=(scope,query='')=>({call:{args:{scope,query},item:{call_id:'demo-'+scope}}});
   if(text.includes('消费习惯')){
    if(allowRead&&!latest)return {call:{args:{scope:'expense_summary',start:input.date.slice(0,7)+'-01',end:input.date,groupBy:'category'},item:{call_id:'demo-expense-summary'}}};

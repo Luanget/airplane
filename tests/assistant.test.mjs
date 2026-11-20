@@ -185,7 +185,7 @@ test('food and purchase response schemas preserve all recognized items',()=>{
  const items=Array.from({length:11},(_,i)=>({...part,name:'样品 '+i,weighing:null}));
  const input={mode:'chat',text:'识别清单',date,photo:null,history:[]};
  const schema=modelRequest(input).text.format.schema;
- assert.ok(matches(schema,{reply:'已识别，等待核对',proposal:{mode:'entry',date,result:{note:'',items}}}));
+ assert.ok(matches(schema,{reply:'已识别，等待核对',proposal:{mode:'entry',date,result:{note:'',items:items.map(item=>({...item,stockSource:'one_off'}))}}}));
  assert.ok(matches(schema,{reply:'已识别，等待核对',proposal:{mode:'purchase',date,result:{note:'',total:null,
   items:items.map(row=>({...row,action:'add',itemCost:null}))}}}));
 });

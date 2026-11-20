@@ -84,6 +84,7 @@
             </div>
           </section>
           <div class="chat-transcript" role="log" aria-label="对话" aria-live="polite"></div>
+          <div class="photo-results" data-photo-results></div>
           <section class="card assistant-read" aria-label="账本摘要" hidden>
             <h3>发送账本摘要</h3><p data-read-label></p><pre data-read-preview></pre>
             <div class="chat-actions"><button type="button" class="secondary-button" data-skip-read>取消本轮</button><button type="button" class="primary-button" data-share-read>发送摘要</button></div>
@@ -93,7 +94,7 @@
         <form class="chat-composer">
           <label><span class="sr-only">消息</span><textarea name="text" rows="2" maxlength="1600" placeholder="可以补充日期、数量或金额……"></textarea></label>
           <div class="chat-actions">
-            <label class="secondary-button chat-attach">添加照片<input name="image" type="file" accept="image/*"></label>
+            <label class="secondary-button chat-attach">添加照片<input name="image" type="file" accept="image/*" multiple></label>
             <span data-attachment></span><button type="button" class="text-button" data-remove-photo hidden>移除照片</button>
             <button type="submit" class="primary-button">发送</button>
           </div>
@@ -102,7 +103,7 @@
           <button type="button" class="text-button" data-retry-follow-up hidden>重试后续请求</button>
           <section class="assistant-send-confirmation" id="assistant-consent" aria-labelledby="assistant-consent-title" hidden>
             <h3 id="assistant-consent-title">首次发送给 OpenAI</h3>
-            <p>会发送本轮消息、所选照片、设备日期、个人 Skill 和近期对话。账本摘要仍需单独确认。</p>
+            <p>会发送本轮消息、设备日期、个人 Skill 和近期对话。已选照片逐张识别。账本摘要仍需单独确认。</p>
             <div class="chat-actions"><button type="button" class="secondary-button" data-cancel-send>返回编辑</button><button type="button" class="primary-button" data-approve-send>确认发送</button></div>
           </section>
         </form>
