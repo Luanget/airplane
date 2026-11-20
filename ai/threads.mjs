@@ -17,7 +17,8 @@ export function threadBook(store){
     active={id:crypto.randomUUID(),title:role==='user'?text.slice(0,24):'新对话',messages:[]};
     threads.unshift(active);
    }
-   active.messages.push({role,text,carry});save();
+   active.messages.push({role,text,carry});
+   active.updatedAt=new Date().toISOString();save();
   }
  };
 }

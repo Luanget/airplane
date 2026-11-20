@@ -263,6 +263,12 @@ try {
   assert.equal(calls.length,7);
   await chat.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('合成库存还有 4 包。',{exact:true}).waitFor();
+  await chat.getByRole('button',{name:'新对话',exact:true}).click();
+  await chat.getByRole('button',{name:'对话记录',exact:true}).click();
+  const history=chat.getByRole('region',{name:'对话记录',exact:true});
+  await history.getByRole('button',{name:/^合成餐点/}).click();
+  await history.waitFor({state:'hidden'});
+  await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
   await chat.getByText('API Key',{exact:true}).click();
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await say('未授权的请求');

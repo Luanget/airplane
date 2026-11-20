@@ -48,8 +48,21 @@
       </aside>
       <section class="assistant-conversation card" aria-label="助手对话">
         <div class="assistant-toolbar">
-          <label><span class="sr-only">切换对话</span><select data-threads aria-label="切换对话"></select></label>
-          <button type="button" class="text-button" data-new>新对话</button>
+          <div class="assistant-toolbar-row">
+            <button type="button" class="assistant-thread-trigger" data-toggle-threads aria-expanded="false" aria-controls="assistant-history">
+              <span class="assistant-thread-icon" data-shell-icon="list"></span>
+              <span data-thread-title>对话记录</span>
+              <span class="assistant-thread-arrow" data-shell-icon="chevron"></span>
+            </button>
+            <button type="button" class="assistant-new-thread" data-new><span data-shell-icon="plus"></span>新对话</button>
+          </div>
+          <section id="assistant-history" class="assistant-history" aria-label="对话记录" hidden>
+            <label class="assistant-history-search" hidden>
+              <span class="sr-only">查找对话</span><input type="search" placeholder="查找对话" maxlength="80">
+            </label>
+            <ul data-thread-list></ul>
+            <p data-thread-empty hidden></p>
+          </section>
         </div>
         <div class="chat-thread">
           <section class="assistant-start">

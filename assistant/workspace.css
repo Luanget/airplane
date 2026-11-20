@@ -21,9 +21,42 @@
  grid-area:conversation; display:grid; grid-template-rows:auto minmax(180px,1fr) auto;
  height:min(850px,calc(100dvh - 76px)); min-height:520px; padding:16px; min-width:0
 }
-.assistant-toolbar { display:flex; justify-content:space-between; align-items:center; gap:8px; border-bottom:1px solid var(--line) }
-.assistant-toolbar label { min-width:0 }
-.assistant-toolbar select { max-width:min(46vw,270px); padding:6px; border:1px solid var(--line); border-radius:10px; background:var(--surface-2); min-height:38px }
+.assistant-toolbar { padding-bottom:8px; border-bottom:1px solid var(--line) }
+.assistant-toolbar-row { display:flex; justify-content:space-between; align-items:center; gap:8px }
+.assistant-thread-trigger,.assistant-new-thread {
+ display:flex; align-items:center; gap:8px; min-height:44px; padding:5px 10px; border-radius:13px;
+ font-size:14px; font-weight:700
+}
+.assistant-thread-trigger { min-width:0; text-align:left }
+.assistant-thread-trigger:hover,.assistant-thread-trigger[aria-expanded=true] { background:var(--surface-2) }
+.assistant-thread-trigger [data-thread-title] { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.assistant-thread-icon,.assistant-thread-arrow,.assistant-new-thread span { display:grid; place-items:center; flex:none; color:var(--muted) }
+.assistant-thread-icon svg,.assistant-new-thread svg { width:18px; height:18px }
+.assistant-thread-arrow svg { width:15px; height:15px; transform:rotate(90deg) }
+.assistant-thread-trigger[aria-expanded=true] .assistant-thread-arrow svg { transform:rotate(-90deg) }
+.assistant-new-thread { color:var(--text); background:var(--green-soft); flex:none }
+.assistant-new-thread span { color:var(--green) }
+.assistant-history {
+ margin-top:6px; padding:5px; background:var(--surface-2); border:1px solid var(--line); border-radius:14px;
+ max-height:202px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin
+}
+.assistant-history ul { display:grid; gap:2px; list-style:none; margin:0; padding:0 }
+.assistant-history li button {
+ width:100%; display:flex; align-items:center; gap:8px; min-height:44px; padding:8px 10px;
+ border:1px solid transparent; border-radius:10px; text-align:left; font-size:14px
+}
+.assistant-history li button:hover { background:var(--surface) }
+.assistant-history li button[aria-current=true] { background:var(--surface); border-color:var(--line) }
+.assistant-history li button[aria-current=true]::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green); flex:none }
+.assistant-history strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600 }
+.assistant-history time { white-space:nowrap; margin-inline-start:auto; color:var(--muted); font-size:12px }
+.assistant-history p { margin:8px 10px; color:var(--muted); font-size:13px }
+.assistant-history-search { display:block; margin:4px 4px 6px }
+.assistant-history-search input {
+ width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:10px;
+ background:var(--surface); color:var(--text); font-size:16px
+}
+.assistant-toolbar button:focus-visible,.assistant-history input:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
 .assistant-start { padding:18px 0 }
 .assistant-start h2 { margin:0 0 6px; font-size:21px }
 .assistant-start p { color:var(--muted); margin:0 0 12px; font-size:14px; line-height:1.55 }

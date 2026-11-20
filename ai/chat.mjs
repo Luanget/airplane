@@ -1,4 +1,4 @@
-import {localDate} from '../calendar.mjs';
+import {displayDay,localDate} from '../calendar.mjs';
 import {hydrateShell} from '../shell.mjs';
 import {installUpdates} from '../updates.mjs';
 import {resumePurchaseUpdate} from '../health/purchase-sync.mjs';
@@ -20,7 +20,9 @@ const respond=demo?workspace.respond:recognize;
 const $=selector=>document.querySelector(selector);
 const transcript=$('.chat-transcript'),thread=$('.chat-thread'),review=$('.chat-review'),start=$('.assistant-start');
 const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
-const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]'),threadSelect=$('[data-threads]');
+const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]');
+const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
+const historySearch=historyPanel.querySelector('input');
 const readPanel=$('.assistant-read'),share=$('[data-share-read]'),skip=$('[data-skip-read]');
 const skillForm=$('#assistant-skill form'),skillOutput=skillForm.querySelector('output');
 const keyPanel=$('#assistant-key-panel');
@@ -54,9 +56,42 @@ function updateContext(){
 }
 function syncThreads(){
  const active=book.current;
- threadSelect.replaceChildren(new Option(active?'选择对话':'新对话',''),...book.list().map(t=>new Option(t.title,t.id)));
- threadSelect.value=active?.id??'';
+ const title=$('[data-thread-title]'),empty=$('[data-thread-empty]');
+ title.textContent=active?.title??'对话记录';
+ historyButton.setAttribute('aria-label',active?'对话记录，当前 '+active.title:'对话记录');
+ const threads=[...book.list()].sort((a,b)=>String(b.updatedAt??'').localeCompare(String(a.updatedAt??'')));
+ historySearch.closest('label').hidden=threads.length<5;
+ const query=historySearch.value.trim().toLowerCase();
+ const rows=threads.filter(row=>row.title.toLowerCase().includes(query)).map(row=>{
+  const li=document.createElement('li'),button=document.createElement('button'),name=document.createElement('strong');
+  button.type='button';name.textContent=row.title;button.append(name);
+  if(row.id===active?.id)button.setAttribute('aria-current','true');
+  const last=new Date(row.updatedAt);
+  if(Number.isFinite(last.getTime())){
+   const time=document.createElement('time');time.dateTime=row.updatedAt;
+   const day=localDate(last);time.textContent=day===localDate()?'今天':displayDay(day);button.append(time);
+  }
+  button.onclick=()=>{
+   if(busy||saving)return;
+   try{book.select(row.id);openHistory(false);tell('');renderThread();historyButton.focus();}
+   catch(err){report(err);}
+  };
+  li.append(button);return li;
+ });
+ empty.textContent=query?'没有符合的对话':'还没有对话记录';
+ empty.hidden=rows.length>0;
+ historyList.replaceChildren(...rows);
 }
+function openHistory(open){
+ historyPanel.hidden=!open;historyButton.setAttribute('aria-expanded',String(open));
+ if(!open)historySearch.value='';
+ syncThreads();
+}
+historyButton.onclick=()=>openHistory(historyPanel.hidden);
+historySearch.oninput=syncThreads;
+historyPanel.addEventListener('keydown',event=>{
+ if(event.key==='Escape'){event.stopPropagation();openHistory(false);historyButton.focus();}
+});
 function bubble(role,text){
  const p=document.createElement('p');p.className='chat-bubble '+role;p.textContent=text;
  transcript.append(p);thread.scrollTop=thread.scrollHeight;
@@ -73,7 +108,9 @@ function resetPhoto(){
 }
 function lock(){
  const waiting=busy||saving||!!pending;
- send.disabled=waiting;newChat.disabled=busy||saving;threadSelect.disabled=busy||saving;
+ send.disabled=waiting;newChat.disabled=busy||saving;historyButton.disabled=busy||saving;
+ for(const button of historyList.querySelectorAll('button'))button.disabled=busy||saving;
+ historySearch.disabled=busy||saving;
  composer.elements.text.disabled=waiting;
  composer.elements.image.disabled=waiting;
  composer.elements.allowRead.disabled=waiting;
@@ -100,11 +137,7 @@ skillForm.onsubmit=e=>{
 };
 renderThread();refreshSkill();
 newChat.onclick=()=>{
- try{book.start();tell('');renderThread();}
- catch(err){report(err);}
-};
-threadSelect.onchange=()=>{
- try{book.select(threadSelect.value);tell('');renderThread();}
+ try{book.start();openHistory(false);tell('');renderThread();}
  catch(err){report(err);}
 };
 clearPhoto.onclick=resetPhoto;
