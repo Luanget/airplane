@@ -153,17 +153,49 @@ function syncValue(input,control){
  control.trigger.disabled=input.matches(':disabled');
 }
 
-export function bindDayPicker(root,onSelect){
+function bindDaySwipe(area,step){
+ let gesture=null;
+ area.addEventListener('touchstart',event=>{
+  if(event.touches.length!==1||event.target.closest?.('[role=slider], input, textarea, select, [contenteditable], .inline-picker-panel')){
+   gesture=null;return;
+  }
+  const {identifier,clientX,clientY}=event.touches[0];
+  gesture={identifier,x:clientX,y:clientY,horizontal:false};
+ },{passive:true});
+ area.addEventListener('touchmove',event=>{
+  if(!gesture)return;
+  const touch=event.touches[0];
+  if(event.touches.length!==1||touch.identifier!==gesture.identifier){gesture=null;return;}
+  if(!gesture.horizontal){
+   const x=Math.abs(touch.clientX-gesture.x),y=Math.abs(touch.clientY-gesture.y);
+   if(y>=12&&y*1.25>=x){gesture=null;return;}
+   if(x<12)return;
+   gesture.horizontal=true;
+  }
+  if(event.cancelable)event.preventDefault();
+ },{passive:false});
+ area.addEventListener('touchend',event=>{
+  const start=gesture;gesture=null;
+  if(!start?.horizontal||event.touches.length)return;
+  const touch=event.changedTouches[0];
+  if(touch?.identifier!==start.identifier)return;
+  const dx=touch.clientX-start.x,dy=touch.clientY-start.y;
+  if(Math.abs(dx)>=56&&Math.abs(dx)>Math.abs(dy)*1.25)step(dx<0?1:-1);
+ },{passive:true});
+ area.addEventListener('touchcancel',()=>{gesture=null;},{passive:true});
+}
+
+export function bindDayPicker(root,onSelect,{swipeArea}={}){
  const input=root.querySelector('input[type=date]');
  input.required=true;
  input.addEventListener('change',()=>{if(input.value)onSelect(input.value);});
- for(const button of root.querySelectorAll('[data-day-step]')){
-  button.onclick=()=>{
-   const date=new Date(input.value+'T12:00:00');
-   if(!Number.isFinite(date.getTime()))return;
-   date.setDate(date.getDate()+Number(button.dataset.dayStep));
-   onSelect(localDate(date));
-  };
- }
+ const step=delta=>{
+  const date=new Date(input.value+'T12:00:00');
+  if(!Number.isFinite(date.getTime()))return;
+  date.setDate(date.getDate()+delta);
+  onSelect(localDate(date));
+ };
+ for(const button of root.querySelectorAll('[data-day-step]'))button.onclick=()=>step(Number(button.dataset.dayStep));
+ if(swipeArea)bindDaySwipe(swipeArea,step);
  return date=>{input.value=date;syncCalendarFields(root);};
 }

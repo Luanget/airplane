@@ -170,6 +170,50 @@ try {
   assert.equal(await weightChart.evaluate(plot=>getComputedStyle(plot).outlineStyle),'none');
   assert.notEqual(await page.locator('#weight-chart-value').evaluate(readout=>getComputedStyle(readout).boxShadow),'none');
   assert.match(page.url(),/health\/\?test=offline$/);
+  const deviceTouch=await ctx.newCDPSession(page);
+  await deviceTouch.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+  async function swipe(startX,startY,endX,endY){
+    const point=(x,y)=>({x,y});
+    await deviceTouch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[point(startX,startY)]});
+    for(let step=1;step<=4;step++){
+      await deviceTouch.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[
+        point(startX+(endX-startX)*step/4,startY+(endY-startY)*step/4)
+      ]});
+    }
+    await deviceTouch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+  }
+  const dateInput=page.locator('#report-date');
+  const selectHealthDate=date=>dateInput.evaluate((input,value)=>{
+    input.value=value;
+    input.dispatchEvent(new Event('change',{bubbles:true}));
+  },date);
+  await weightChart.scrollIntoViewIfNeeded();
+  const chartArea=await weightChart.boundingBox();
+  const chartY=chartArea.y+chartArea.height/2;
+  await swipe(chartArea.x+chartArea.width*.9,chartY,chartArea.x+chartArea.width*.12,chartY);
+  assert.equal(await dateInput.inputValue(),fixtureDay);
+  assert.match(await weightChart.getAttribute('aria-valuetext'),/1月1日.*80\.0 kg/);
+  const hero=page.locator('.health-hero');
+  await hero.scrollIntoViewIfNeeded();
+  const heroArea=await hero.boundingBox(),heroY=heroArea.y+heroArea.height/2;
+  await selectHealthDate('2024-03-01');
+  await swipe(heroArea.x+50,heroY,heroArea.x+150,heroY);
+  assert.equal(await dateInput.inputValue(),'2024-02-29');
+  await swipe(heroArea.x+150,heroY,heroArea.x+50,heroY);
+  assert.equal(await dateInput.inputValue(),'2024-03-01');
+  await swipe(heroArea.x+50,heroY,heroArea.x+85,heroY);
+  assert.equal(await dateInput.inputValue(),'2024-03-01');
+  await selectHealthDate(fixtureDay);
+  await page.evaluate(()=>window.scrollTo(0,0));
+  const topHero=await hero.boundingBox();
+  await swipe(topHero.x+105,topHero.y+75,topHero.x+105,topHero.y-30);
+  await page.waitForFunction(()=>scrollY>0);
+  assert.equal(await dateInput.inputValue(),fixtureDay);
+  await deviceTouch.send('Emulation.setTouchEmulationEnabled',{enabled:false});
+  await deviceTouch.detach();
+  await page.evaluate(()=>window.scrollTo(0,0));
+  console.log('PASS touch day swipes cross month boundaries without intercepting chart scrubs or vertical scrolling');
+
   await page.getByRole('region',{name:'早餐',exact:true}).getByText('合成菜单0').waitFor();
   await page.getByRole('region',{name:'午餐',exact:true}).getByText('合成菜单1').waitFor();
   await page.getByRole('region',{name:'晚餐',exact:true}).getByText('合成菜单2').waitFor();

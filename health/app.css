@@ -6,6 +6,7 @@ body[data-module="health"] main h1 { font-size:23px }
 body[data-module="health"] h2 { font-size:17px }
 body[data-module="health"] fieldset { min-width:0 }
 .view.hidden { display:none }
+#view-overview { touch-action:pan-y pinch-zoom }
 .section-title-row { margin:4px 2px 14px }
 .panel-title, .hero-label, .hero-foot, .cycle-meta {
   display:flex; align-items:center; justify-content:space-between; gap:10px

@@ -513,7 +513,7 @@ function attach(){
  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
  const writeDay=bindDayPicker(document.querySelector('.day-picker'),date=>{
   selectedDate=date;writeDay(date);render();
- });
+ },{swipeArea:$('view-overview')});
  writeDay(selectedDate);
  $('inventory-search').addEventListener('input',()=>renderInventory());
  function selectTrendView(){
