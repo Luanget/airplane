@@ -3,13 +3,11 @@ import {cents,newPurchaseId,recordPurchase} from './purchases.mjs';
 import {saveSku} from './inventory.mjs';
 import {inventoryWithMoves,recordEvent,numeric,validDate} from './core.mjs';
 import {confirmItems, resolveItem} from './candidates.mjs';
-import {matches, resultSchema, activitySchema, purchaseSchema, units, validInput, nutrientKeys, assistantInput} from './contract.mjs';
-import {recognize} from '../ai/client.mjs';
+import {matches, resultSchema, activitySchema, purchaseSchema, units, nutrientKeys} from './contract.mjs';
 
-const $ = id => document.getElementById(id);
 const labels = {kcal:'热量 kcal',protein:'蛋白质 g',carbs:'碳水 g',fat:'脂肪 g',sodium:'钠 mg'};
 const actions = {eat:'已吃',plan:'计划',add:'入库',remove:'出库',label:'保存标签'};
-async function jpeg(file) {
+export async function jpeg(file) {
   if (!file || !file.type.startsWith('image/') || file.size > 16*1024*1024) throw Error('请选择 16 MB 以内的照片');
   const url = URL.createObjectURL(file), img = new Image();
   try {
@@ -119,84 +117,41 @@ function approvedPurchase(state,items,date,total) {
  recordPurchase(next,{id:newPurchaseId(),date,items:rows,totalCents:cents(total),financeId:null,note:'AI 候选采购'});
  return next;
 }
-export function attachAssistant({getState,commit,today}) {
-  const form = $('assistant-form'), review = $('candidate-form'), status = $('assistant-status');
-  form.hidden=false;
-  let prepared=null,rows=[],version=0,busy=false,baseRevision=0,resultMode=null,readActivity=null,totalField=null;
-  const send=$('send-request');
-  function reset() {
-    version++; prepared=null; rows=[]; review.hidden=true;
-    $('candidate-extra').replaceChildren();$('candidate-list').replaceChildren(); $('send-preview').hidden=true;
-    $('send-fields').textContent=''; $('send-image').removeAttribute('src');
-    status.textContent='';
-  }
-  form.oninput=()=>{ reset(); $('photo-label').hidden=form.elements.mode.value!=='photo'; };
-  $('discard').onclick=reset;
-  $('health-ai-sheet').addEventListener('close',reset);
-  form.onsubmit=async e=>{
-    e.preventDefault(); reset();
-    const id=version;
-    try {
-      const mode=form.elements.mode.value;
-      const photo=mode==='photo' ? await jpeg(form.elements.image.files[0]) : null;
-      if (id!==version) return;
-      const data=assistantInput({mode,text:form.elements.text.value.trim(),photo});
-      if (!validInput(data)) throw Error('请检查输入文字、库存参数或照片');
-      baseRevision=getState().revision ?? 0;
-      const {photo:picture,text}=data;
-      $('send-description').textContent='OpenAI 会收到本次输入'+(photo?'和下方的压缩照片':'')+'。';
-      $('send-fields').textContent=text;
-      $('send-image').hidden=!picture; if (picture) $('send-image').src=picture;
-      prepared=data; $('send-preview').hidden=false; send.disabled=busy;
-    } catch (err) { status.textContent=err.message; }
-  };
-  send.onclick=async ()=>{
-    if (busy || !prepared) return;
-    if (!navigator.onLine) { status.textContent='当前离线，可继续手动记录'; return; }
-    const id=version, data=prepared;
-    busy=true; send.disabled=true; status.textContent='正在生成候选…';
-    try {
-      const result=await recognize(data);
-      if (id!==version) return;
-      const schema=data.mode==='activity'?activitySchema:data.mode==='purchase'?purchaseSchema:resultSchema;
-      if (!matches(schema,result)) throw Error('服务返回的候选格式无效');
-      resultMode=data.mode;
-      prepared=null; $('send-preview').hidden=true; $('send-image').removeAttribute('src'); $('send-fields').textContent='';
-      if(!result.activity&&!result.items?.length){status.textContent=result.note||'没有识别出可确认的记录';return;}
-      const extra=$('candidate-extra');
-      if(resultMode==='activity')readActivity=editActivity(extra,result.activity);
-      if(resultMode==='purchase')totalField=field(extra,'订单实付总额 ¥（待核对）',{type:'number',value:result.total});
-      $('candidate-note').textContent=result.note; review.elements.date.value=today();syncCalendarFields(review);
-      rows=(result.items??[]).map(c=>editRow($('candidate-list'),c,getState(),data.mode));
-      review.hidden=false; status.textContent='候选已生成，核对后可入账。';
-    } catch (err) { if (id===version) status.textContent=err.name==='TypeError'?'无法连接 AI 服务，请检查设备网络':err.message; }
-    finally { busy=false; send.disabled=false; }
-  };
-  review.onsubmit=async e=>{
-    e.preventDefault();
-    const button=review.querySelector('[type=submit]');
-    if (button.disabled) return; button.disabled=true;
-    try {
-      if ((getState().revision ?? 0)!==baseRevision) throw Error('账本已变更，请重新生成预览');
-      const date=review.elements.date.value;
-      if(!validDate(date))throw Error('请选择记录日期');
-      let next;
-      if(resultMode==='activity'){
-        const activity=readActivity();
-        if(!matches(activitySchema,{activity,note:''}))throw Error('请检查活动名称及数值');
-        next=structuredClone(getState());
-        recordEvent(next,'activities',{...activity,date,includedInBase:activity.energyKind==='activity'&&activity.includedInBase==='yes'});
-      }else{
-        const items=rows.map(read=>read()).filter(Boolean);
-        const purchase=resultMode==='purchase';
-        const total=purchase?numeric(totalField.value):null;
-        if(!items.length||!matches(purchase?purchaseSchema:resultSchema,{items,note:'',...(purchase?{total}:{})}))
-          throw Error('请勾选候选并核对食品、份量和营养字段');
-        next=purchase?approvedPurchase(getState(),items,date,total):confirmItems(getState(),items,date,review.elements.meal.value);
+export function healthReview(container, proposal, state, today) {
+  const {mode,result}=proposal;
+  if(!result.activity&&!result.items?.length)return null;
+  const heading={activity:'运动记录',purchase:'采购与入库',plan:'饮食计划',entry:'饮食或库存记录'}[mode];
+  const title=document.createElement('h3');title.textContent=heading;container.append(title);
+  if(result.note){const note=document.createElement('p');note.textContent=result.note;container.append(note);}
+  const dates=document.createElement('div');dates.className='form-grid';container.append(dates);
+  const date=field(dates,'日期',{type:'date',value:validDate(proposal.date)?proposal.date:today});
+  date.required=true;
+  const meal=result.items?.some(c=>['eat','plan'].includes(c.action))?
+    field(dates,'餐次',{choices:pairs(['早餐','午餐','晚餐','加餐']),value:mode==='plan'?'晚餐':'午餐'}):null;
+  const extras=document.createElement('div');extras.className='form-grid';container.append(extras);
+  const activities=mode==='activity'?editActivity(extras,result.activity):null;
+  const totalField=mode==='purchase'?field(extras,'实付总额 ¥',{type:'number',value:result.total}):null;
+  if(totalField)totalField.required=true;
+  const rows=(result.items??[]).map(c=>editRow(container,c,state,mode));
+  syncCalendarFields(container);
+  return {
+    label:mode==='plan'?'保存为饮食计划':mode==='purchase'?'确认采购入库':'确认保存',
+    apply(current) {
+      if(!validDate(date.value))throw Error('请选择记录日期');
+      if(mode==='activity'){
+        const activity=activities();
+        if(!matches(activitySchema,{activity,note:''}))throw Error('请核对活动名称和数值');
+        const next=structuredClone(current);
+        recordEvent(next,'activities',{...activity,date:date.value,includedInBase:activity.energyKind==='activity'&&activity.includedInBase==='yes'});
+        return next;
       }
-      await commit(next,resultMode==='purchase'?'采购已入库，可在库存页关联支出':'已保存确认的记录');
-      reset(); form.reset(); $('photo-label').hidden=true; status.textContent='已保存确认的记录';$('health-ai-sheet').close();
-    } catch (err) { status.textContent=err.message; }
-    finally { button.disabled=false; }
+      const items=rows.map(read=>read()).filter(Boolean);
+      const purchase=mode==='purchase',total=purchase?numeric(totalField.value):null;
+      if(!items.length||!matches(purchase?purchaseSchema:resultSchema,{items,note:'',...(purchase?{total}:{})}))
+        throw Error('请勾选候选并核对份量和营养字段');
+      if(purchase&&total===null)throw Error('请填写订单实付总额');
+      return purchase?approvedPurchase(current,items,date.value,total):confirmItems(current,items,date.value,meal?.value??'午餐');
+    },
+    saved:mode==='purchase'?'采购已入库，可在库存页关联支出。':mode==='plan'?'已保存饮食计划。':'记录已保存。'
   };
 }

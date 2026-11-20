@@ -125,7 +125,7 @@ export default {async fetch(req,env) {
     if(!usageOnly){
       if(req.headers.get('Content-Type')?.split(';')[0].trim()!=='application/json')return fail(415,'需要 JSON');
       try {input=await readJson(req);}catch{return fail(400,'请求过大或 JSON 无效');}
-      if(!validInput(input))return fail(400,'输入字段或图片无效');
+      if(input?.mode==='chat'||!validInput(input))return fail(400,'输入字段或图片无效');
     }
     const object = env.QUOTA.get(env.QUOTA.idFromName('airplane-global-budget-v1'));
     const res = await object.fetch('https://quota.internal/run',{method:'POST',body:JSON.stringify({id,input,usageOnly})});

@@ -1,11 +1,10 @@
-import {displayDay,localDate as dateNow,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
+import {bindDayPicker,displayDay,localDate as dateNow,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
 import {attachShopping} from './shopping.mjs';
 import {attachPurchases} from './purchase-ui.mjs';
 import {attachCombinedBackup,combinedBackup} from './backup.mjs';
 import {addBatch,convertCookingWeight,measuredGrams,saveSku,splitBatch,stockAlerts} from './inventory.mjs';
 import {units} from './contract.mjs';
 import {manualStockQty,basis} from './candidates.mjs';
-import {attachAssistant} from './assistant.mjs';
 import {checkForAppUpdate} from '../updates.mjs';
 import {newState,normalizeLedger,validateAppState,APP_SCHEMA,numeric,round,zero,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,addDays} from './core.mjs';
 import {readState,saveState,exportState} from './storage.mjs';
@@ -75,7 +74,7 @@ function renderOverview(){
  text('hero-remaining',cals!==null&&!intake.incomplete.includes('kcal')?(goal-cals>=0?`剩余 ${fmt(goal-cals,0)} kcal`:`超出 ${fmt(cals-goal,0)} kcal`):'摄入数据待补');progress('cal-progress',known?cals/goal*100:0);
  for (const [id,key,unit] of [['protein-stat','protein','g'],['fat-stat','fat','g'],['carbs-stat','carbs','g'],['sodium-stat','sodium','mg']])text(id,known?`${fmt(intake.totals[key],key==='sodium'?0:1)} ${unit}`:'—');
  text('protein-goal',`目标 ${state.settings.proteinMin}–${state.settings.proteinMax}g`);text('fat-goal',`目标 ≥${state.settings.fatMin}g`);text('sodium-goal',`参考 ${state.settings.sodiumTarget} mg`);
- const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,2)} kg`:'—');text('weight-date',weights.last?weights.last.date:'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,2)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>0?'+':''}${fmt(weights.delta,2)} kg`:'需至少8次有效晨重');renderWeightChart(weights.points.slice(-14));
+ const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,2)} kg`:'—');text('weight-date',weights.last?displayDay(weights.last.date):'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,2)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>0?'+':''}${fmt(weights.delta,2)} kg`:'需至少8次有效晨重');renderWeightChart(weights.points.slice(-14));
  text('cycle-title',state.settings.cycleDays===6?'六天减脂周期':state.settings.cycleDays+' 天减脂周期');
  const cycle=cycleForDate(state,selectedDate,today);text('cycle-range',`${displayDay(cycle.start)} — ${displayDay(cycle.end)} · ${cycle.closedDays}/${cycle.days}天已封账`);text('cycle-deficit',`${fmt(cycle.deficit)} kcal`);progress('cycle-progress',cycle.progress);text('cycle-pct',`目标完成 ${fmt(cycle.progress,1)}% / ${fmt(cycle.goal)} kcal`);text('cycle-equivalent',`理论脂肪当量 ${fmt(cycle.fatEquivalent,3)} kg`);text('cycle-note',cycle.unreported?`有 ${cycle.unreported} 天缺少有效进食记录，未按零摄入推算；消耗和外食热量均为估算。`:'已过日期根据现有记录自动封账。可补报更正，估算并不等于实测。');
  const entries=foodsForDay(state,selectedDate);const list=entries.slice(-12);
@@ -84,14 +83,14 @@ function renderOverview(){
  $('day-activity-list').innerHTML=ac.length?ac.map(a=>`<div class="event-row"><div class="event-main"><strong>${E(a.name)}</strong><small>${a.km===null?'':`${fmt(a.km,2)} km · `}${E(a.includedInBase?'包含在日常基线':'专项运动')}</small></div><span class="event-value">${a.kcal===null?'—':`${fmt(a.kcal)} kcal`}</span></div>`).join(''):'';
 }
 function renderWeightChart(points){
- const svg=$('weight-chart');if(!points.length){svg.innerHTML='<text x="25" y="95" fill="#8292a4" font-size="14">暂无有效晨重数据</text>';return;}
+ const svg=$('weight-chart');if(!points.length){svg.innerHTML='<text x="25" y="95" fill="var(--muted)" font-size="14">暂无有效晨重数据</text>';return;}
  const values=points.map(p=>p.kg),min=Math.floor(Math.min(...values)*2)/2-0.5,max=Math.ceil(Math.max(...values)*2)/2+0.5;
  const left=45,right=517,top=20,bottom=154,y=v=>bottom-(v-min)/(max-min)*(bottom-top),x=i=>left+((points.length===1?0.5:i/(points.length-1))*(right-left));
  const path=points.map((p,i)=>`${i?'L':'M'} ${x(i).toFixed(1)} ${y(p.kg).toFixed(1)}`).join(' ');
  const ticks=Array.from({length:4},(_,i)=>min+i*(max-min)/3);
- svg.innerHTML=ticks.map(t=>`<line x1="40" y1="${y(t)}" x2="526" y2="${y(t)}" stroke="#e4ebf3" stroke-dasharray="3 4"/><text x="4" y="${y(t)+4}" font-size="11" fill="#8190a5">${fmt(t,1)}</text>`).join('')+`<path d="${path}" fill="none" stroke="#4775e7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`+
- points.map((p,i)=>`<circle cx="${x(i)}" cy="${y(p.kg)}" r="${i===points.length-1?5:3.3}" fill="#fff" stroke="#4775e7" stroke-width="2"/>`).join('')+
- [0,Math.floor((points.length-1)/2),points.length-1].filter((v,i,a)=>a.indexOf(v)===i).map(i=>`<text x="${x(i)}" y="177" text-anchor="middle" fill="#8190a5" font-size="11">${E(points[i].date.slice(5))}</text>`).join('');
+ svg.innerHTML=ticks.map(t=>`<line x1="40" y1="${y(t)}" x2="526" y2="${y(t)}" stroke="var(--line)" stroke-dasharray="3 4"/><text x="4" y="${y(t)+4}" font-size="11" fill="var(--muted)">${fmt(t,1)}</text>`).join('')+`<path d="${path}" fill="none" stroke="var(--green)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`+
+ points.map((p,i)=>`<circle cx="${x(i)}" cy="${y(p.kg)}" r="${i===points.length-1?5:3.3}" fill="var(--surface)" stroke="var(--green)" stroke-width="2"/>`).join('')+
+ [0,Math.floor((points.length-1)/2),points.length-1].filter((v,i,a)=>a.indexOf(v)===i).map(i=>`<text x="${x(i)}" y="177" text-anchor="middle" fill="var(--muted)" font-size="11">${E(displayDay(points[i].date))}</text>`).join('');
 }
 function setDateDefaults(){document.querySelectorAll('form input[name=date]').forEach(el=>{if(!el.value)el.value=dateNow();});}
 const historyTypes={food:'foods',weight:'weights',activity:'activities'};
@@ -238,13 +237,13 @@ function bindForm(type,update,message){
 function attach(){
  const setState=next=>{state=next;rebuildFoodSelection();render();};
  const purchases=attachPurchases({getState:()=>state,commit,setState,notify:toast,switchTab,today:dateNow});
+ window.addEventListener('airplane:health-saved',e=>setState(e.detail));
  updatePurchases=purchases.render;
  updateShopping=attachShopping({getState:()=>state,commit,notify:toast,today:dateNow,openOrder:purchases.openOrder});
  attachCombinedBackup({getState:()=>state,setState:next=>{state=next;rebuildFoodSelection();render();},notify:toast,download});
  for(const select of document.querySelectorAll('[data-units]'))select.innerHTML=units.map(u=>`<option>${E(u)}</option>`).join('');
  document.querySelector('[data-nutrients]').innerHTML=NUTRIENTS.map((k,i)=>`<label>${['热量 kcal','蛋白质 g','碳水 g','脂肪 g','钠 mg'][i]}<input type="number" name="${k}" min="0" step="any"></label>`).join('');
 
- $('open-health-ai').onclick=()=>{$('health-ai-sheet').showModal();$('assistant-form').elements.text.focus();};
  $('add-health').onclick=openEntry;
  for(const type of Object.keys(historyTypes)) $(`${type}-form`).addEventListener('input',()=>dirtyEntries.add(type));
  $('health-settings').onclick=openSettings;
@@ -253,18 +252,15 @@ function attach(){
   const t=$('toast');
   if(d.contains(t))document.body.append(t);
  }));
- attachAssistant({getState:()=>state, commit, today:dateNow});
  $('check-update').onclick=()=>{
   $('health-settings-sheet').close();
   checkForAppUpdate(true);
  };
  document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
- const selectDay=date=>{
-  if(validDate(date)){selectedDate=date;$('report-date').value=date;switchTab('overview');}
- };
- $('report-date').addEventListener('change',e=>selectDay(e.target.value));
- $('prev-health-day').onclick=()=>selectDay(addDays(selectedDate,-1));
- $('next-health-day').onclick=()=>selectDay(addDays(selectedDate,1));
+ const writeDay=bindDayPicker(document.querySelector('.day-picker'),date=>{
+  selectedDate=date;$('history-date').value=date;writeDay(date);render();
+ });
+ writeDay(selectedDate);
  $('jump-import').addEventListener('click',openSettings);$('quick-record').addEventListener('click',openEntry);$('inventory-search').addEventListener('input',()=>renderInventory());
  $('history-date').onchange=renderRecord;
  $('local-events').onclick=e=>{

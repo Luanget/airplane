@@ -31,7 +31,11 @@ try {
   const page=await ctx.newPage();
   page.setDefaultTimeout(10000);
   const errors=[]; page.on('pageerror',err=>errors.push(String(err)));
-  page.on('dialog',dialog=>dialog.accept());
+  let rejectConsent=false;
+  page.on('dialog',dialog=>{
+    if(rejectConsent&&dialog.message().includes('给 OpenAI')){rejectConsent=false;return dialog.dismiss();}
+    return dialog.accept();
+  });
   await page.goto(base);
   await page.locator('[data-action="budget"]').first().click();
   await page.locator('#budgetInput').fill('1234');
@@ -51,9 +55,9 @@ try {
   old=false;
   await page.evaluate(async()=>{await (await navigator.serviceWorker.ready).update();});
   await page.locator('.update-banner-action').waitFor();
-  assert.equal(await page.locator('[data-account]').count(),0);
+  assert.equal(await page.locator('#finance-date').count(),0);
   await page.locator('.update-banner-action').click();
-  await page.locator('[data-account]').waitFor();
+  await page.locator('#finance-date').waitFor();
   assert.equal(await ledger(),before);
   assert.equal(await page.evaluate(()=>localStorage.getItem('airplane-pwa-recovery-v1')),before);
   await page.locator('#settingsButton').click();
@@ -116,95 +120,134 @@ try {
   await page.goto(base);
   await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
   console.log('PASS separate offline routes, local import, health persisted across reload');
-  const codes=[randomBytes(32).toString('hex'),randomBytes(32).toString('hex')];
-  async function unlock(url,code) {
-    await page.goto(url+'?private=1');await page.locator('#account-gate input').fill(code);
-    await page.locator('#account-gate button').click();
-    await page.locator('[data-shell]').waitFor();
-  }
-  await unlock(base,codes[0]); assert.equal(await page.getByText('synthetic legacy entry').count(),0);
-  await page.locator('#addButton').click();await page.locator('#txAmount').fill('5');
-  await page.locator('#txNote').fill('private synthetic');await page.locator('#txSubmit').click();
-  await unlock(base,codes[1]);assert.equal(await page.getByText('private synthetic').count(),0);
-  await unlock(base,codes[0]);await page.getByText('private synthetic',{exact:true}).waitFor();
-  assert.equal(await ledger(),before);
-  await unlock(base+'health/',codes[0]);
-  await page.locator('[data-tab="inventory"]').click();assert.equal(await page.locator('#inventory-list').getByText('合成库存',{exact:true}).count(),0);
+  const today=await page.locator('#finance-date').inputValue();
+  const shortDay=value=>Number(value.slice(5,7))+'月'+Number(value.slice(8))+'日';
+  const headerStyle=()=>page.locator('.topbar').evaluate(top=>{
+    const date=getComputedStyle(top.querySelector('.calendar-field'));
+    return [getComputedStyle(top.querySelector('h1')).fontSize,date.minHeight,date.borderWidth,date.color];
+  });
+  const financeStyle=await headerStyle();
+  assert.equal(await page.locator('.day-picker .calendar-value').textContent(),shortDay(today));
+  await page.getByRole('button',{name:'前一天'}).click();
+  assert.notEqual(await page.locator('#finance-date').inputValue(),today);
+  await page.getByRole('button',{name:'查看整月'}).click();
+  await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'选择月份'}).click();
+  await page.locator('#monthGrid').waitFor();
+  await page.locator('#modalSave').click();
+
+  // A legacy encrypted ledger is recoverable without switching the device ledger.
+  const code=randomBytes(32).toString('hex');
+  await page.evaluate(async({code,backup})=>{
+    const {accountKeys,privateAccount}=await import('./account.mjs');
+    await import('./vendor/nacl-fast.min.js');
+    const account=privateAccount(await accountKeys(code),globalThis.nacl,localStorage);
+    const ledger=structuredClone(backup.data);ledger.transactions[0].note='private synthetic';
+    account.finance.setItem('airplane-pwa-v1',JSON.stringify(ledger));
+  },{code,backup});
   await ctx.setOffline(false);
-  const calls=[];
-  const testKey='sk-fixture-browser-only';
-  const aiIcon=await page.locator('#open-health-ai svg').innerHTML();
+  await page.goto(base+'?private=1');
+  const legacy=page.locator('#legacy-export');
+  await legacy.locator('[name=code]').fill(code);
+  const migrated=page.waitForEvent('download');
+  await legacy.getByRole('button',{name:'下载统一备份'}).click();
+  const legacyCopy=JSON.parse(readFileSync(await (await migrated).path(),'utf8'));
+  assert.equal(legacyCopy.finance.data.transactions[0].note,'private synthetic');
+  assert.equal(await ledger(),before);
+  await legacy.getByRole('button',{name:'关闭'}).click();
+  await page.getByRole('link',{name:'健康',exact:true}).click();
+  await page.locator('.day-picker .calendar-value').waitFor();
+  assert.equal(await page.locator('.day-picker .calendar-value').textContent(),shortDay(today));
+  assert.deepEqual(await headerStyle(),financeStyle);
+  assert.equal(await page.locator('[data-account]').count(),0);
+  const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
+
+  const calls=[],testKey='sk-fixture-browser-only';
+  const aiIcon=await page.locator('[data-open-ai] svg').innerHTML();
   await ctx.route('https://api.openai.com/v1/responses',async route=>{
     const headers={'Access-Control-Allow-Origin':new URL(base).origin,'Access-Control-Allow-Headers':'authorization,content-type','Access-Control-Allow-Methods':'POST'};
     if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
     assert.equal(route.request().headers().authorization,'Bearer '+testKey);
     const body=route.request().postDataJSON(),content=body.input[0].content;
+    assert.equal(body.store,false);assert.equal(body.text.format.strict,true);
     const input=JSON.parse(content[0].text);
-    assert.deepEqual(Object.keys(input).sort(),input.mode==='finance'?['date','mode','text']:['mode','text']);
+    assert.deepEqual(Object.keys(input).sort(),['date','history','text']);
+    assert.ok(!content[0].text.includes('synthetic legacy entry'));
+    assert.ok(!content[0].text.includes('private synthetic'));
     calls.push({...input,photo:content[1]?.image_url});
-    const item={sku:null,name:'合成餐点',action:input.mode==='plan'?'plan':'eat',amount:120,unit:'g',packageSize:null,packageUnit:null,
+    const isPlan=input.text.includes('规划'),stock=input.text.includes('入库'),finance=input.text.includes('28 元');
+    const item={sku:'fixture',name:stock?'合成新食品':'合成餐点',action:stock?'add':'eat',amount:120,unit:'g',packageSize:null,packageUnit:null,
       basisAmount:100,basisUnit:'g',nutrients:{kcal:100,protein:10,carbs:10,fat:3,sodium:10},uncertainty:'合成测试估值',weighing:null};
-    const parsed=input.mode==='finance' ? {note:'',entry:{type:'expense',amount:28,date:input.date,note:'午餐',categoryId:'餐饮'}} : {note:'供测试',items:[item]};
+    let proposal={mode:isPlan?'plan':'entry',date:null,result:{note:'供测试',items:[item]}};
+    if(finance)proposal={mode:'finance',date:null,result:{note:'',entry:{type:'expense',amount:28,date:input.date,note:'午餐',categoryId:'餐饮'}}};
+    if(input.text==='帮我记账')proposal=null;
+    const parsed={reply:proposal?'可以核对这张候选卡。':'金额是多少？',proposal};
     await route.fulfill({json:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(parsed)}]}]},headers});
   });
-  const access=page.locator('#ai-keys');
-  async function importKey(fromFile=false){
-    if(fromFile)await access.locator('[type=file]').setInputFiles({name:'fixture.txt',mimeType:'text/plain',buffer:Buffer.from(testKey)});
-    else await access.locator('[name=key]').fill(testKey);
-    await access.locator('[type=submit]').click();
-    await access.waitFor({state:'hidden'});
+  const access=page.locator('#ai-keys'),chat=page.locator('#airplane-chat');
+  const form=chat.locator('.chat-composer'),review=chat.locator('.chat-review');
+  async function say(text){
+    await form.getByRole('textbox',{name:'消息'}).fill(text);
+    await form.getByRole('button',{name:'发送',exact:true}).click();
   }
-  await page.locator('#open-health-ai').click();
-  await page.locator('#health-ai-sheet [data-ai-key]').click();
-  await importKey(true);
-  const form=page.locator('#assistant-form');
-  await form.locator('textarea').fill('合成餐点');
-  await form.locator('[type=submit]').click();
-  await page.locator('#send-preview').waitFor();assert.equal(calls.length,0);
-  await page.locator('#send-request').click();await page.locator('#candidate-list legend').waitFor();
-  assert.equal(await page.locator('#local-events .event-row').count(),0);
-  await page.locator('#candidate-list').getByLabel('数量',{exact:true}).fill('90');
-  await page.locator('#candidate-form [type=submit]').click();
-  await page.locator('[data-tab="record"]').click();await page.locator('#local-events .event-row').waitFor(); assert.equal(calls.length,1);
-  await page.locator('[data-tab="overview"]').click();
-  assert.equal(await page.locator('#hero-calories').textContent(),'90');
-  await page.locator('#open-health-ai').click();await form.getByRole('combobox').selectOption('plan');
-  await form.locator('textarea').fill('用我描述的合成蔬菜规划一餐');
-  await form.locator('[type=submit]').click();await page.locator('#send-request').click();
-  await page.locator('#candidate-list legend').waitFor();assert.equal(calls[1].text,'用我描述的合成蔬菜规划一餐');
-  await page.locator('#candidate-form [type=submit]').click();
-  await page.waitForFunction(()=>document.querySelector('#candidate-form').hidden);
-  await page.locator('#open-health-ai').click();await form.getByRole('combobox').selectOption('photo');
+  await page.locator('[data-open-ai]').click();
+  await access.getByText('请导入 OpenAI API Key').waitFor();
+  assert.equal(await chat.isVisible(),false);assert.equal(calls.length,0);
+  await access.locator('[type=file]').setInputFiles({name:'fixture.txt',mimeType:'text/plain',buffer:Buffer.from(testKey)});
+  await access.locator('[type=submit]').click();await chat.waitFor();
+  rejectConsent=true;
+  await say('合成餐点');
+  assert.equal(calls.length,0);
+  await say('合成餐点');await review.waitFor();
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].history,[]);
+  assert.equal(await review.getByLabel('匹配食品').inputValue(),'');
+  const foodCount=()=>page.evaluate(async()=>(await (await import('./storage.mjs')).readState()).local.foods.length);
+  assert.equal(await foodCount(),1);
+  await review.getByLabel('数量',{exact:true}).fill('90');
+  await review.getByRole('button',{name:'确认保存'}).click();
+  await chat.getByText('记录已保存。',{exact:true}).waitFor();
+  await say('用我描述的合成蔬菜规划一餐');await review.waitFor();
+  assert.equal(calls[1].history[0].text,'合成餐点');
+  assert.equal(await review.getByRole('combobox',{name:/^动作/}).inputValue(),'plan');
+  await review.getByRole('button',{name:'保存为饮食计划'}).click();
+  await chat.getByText('已保存饮食计划。',{exact:true}).waitFor();
+  assert.equal(Number(await page.locator('#hero-calories').textContent()),caloriesBefore+90);
+
   const pixels=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=40;c.height=40;return c.toDataURL('image/png').split(',')[1];});
   await form.locator('[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(pixels,'base64')});
-  await form.locator('[type=submit]').click();await page.locator('#send-image').waitFor();
-  assert.equal(calls.length,2);await page.locator('#send-request').click();await page.locator('#candidate-list legend').waitFor();
-  assert.ok(calls[2].photo.startsWith('data:image/jpeg;base64,/9j/'));await page.locator('#discard').click();await page.locator('#health-ai-sheet [data-sheet-close]').click();
-  await page.locator('[data-tab="overview"]').click();assert.equal(await page.locator('#hero-calories').textContent(),'90');
-  await unlock(base+'health/',codes[1]); assert.equal(await page.locator('#hero-calories').textContent(),'—');
-  // Refuse malformed backups and detect stale writes in the actual IndexedDB.
-  await page.evaluate(async()=>{
-    const {readState,saveState}=await import('./storage.mjs');
-    const state=await readState(), expected=state.revision??0;
-    await saveState(state,expected);
-    try {await saveState(state,expected);}catch(err){if(err.message.includes('其他页面'))return;}
-    throw Error('stale write accepted');
-  });
-  await page.goto(base+'#model');
-  await access.getByText('请导入 OpenAI API Key').waitFor();await importKey();
-  assert.equal(await page.locator('#open-finance-ai svg').innerHTML(),aiIcon);
-  await page.locator('#open-finance-ai').click();
-  const finance=page.locator('#finance-assistant');
-  await finance.locator('textarea').fill('午餐 28 元');await finance.locator('[type=submit]').click();
-  await page.locator('#txSubmit').waitFor();
-  assert.equal(await ledger(),before);assert.equal(await page.locator('#txAmount').inputValue(),'28');
-  await page.locator('#txSubmit').click();assert.equal(JSON.parse(await ledger()).transactions.at(-1).amount,28);
-  assert.equal(calls.at(-1).mode,'finance');
-  await page.locator('#open-finance-ai').click();await finance.locator('[data-ai-key]').click();
-  await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();await access.locator('[data-close]').click();
-  await finance.locator('textarea').fill('未授权的请求');await finance.locator('[type=submit]').click();
-  await finance.getByText(/导入自己的密钥/).waitFor();
-  assert.equal(calls.length,4);await finance.locator('[data-close]').click();
+  await form.getByRole('button',{name:'发送',exact:true}).click();await review.waitFor();
+  assert.ok(calls[2].photo.startsWith('data:image/jpeg;base64,/9j/'));
+  await review.getByRole('button',{name:'放弃'}).click();
+  await say('合成新食品入库 120g');await review.waitFor();
+  await review.getByRole('button',{name:'确认保存'}).click();
+  await review.waitFor({state:'hidden'});
+  await say('帮我记账');await chat.getByText('金额是多少？').waitFor();
+  await say('午餐 28 元');await review.waitFor();
+  assert.equal(await ledger(),before);
+  await review.getByRole('button',{name:'确认记账'}).click();
+  await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
+  assert.equal(JSON.parse(await ledger()).transactions.at(-1).amount,28);
+  assert.ok(calls.at(-1).history.some(turn=>turn.text==='金额是多少？'));
+  assert.equal(calls.at(-1).photo,undefined);
+  await chat.getByRole('button',{name:'关闭'}).click();
+  await page.locator('[data-tab="inventory"]').click();
+  await page.getByRole('button',{name:'合成新食品'}).waitFor();
+
+  // Both modules use the same assistant and the same previously imported key.
+  await page.getByRole('link',{name:'财务',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.day-picker .calendar-value'));
+  assert.equal(await page.locator('[data-open-ai] svg').innerHTML(),aiIcon);
+  await page.locator('[data-open-ai]').click();await chat.waitFor();
+  assert.equal(await access.isVisible(),false);
+  await chat.getByRole('button',{name:'API Key'}).click();
+  await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
+  await access.getByRole('button',{name:'关闭'}).click();
+  await say('未授权的请求');await access.waitFor();
+  assert.equal(calls.length,6);
+  await access.getByRole('button',{name:'关闭'}).click();
+  await chat.getByRole('button',{name:'关闭'}).click();
+  console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');
 
   // Start in finance, reuse the saved expense, then start a separate purchase in inventory.
   await page.locator('#addButton').click();await page.locator('#txAmount').fill('18');
@@ -307,7 +350,7 @@ try {
   assert.equal(await quantity(),9);
   assert.equal(await shopping.locator('[type=number]').inputValue(),'4');
   console.log('PASS mirrored purchase correction, interrupted commit recovery, cancellation and shopping conversion');
-  console.log('PASS BYOK with private request payload, both purchase directions, duplicate protection and selective backup restore');
+  console.log('PASS both purchase directions, duplicate protection and selective backup restore');
   await page.goto(base);
   await page.evaluate(()=>{localStorage.setItem('airplane-pwa-v1','{');localStorage.setItem('airplane-pwa-recovery-v1','invalid');});
   await page.reload();await page.getByRole('button',{name:'导出原始副本'}).waitFor();
@@ -316,7 +359,7 @@ try {
   await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
   assert.deepEqual(JSON.parse(await ledger()),backup.data);
   assert.deepEqual(errors,[]);
-  console.log('PASS two encrypted accounts, three consent previews, editable candidates and local-only confirmation');
+  console.log('PASS damaged finance recovery and synthetic-only fixtures');
 } finally {
   await browser?.close();
   server.closeAllConnections();

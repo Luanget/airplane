@@ -59,17 +59,28 @@ const financeInput=object({mode:choice('finance'),text:string(600,1),date:string
 export const financeSchema=object({note:string(400),entry:optional(object({
   type,amount:number(100000000,0.01),categoryId:string(100,1),date:string(10,10),note:string(200)
 }))});
+const conversationTurn=object({role:choice('user','assistant'),text:string(1600,1)});
+const chatInput=object({mode:choice('chat'),text:string(1600),date:string(10,10),
+  photo:optional(string(720000)),history:list(conversationTurn,8)});
+const proposal=(mode,result)=>object({mode:choice(mode),date:optional(string(10,10)),result});
+export const chatSchema=object({reply:string(1600,1),proposal:{anyOf:[
+  {type:'null'},proposal('finance',financeSchema),proposal('activity',activitySchema),
+  proposal('purchase',purchaseSchema),proposal('entry',resultSchema),proposal('plan',resultSchema)
+]}});
+const jpegPhoto=photo=>photo?.startsWith('data:image/jpeg;base64,/9j/') &&
+  /^[A-Za-z0-9+/]+={0,2}$/.test(photo.slice(23));
 export function validFinanceEntry(entry,input) {
   return calendarDate(entry.date) && entry.date<=input.date
     && Math.abs(entry.amount*100-Math.round(entry.amount*100))<0.00001
     && (!input.categories.length || input.categories.some(c=>c.id===entry.categoryId && c.type===entry.type));
 }
 export function validInput(data) {
+  if (data?.mode==='chat') return matches(chatInput,data)&&calendarDate(data.date)
+    && (data.photo===null||jpegPhoto(data.photo)) && (!!data.text.trim()||!!data.photo);
   if (data?.mode==='finance') return matches(financeInput,data) && !!data.text.trim() && calendarDate(data.date);
   if (!matches(inputSchema,data)) return false;
   if (data.mode === 'photo') {
-    if (!data.photo?.startsWith('data:image/jpeg;base64,/9j/') ||
-        !/^[A-Za-z0-9+/]+={0,2}$/.test(data.photo.slice(23))) return false;
+    if (!jpegPhoto(data.photo)) return false;
   } else if (data.photo !== null) return false;
   return (data.mode==='photo'||!!data.text.trim()) && (data.mode==='plan'||data.summary===null);
 }

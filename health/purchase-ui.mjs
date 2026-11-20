@@ -52,7 +52,6 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
  }
  function openFinance(order){
   const url=new URL('../index.html',location.href);
-  if(account.id)url.searchParams.set('private','1');
   url.searchParams.set('purchase',order.id);
   location.href=url.href;
  }

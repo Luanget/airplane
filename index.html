@@ -18,39 +18,29 @@
 <link rel="stylesheet" href="./shared.css">
 </head>
 <body>
-  <form id="account-gate" hidden>
-    <h1>打开私人账本</h1>
-    <p>输入自己的账户码以解锁本机记录。离线也可使用。</p>
-    <label>账户码<input type="password" required minlength="64" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
-    <button type="submit">解锁</button> <a href="?">返回设备账本</a>
-    <output role="status"></output>
-  </form>
   <div data-shell class="app-shell">
     <header class="topbar">
       <div>
-        <div class="brand-row"><span class="brand-mark" data-icon="plane"></span><h1>Airplane</h1></div>
-        <div class="month-switcher"><button class="month-step month-step-prev" id="prevMonthButton" aria-label="上个月" data-icon="chevron"></button><button class="month-button" id="monthButton" aria-label="选择月份"></button><button class="month-step" id="nextMonthButton" aria-label="下个月" data-icon="chevron"></button></div>
+        <div class="brand-row"><span class="brand-mark" data-shell-icon="plane"></span><h1>Airplane</h1></div>
+        <div class="month-switcher day-picker">
+          <button type="button" data-day-step="-1" class="month-step month-step-prev" data-shell-icon="chevron" aria-label="前一天"></button>
+          <label class="day-picker-value"><span class="sr-only">查看日期</span><input id="finance-date" type="date" data-short-date></label>
+          <button type="button" data-day-step="1" class="month-step" data-shell-icon="chevron" aria-label="后一天"></button>
+        </div>
       </div>
       <div class="topbar-actions">
-        <a data-account class="account-link" href="?private=1">私人账本</a>
         <a class="icon-button" data-module-link data-shell-icon="health" href="./health/" aria-label="健康" title="健康"></a>
-        <button class="icon-button" id="settingsButton" aria-label="打开设置" data-icon="settings"></button>
+        <button class="icon-button" id="settingsButton" aria-label="打开设置" data-shell-icon="settings"></button>
       </div>
     </header>
 
-    <dialog class="modal bottom-sheet ai-dialog" id="finance-assistant" aria-labelledby="finance-ai-title"><div class="modal-grabber" aria-hidden="true"></div><form>
-      <div class="modal-head"><button type="button" class="cancel" data-close>关闭</button><h2 id="finance-ai-title">AI 记账</h2><button type="button" class="save" data-ai-key>API Key</button></div>
-      <label>描述一笔收支<textarea name="text" maxlength="600" rows="2" required placeholder="例如：昨天坐地铁花了 6 元"></textarea></label>
-      <p>OpenAI 会收到这句话和用于解析相对日期的当天日期。识别后可在本机核对这笔账。</p>
-      <output role="status"></output>
-      <button class="primary-button" type="submit">同意发送并识别</button></form></dialog>
     <main id="app" aria-live="polite"></main>
 
     <nav class="tabbar tabbar-with-ai" aria-label="主导航">
-      <div class="tab-group"><button data-tab="home" class="tab active"><span data-icon="home"></span><small>首页</small></button></div>
-      <button id="addButton" class="add-button" aria-label="记一笔"><span data-icon="plus"></span></button>
-      <div class="tab-group"><button data-tab="stats" class="tab"><span data-icon="chart"></span><small>统计</small></button>
-      <button id="open-finance-ai" class="tab ai-tab" type="button" aria-label="AI 助手"><span data-shell-icon="sparkles"></span><small>AI</small></button></div>
+      <div class="tab-group"><button data-tab="home" class="tab active"><span data-shell-icon="home"></span><small>首页</small></button></div>
+      <button id="addButton" class="add-button" aria-label="记一笔" data-shell-icon="plus"></button>
+      <div class="tab-group"><button data-tab="stats" class="tab"><span data-shell-icon="chart"></span><small>统计</small></button>
+      <button data-open-ai class="tab ai-tab" type="button" aria-label="AI 助手"><span data-shell-icon="sparkles"></span><small>AI</small></button></div>
     </nav>
   </div>
 

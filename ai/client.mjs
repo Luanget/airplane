@@ -17,27 +17,31 @@ export function installKeyDialog() {
  document.body.append(dialog);
  bindSheetSwipe(dialog);
  const form=dialog.querySelector('form'),out=form.querySelector('output');
+ let afterSave=null;
  form.onsubmit=async e=>{
   e.preventDefault();
   try{
    const file=form.elements.file.files[0],typed=form.elements.key.value.trim();
    if(file&&typed)throw Error('请选择一种导入方式');
    if(file?.size>8192)throw Error('请选择仅包含一行 Key 的文本文件');
-   await importKey(window.airplaneAccount,file?await file.text():typed);
+   await importKey(file?await file.text():typed);
+   const proceed=afterSave;
    form.reset();dialog.close();
+   proceed?.();
   }catch(err){out.textContent=err.message;}
  };
  form.querySelector('[data-remove]').onclick=async()=>{
-  try{await forgetKey(window.airplaneAccount);form.reset();out.textContent='已移除本机 Key';}
+  try{await forgetKey();form.reset();out.textContent='已移除本机 Key';}
   catch{out.textContent='无法移除 Key，请检查浏览器存储';}
  };
  form.querySelector('[data-close]').onclick=()=>dialog.close();
- dialog.onclose=()=>{form.reset();out.textContent='';};
- async function open(){
+ dialog.onclose=()=>{form.reset();out.textContent='';afterSave=null;};
+ async function open(onSaved=null){
   if(dialog.open)return;
+  afterSave=onSaved;
   dialog.showModal();
   try{
-   const current=await readKey(window.airplaneAccount);
+   const current=await readKey();
    if(dialog.open)out.textContent=current?'已导入 Key，可替换或移除':'请导入 OpenAI API Key';
   }catch{if(dialog.open)out.textContent='无法读取已保存的 Key，可重新导入';}
  }
@@ -47,7 +51,7 @@ export function installKeyDialog() {
 
 export async function recognize(input) {
  if(!navigator.onLine)throw Error('目前离线，手动录入仍可用');
- const key=await readKey(window.airplaneAccount);
+ const key=await readKey();
  if(!key)throw Error('请先点「API Key」导入自己的密钥');
  const request=modelRequest(input);
  const response=await fetch(OPENAI_URL,{method:'POST',cache:'no-store',credentials:'omit',

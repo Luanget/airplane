@@ -15,25 +15,17 @@
 <link rel="stylesheet" href="../shared.css">
 </head>
 <body data-module="health">
-  <form id="account-gate" hidden>
-    <h1>打开私人账本</h1>
-    <p>输入自己的账户码以解锁本机记录。离线也可使用。</p>
-    <label>账户码<input type="password" required minlength="64" maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
-    <button type="submit">解锁</button> <a href="?">返回设备账本</a>
-    <output role="status"></output>
-  </form>
   <div data-shell class="app-shell">
     <header class="topbar">
       <div>
         <div class="brand-row"><span class="brand-mark" data-shell-icon="plane"></span><h1>Airplane</h1></div>
-        <div class="month-switcher health-day-switcher">
-          <button type="button" id="prev-health-day" class="month-step month-step-prev" data-shell-icon="chevron" aria-label="前一天"></button>
-          <label class="health-date"><span class="sr-only">查看日期</span><input id="report-date" type="date" data-short-date></label>
-          <button type="button" id="next-health-day" class="month-step" data-shell-icon="chevron" aria-label="后一天"></button>
+        <div class="month-switcher day-picker">
+          <button type="button" data-day-step="-1" class="month-step month-step-prev" data-shell-icon="chevron" aria-label="前一天"></button>
+          <label class="day-picker-value"><span class="sr-only">查看日期</span><input id="report-date" type="date" data-short-date></label>
+          <button type="button" data-day-step="1" class="month-step" data-shell-icon="chevron" aria-label="后一天"></button>
         </div>
       </div>
       <div class="topbar-actions">
-        <a data-account class="account-link" href="?private=1">私人账本</a>
         <a class="icon-button" data-module-link data-shell-icon="wallet" href="../index.html" title="财务" aria-label="财务"></a>
         <button class="icon-button" id="health-settings" data-shell-icon="settings" type="button" aria-label="打开设置"></button>
       </div>
@@ -122,7 +114,7 @@
     <nav class="tabbar tabbar-with-ai" aria-label="主导航">
       <div class="tab-group"><button type="button" class="tab active" data-tab="overview"><span data-shell-icon="home"></span><small>今日</small></button><button type="button" class="tab " data-tab="record"><span data-shell-icon="list"></span><small>记录</small></button></div>
       <button type="button" class="add-button" id="add-health" aria-label="记一笔健康" data-shell-icon="plus"></button>
-      <div class="tab-group"><button type="button" class="tab " data-tab="inventory"><span data-shell-icon="bag"></span><small>库存</small></button><button type="button" class="tab " data-tab="trends"><span data-shell-icon="chart"></span><small>趋势</small></button><button type="button" class="tab ai-tab" id="open-health-ai" aria-label="AI 助手"><span data-shell-icon="sparkles"></span><small>AI</small></button></div>
+      <div class="tab-group"><button type="button" class="tab " data-tab="inventory"><span data-shell-icon="bag"></span><small>库存</small></button><button type="button" class="tab " data-tab="trends"><span data-shell-icon="chart"></span><small>趋势</small></button><button type="button" class="tab ai-tab" data-open-ai aria-label="AI 助手"><span data-shell-icon="sparkles"></span><small>AI</small></button></div>
     </nav>
     <dialog class="modal bottom-sheet health-sheet" id="health-entry" aria-labelledby="health-entry-title">
       <div class="modal-grabber" aria-hidden="true"></div>
@@ -161,7 +153,7 @@
     </dialog>
     <dialog class="modal bottom-sheet health-sheet" id="health-settings-sheet" aria-labelledby="health-settings-sheet-title">
       <div class="modal-grabber" aria-hidden="true"></div>
-      <div class="modal-head"><button type="button" class="cancel" data-sheet-close>关闭</button><h2 id="health-settings-sheet-title">数据与设置</h2><span></span></div>
+      <div class="modal-head"><button type="button" class="cancel" data-sheet-close>关闭</button><h2 id="health-settings-sheet-title">设置</h2><span></span></div>
         <section class="card panel"><h2>导入历史健康主账（可选）</h2><p class="muted">选择自己保存的 <code>health_tracker_*.json</code>，或直接从空账本开始。文件仅在当前浏览器解析，内容不会上传服务器。</p><input type="file" id="import-file" accept=".json,application/json" hidden><button id="choose-import" class="btn btn-primary">选择健康JSON</button><div id="import-preview" class="preview"></div><p class="form-hint">重新导入会替换现有健康模块数据。确认前会尝试先下载旧备份；请保存好备份文件。财务账本不会受到影响。</p></section>
         <section class="card panel"><h2>备份与恢复</h2><p class="muted">备份包括导入的历史数据、你在本模块新增的饮食、体重和运动、库存变化及设置。</p><div class="button-row"><button id="export-button" class="btn btn-secondary">导出健康备份JSON</button><input type="file" id="restore-file" accept=".json,application/json" hidden><button id="choose-restore" class="btn btn-secondary">恢复健康备份</button></div></section>
         <section class="card panel" id="combined-backup"><h2>统一备份与恢复</h2>
@@ -171,23 +163,14 @@
         </section>
         <section class="card panel"><h2>计算参数</h2><form id="settings-form"><div class="form-grid"><label>每日热量参考 kcal<input type="number" name="calorieTarget" min="500" max="8000" required></label><label>普通日TDEE kcal<input type="number" name="baselineTdee" min="1000" max="8000" required></label><label>每周期目标缺口 kcal<input type="number" name="cycleTarget" min="100" max="30000" required></label><label>周期天数<input type="number" name="cycleDays" min="1" max="31" required></label><label>蛋白质下限 g<input type="number" name="proteinMin" min="0" step="any" required></label><label>蛋白质上限 g<input type="number" name="proteinMax" min="0" step="any" required></label><label>脂肪下限 g<input type="number" name="fatMin" min="0" step="any" required></label><label>钠参考 mg<input type="number" name="sodiumTarget" min="0" step="any" required></label><label>周期锚点<input type="date" name="cycleAnchor" required></label></div><label>饮食偏好 / 规划规则<input name="preferences" maxlength="300" placeholder="常做的菜、忌口、可用时间"></label><button class="btn btn-secondary" type="submit">保存计算参数</button></form></section>
         <section class="card panel"><h2>数据状态</h2><div id="import-status" class="muted">尚未导入历史数据</div></section>
-        <section class="card panel"><h2>隐私与更新</h2><p>设备账本由当前浏览器配置文件共享。多人共用设备时，请各自使用私人账本。AI 使用你导入到本机的 OpenAI Key。</p><button type="button" class="btn btn-secondary" data-ai-key>管理 API Key</button> <button id="check-update" class="btn btn-secondary">检查程序更新</button></section>
+        <div class="section-head"><h2>安装与保护</h2></div>
+        <section class="card settings-section">
+          <button id="check-update" class="setting-row" type="button"><span class="mini-icon" data-shell-icon="download"></span><span class="setting-copy"><span class="setting-title">程序更新</span><span class="setting-sub">检查本地 PWA 更新</span></span><span class="chevron" data-shell-icon="chevron"></span></button>
+          <button type="button" class="setting-row" data-ai-key><span class="mini-icon" data-shell-icon="sparkles"></span><span class="setting-copy"><span class="setting-title">管理 API Key</span><span class="setting-sub">使用自己的 OpenAI Key</span></span><span class="chevron" data-shell-icon="chevron"></span></button>
+        </section>
 
     </dialog>
-    <dialog class="modal bottom-sheet health-sheet" id="health-ai-sheet" aria-labelledby="health-ai-sheet-title">
-      <div class="modal-grabber" aria-hidden="true"></div>
-      <div class="modal-head"><button type="button" class="cancel" data-sheet-close>关闭</button><h2 id="health-ai-sheet-title">AI 助手</h2><button type="button" class="save" data-ai-key>API Key</button></div>
-          <form id="assistant-form" class="card entry-fields">
-            <label>用途<select name="mode"><option value="entry">文字录入</option><option value="activity">运动识别</option><option value="purchase">采购识别</option><option value="photo">照片与标签</option><option value="plan">推荐下一餐</option></select></label>
-            <label>食物或要求<textarea name="text" rows="2" maxlength="600" placeholder="例如：鸡胸 245g、两包面、牛奶喝了 533g"></textarea></label>
-            <label id="photo-label" hidden>选择食物或营养标签照片<input type="file" name="image" accept="image/*"></label>
-            <button type="submit" class="btn btn-secondary">预览要发送的数据</button>
-          </form>
-          <div id="send-preview" hidden><h3>发送预览</h3><p id="send-description"></p><pre id="send-fields"></pre><img id="send-image" hidden alt="本次发送的压缩照片"><button id="send-request" class="btn btn-primary">同意发送并识别</button></div>
-          <p id="assistant-status" role="status" aria-live="polite"></p>
-          <form id="candidate-form" class="card entry-fields" hidden><h3>核对候选</h3><p id="candidate-note"></p><div class="form-grid"><label>记录日期<input type="date" name="date" required></label><label>餐次<select name="meal"><option>午餐</option><option>晚餐</option><option>早餐</option><option>加餐</option></select></label></div><div id="candidate-extra"></div><div id="candidate-list"></div><button class="btn btn-primary" type="submit">确认入账并更新库存</button> <button class="btn btn-text" id="discard" type="button">放弃</button></form>
 
-    </dialog>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="../boot.mjs"></script>

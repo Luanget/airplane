@@ -31,6 +31,9 @@ export function syncCalendarFields(root=document){
    input.before(field);field.append(display,input);
    const sync=()=>syncValue(input,display);
    input.addEventListener('input',sync);input.addEventListener('change',sync);
+   input.addEventListener('click',()=>{
+    if(matchMedia('(pointer:fine)').matches)try{input.showPicker?.();}catch{}
+   });
   }
   syncValue(input,field.querySelector('.calendar-value'));
  }
@@ -38,4 +41,18 @@ export function syncCalendarFields(root=document){
 function syncValue(input,display){
  display.textContent=input.type==='date'?displayDay(input.value,!input.hasAttribute('data-short-date')):normalizeClock(input.value)||'选择时间';
  display.classList.toggle('muted',!input.value);
+}
+
+export function bindDayPicker(root,onSelect){
+ const input=root.querySelector('input[type=date]');
+ input.addEventListener('change',()=>{if(input.value)onSelect(input.value);});
+ for(const button of root.querySelectorAll('[data-day-step]')){
+  button.onclick=()=>{
+   const date=new Date(input.value+'T12:00:00');
+   if(!Number.isFinite(date.getTime()))return;
+   date.setDate(date.getDate()+Number(button.dataset.dayStep));
+   onSelect(localDate(date));
+  };
+ }
+ return date=>{input.value=date;syncCalendarFields(root);};
 }

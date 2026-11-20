@@ -1,9 +1,8 @@
-import {displayDay,localDate as localISO,localClock,normalizeClock,syncCalendarFields} from './calendar.mjs';
+import {bindDayPicker,displayDay,localDate as localISO,localClock,normalizeClock,syncCalendarFields} from './calendar.mjs';
 import {bindSheetSwipe,shellGlyphs} from './shell.mjs';
 import {readState as readHealthState} from './health/storage.mjs';
 import {purchaseForTransaction,purchaseTransactionId} from './health/purchases.mjs';
-import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,replaceFinance,validateFinanceBackup} from './finance-storage.mjs';
-import {attachFinanceAssistant} from './ai/finance.mjs';
+import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,DEFAULT_CATEGORIES,freshData,replaceFinance,validateFinanceBackup} from './finance-storage.mjs';
 import {checkForAppUpdate} from './updates.mjs';
 
 // STORAGE_KEY is intentionally permanent. Never rename it in a normal app update.
@@ -57,18 +56,6 @@ const ICONS = {
   edit: '<path d="M4 20h4l11-11-4-4L4 16v4Z"/><path d="m13 7 4 4"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>'
 };
-
-const DEFAULT_CATEGORIES = [
-  ['餐饮','expense','food','#F29B69'],['交通','expense','car','#6FA8DC'],['购物','expense','bag','#AA82E3'],['娱乐','expense','game','#E77BA6'],
-  ['日用','expense','house','#E8B45F'],['学习','expense','book','#5F9FE5'],['医疗','expense','health','#65BFA3'],['旅行','expense','travel','#6EAED7'],
-  ['人情','expense','gift','#E78378'],['其他','expense','more','#9AA09A'],
-  ['工资','income','briefcase','#4CB487'],['兼职','income','laptop','#5C9FD6'],['奖学金','income','award','#C8A34C'],['奖金','income','coins','#E7A24A'],
-  ['理财','income','trend','#7797DB'],['红包/转账','income','gift','#E47B8C'],['退款','income','refund','#6CB8A3'],['其他','income','more','#9AA09A']
-].map((c,i)=>({id:`default-${i+1}`,name:c[0],type:c[1],icon:c[2],color:c[3],custom:true,hidden:false,order:i,budgetExcludedDefault:c[1]==='expense'?false:undefined}));
-
-function freshData(){
-  return {version:VERSION, transactions:[], categories:structuredClone(DEFAULT_CATEGORIES), budgets:{}, balanceAdjustments:[], prefs:{initialBalance:null}};
-}
 
 function normalizeData(parsed){
   // Schema migrations are additive: never replace transactions, budgets, categories,
@@ -202,7 +189,7 @@ function saveData(){
 
 let recoveryRequired=false;
 let data = loadData();
-let ui = {tab:'home', selectedMonth:monthKey(new Date()), recordFilter:'all'};
+let ui = {tab:'home', selectedMonth:monthKey(new Date()), recordFilter:'all',day:localISO(),dayOnly:false};
 let storageProtection = {supported:!!(navigator.storage?.persist && navigator.storage?.persisted), checked:false, persisted:false};
 function uid(prefix='id'){ return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`; }
 function pad(n){ return String(n).padStart(2,'0'); }
@@ -212,12 +199,8 @@ function daysInMonth(m){ const {y,mo}=parseMonth(m); return new Date(y,mo,0).get
 function monthLabel(m){ const {y,mo}=parseMonth(m); return `${y}年${mo}月`; }
 function isCurrentMonth(m){ return m===monthKey(new Date()); }
 function defaultTransactionDateForSelectedMonth(){
-  const today=new Date();
-  const current=monthKey(today);
-  if(ui.selectedMonth>=current)return localISO(today);
-  const {y,mo}=parseMonth(ui.selectedMonth);
-  const day=Math.min(today.getDate(),daysInMonth(ui.selectedMonth));
-  return `${y}-${pad(mo)}-${pad(day)}`;
+  const today=localISO();
+  return ui.day<=today?ui.day:today;
 }
 function amount(n){ return `¥${Number(n||0).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2})}`; }
 function pct(n){ return `${Math.round(Math.max(0,n)*100)}%`; }
@@ -379,8 +362,11 @@ async function ensurePersistentStorage(showToast=false){
 }
 
 function render(){
-  document.getElementById('monthButton').innerHTML = `${monthLabel(ui.selectedMonth)} ${icon('chevron')}`;
-  document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active', b.dataset.tab===ui.tab));
+  writeFinanceDay(ui.day);
+  document.querySelectorAll('[data-tab]').forEach(b=>{
+    const active=b.dataset.tab===ui.tab;b.classList.toggle('active',active);
+    if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');
+  });
   const app=document.getElementById('app');
   try{
     app.innerHTML = ui.tab==='stats' ? renderStats() : renderHome();
@@ -452,6 +438,7 @@ function renderHome(){
 
 function renderLedgerSection(){
   let tx=[...txForMonth(ui.selectedMonth)];
+  if(ui.dayOnly)tx=tx.filter(t=>t.date===ui.day);
   if(ui.recordFilter!=='all') tx=tx.filter(t=>t.type===ui.recordFilter);
   tx.sort((a,b)=>(b.date+normalizeClock(b.time)).localeCompare(a.date+normalizeClock(a.time)));
   const groups=Object.groupBy ? Object.groupBy(tx,t=>t.date) : tx.reduce((g,t)=>((g[t.date]??=[]).push(t),g),{});
@@ -466,8 +453,8 @@ function renderLedgerSection(){
     return `<div class="day-group"><div class="day-head"><span>${dateDisplay(date)} ${weekday(date)}</span><span class="${cls}">${summary}</span></div><section class="card transaction-list">${rows.map(t=>txRow(t,true)).join('')}</section></div>`;
   }).join('');
   return `<section class="ledger-section">
-    <div class="section-head ledger-head"><h2>账单</h2><span class="muted ledger-month">${monthLabel(ui.selectedMonth)}</span></div>
-    <div class="filters ledger-filters"><button class="filter ${ui.recordFilter==='all'?'active':''}" data-filter="all">全部</button><button class="filter ${ui.recordFilter==='income'?'active':''}" data-filter="income">收入</button><button class="filter ${ui.recordFilter==='expense'?'active':''}" data-filter="expense">支出</button></div>
+    <div class="section-head ledger-head"><h2>账单</h2><button class="text-button" data-action="choose-month" aria-label="选择月份">${monthLabel(ui.selectedMonth)} ${icon('chevron')}</button></div>
+    <div class="filters ledger-filters">${ui.dayOnly?'<button class="filter" data-action="show-month">查看整月</button>':''}<button class="filter ${ui.recordFilter==='all'?'active':''}" data-filter="all">全部</button><button class="filter ${ui.recordFilter==='income'?'active':''}" data-filter="income">收入</button><button class="filter ${ui.recordFilter==='expense'?'active':''}" data-filter="expense">支出</button></div>
     ${body||`<section class="card empty"><div class="empty-icon">${icon('list')}</div><h3>这里还没有${ui.recordFilter==='income'?'收入':ui.recordFilter==='expense'?'支出':'账单'}记录</h3><p>点击下方绿色 ＋ 记下第一笔。</p></section>`}
   </section>`;
 }
@@ -501,10 +488,10 @@ function renderStats(){
       budgetResult=`<section class="card"><div class="eyebrow">计划状态</div><div class="budget-amount">月份尚未开始</div><div class="helper" style="margin-top:8px">已设置预算 ${amount(m.budget)}</div></section>`;
     }
   }
-  return `<div class="stack month-swipe-view" data-month-swipe-view="stats"><div class="section-head"><h2>统计</h2><span class="muted" style="font-size:12px">${monthLabel(ui.selectedMonth)}</span></div>
+  return `<div class="stack month-swipe-view" data-month-swipe-view="stats"><div class="section-head"><h2>统计</h2><button class="text-button" data-action="choose-month" aria-label="选择月份">${monthLabel(ui.selectedMonth)} ${icon('chevron')}</button></div>
     <div class="summary-grid"><div class="summary-card"><small>收入</small><strong class="positive">${amount(m.income)}</strong></div><div class="summary-card"><small>总支出</small><strong class="negative">${amount(m.expense)}</strong></div><div class="summary-card"><small>日常预算支出</small><strong>${amount(m.budgetExpense)}</strong></div><div class="summary-card"><small>结余</small><strong>${amount(m.income-m.expense)}</strong></div></div>
     <section class="card chart-card"><h3>支出分类</h3>${expenses.length?`<div class="donut-wrap"><div class="donut" style="background:conic-gradient(${gradient})"></div><div class="legend">${legend}</div></div>`:`<div class="empty"><p>有支出记录后显示分类占比。</p></div>`}</section>
-    <section class="card chart-card"><h3>每日支出趋势</h3><div class="bars">${dayValues.map((v,i)=>`<button class="bar ${i+1===nowDay?'today':''}" data-day-bar="${i+1}" data-day-value="${v}" style="height:${Math.max(v/max*100,v?3:0)}%" type="button" aria-label="${i+1}日支出 ${amount(v)}"></button>`).join('')}</div><div class="chart-axis"><span>1日</span><span>${Math.ceil(dayValues.length/2)}日</span><span>${dayValues.length}日</span></div><div class="bar-detail" id="barDetail">点按柱子查看当天金额</div></section>
+    <section class="card chart-card"><h3>每日支出趋势</h3><div class="bars">${dayValues.map((v,i)=>`<button class="bar ${i+1===nowDay?'today':''}" data-day-bar="${i+1}" data-day-value="${v}" style="height:${Math.max(v/max*100,v?3:0)}%" type="button" aria-label="${displayDay(ui.selectedMonth+'-'+pad(i+1))}支出 ${amount(v)}"></button>`).join('')}</div><div class="chart-axis"><span>1日</span><span>${Math.ceil(dayValues.length/2)}日</span><span>${dayValues.length}日</span></div><div class="bar-detail" id="barDetail">点按柱子查看当天金额</div></section>
     ${budgetResult}
   </div>`;
 }
@@ -529,6 +516,7 @@ function settingsContent(){
     <section class="card settings-section">
       <button class="setting-row" data-action="storage-persist"><span class="mini-icon">${icon('shield')}</span><span class="setting-copy"><span class="setting-title">本地数据保护</span><span class="setting-sub ${protection.cls}">${protection.label}</span></span><span class="chevron">${icon('chevron')}</span></button>
       <button class="setting-row" data-action="check-update"><span class="mini-icon">${icon('download')}</span><span class="setting-copy"><span class="setting-title">程序更新</span><span class="setting-sub">当前 ${APP_VERSION} · 启动优先本地，可在这里手动检查</span></span><span class="chevron">${icon('chevron')}</span></button>
+      <button class="setting-row" type="button" data-ai-key><span class="mini-icon">${icon('sparkles')}</span><span class="setting-copy"><span class="setting-title">管理 API Key</span><span class="setting-sub">使用自己的 OpenAI Key</span></span><span class="chevron">${icon('chevron')}</span></button>
     </section>
     <section class="card"><div class="helper">主屏幕 Airplane 与 Safari 网页在 iOS 上属于不同的本地数据空间。长期使用请固定从主屏幕 Airplane 进入；程序更新只替换程序文件，不会重建余额、预算、分类或账单。人为清除网站数据、删除 App 或换手机前仍请先做“完整备份”。</div></section>
     <button class="danger-button" data-action="reset">清空本机全部数据</button>
@@ -536,8 +524,7 @@ function settingsContent(){
 }
 
 function openSettingsModal(){
-  openModal(`${modalHead('设置','完成')}<div class="settings-modal-body">${settingsContent()}</div>`);
-  document.getElementById('modalSave').onclick=()=>closeModal({runDismiss:false});
+  openModal(`${modalHead('设置',null,'关闭')}<div class="settings-modal-body">${settingsContent()}</div>`);
   bindSettingsEvents();
 }
 
@@ -550,11 +537,13 @@ function bindSettingsEvents(){
   document.querySelector('[data-action="import"]')?.addEventListener('click',()=>document.getElementById('importInput').click());
   document.querySelector('[data-action="restore-pre-snapshot"]')?.addEventListener('click',restorePreRestoreSnapshot);
   document.querySelector('[data-action="storage-persist"]')?.addEventListener('click',()=>ensurePersistentStorage(true));
-  document.querySelector('[data-action="check-update"]')?.addEventListener('click',()=>checkForAppUpdate(true));
+  document.querySelector('[data-action="check-update"]')?.addEventListener('click',()=>{closeModal({runDismiss:false});checkForAppUpdate(true);});
   document.querySelector('[data-action="reset"]')?.addEventListener('click',resetAll);
 }
 
 function bindViewEvents(){
+  document.querySelector('[data-action="choose-month"]')?.addEventListener('click',openMonthModal);
+  document.querySelector('[data-action="show-month"]')?.addEventListener('click',()=>{ui.dayOnly=false;render();});
   document.querySelectorAll('[data-action="budget"]').forEach(b=>b.onclick=()=>openBudgetModal());
   document.querySelectorAll('[data-action="balance"]').forEach(b=>b.onclick=()=>openBalanceModal());
   document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{ui.recordFilter=b.dataset.filter;render();});
@@ -567,7 +556,7 @@ function bindViewEvents(){
   document.querySelectorAll('[data-day-bar]').forEach(bar=>bar.addEventListener('click',()=>{
     const detail=document.getElementById('barDetail');if(!detail)return;
     document.querySelectorAll('[data-day-bar]').forEach(b=>b.classList.toggle('selected',b===bar));
-    detail.textContent=`${Number(bar.dataset.dayBar)}日 · ${amount(Number(bar.dataset.dayValue||0))}`;
+    detail.textContent=`${displayDay(ui.selectedMonth+'-'+pad(bar.dataset.dayBar))} · ${amount(Number(bar.dataset.dayValue||0))}`;
   }));
   bindTransactionSwipes();
   bindMonthSwipe();
@@ -632,12 +621,17 @@ function openMonthModal(){
     document.getElementById('pickerNextYear').onclick=()=>{y++;draw();};
     document.querySelectorAll('[data-month-value]').forEach(b=>b.onclick=()=>{mo=Number(b.dataset.monthValue);draw();});
     document.getElementById('pickerCurrentMonth').onclick=()=>{const n=new Date();y=n.getFullYear();mo=n.getMonth()+1;draw();};
-    document.getElementById('modalSave').onclick=()=>{ui.selectedMonth=`${y}-${pad(mo)}`;closeModal({runDismiss:false});render();window.scrollTo({top:0,behavior:'smooth'});};
+    document.getElementById('modalSave').onclick=()=>{selectMonth(`${y}-${pad(mo)}`);closeModal({runDismiss:false});render();window.scrollTo({top:0,behavior:'smooth'});};
   };
   draw();
 }
+function selectMonth(month){
+  ui.selectedMonth=month;
+  ui.day=isCurrentMonth(month)?localISO():month+'-'+pad(Math.min(new Date().getDate(),daysInMonth(month)));
+  ui.dayOnly=false;
+}
 function shiftMonth(delta,{smooth=true}={}){
-  const {y,mo}=parseMonth(ui.selectedMonth);const d=new Date(y,mo-1+delta,1);ui.selectedMonth=monthKey(d);render();window.scrollTo({top:0,behavior:smooth?'smooth':'auto'});
+  const {y,mo}=parseMonth(ui.selectedMonth);const d=new Date(y,mo-1+delta,1);selectMonth(monthKey(d));render();window.scrollTo({top:0,behavior:smooth?'smooth':'auto'});
 }
 function bindMonthSwipe(){
   const view=document.querySelector('[data-month-swipe-view]');if(!view)return;
@@ -881,7 +875,6 @@ function bindMoneyExpressionInput(inputId,group='money-op'){
 }
 
 function openTransactionModal(existing=null,suppliedDraft=null){
-  const assistantRevision=suppliedDraft?.fromAssistant ? financeStore.getItem(STORAGE_KEY) : null;
   const restored=suppliedDraft||(!existing?loadTransactionDraft():null);
   let type=restored?.type||existing?.type||'expense';
   let selected=restored?.selectedCategoryId||existing?.categoryId||preferredCategoryId(type);
@@ -965,7 +958,6 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   const submit=async(syncStock=false)=>{
     if(submitting)return;
     if (observedFinanceRaw!==financeStore.getItem(STORAGE_KEY)){toast('账本已在其他页面更新，请刷新');return;}
-    if(assistantRevision!==null && assistantRevision!==financeStore.getItem(STORAGE_KEY)){toast('账本已在其他页面变更，请刷新后重新记入');return;}
     const parsedAmount=parseAmountExpression(document.getElementById('txAmount').value); const value=parsedAmount.value; const c=categoryById(selected);
     if(!parsedAmount.ok||!value||value<=0){toast('请输入有效金额或算式');return;} if(!c){toast('请选择分类');return;}
     const chosenDate=document.getElementById('txDate').value||localISO();
@@ -1001,10 +993,9 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     else if(data.transactions.some(t=>t.id===record.id)){toast('这张采购订单已记账');return;}
     else data.transactions.push(record);
     if(record.type==='expense')data.prefs.lastExpenseCategoryId=c.id;else data.prefs.lastIncomeCategoryId=c.id;
-    if(!saveData())return;clearTransactionDraft();ui.selectedMonth=record.date.slice(0,7);closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
+    if(!saveData())return;clearTransactionDraft();ui.day=record.date;ui.selectedMonth=record.date.slice(0,7);closeModal({runDismiss:false});render();toast(existing?'记录已修改':'已记下');
     if(syncStock){
       const url=new URL('./health/',location.href);
-      if(window.airplaneAccount.id)url.searchParams.set('private','1');
       url.searchParams.set('financeTx',record.id);
       location.href=url.href;
     }
@@ -1021,7 +1012,6 @@ function openTransactionModal(existing=null,suppliedDraft=null){
 
 function openLinkedPurchase(order){
   const url=new URL('./health/',location.href);
-  if(window.airplaneAccount.id)url.searchParams.set('private','1');
   url.searchParams.set('editPurchase',order.id);
   location.href=url.href;
 }
@@ -1187,7 +1177,7 @@ function exportCSV(){
   const rows=[['日期','时间','类型','金额','分类','计入日常预算','同步增加预算','备注'],...data.transactions.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).map(t=>[t.date,t.time||'',t.type==='expense'?'支出':'收入',Number(t.amount).toFixed(2),t.categoryName||txSnapshotCategory(t).name,t.type==='expense'?(t.budgetExcluded===true?'否':'是'):'',t.type==='income'&&t.budgetSync?'是':'否',t.note||''])];
   const csv='\uFEFF'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\r\n');downloadBlob(`Airplane-records-${localISO()}.csv`,csv,'text/csv;charset=utf-8');toast('CSV 已导出');
 }
-function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; clearTransactionDraft();data=freshData();if(!saveData())return;ui.selectedMonth=monthKey(new Date());render();toast('本机数据已清空'); }
+function resetAll(){ if(!confirm('确定清空这台设备里的所有 Airplane 数据？建议先导出完整备份。'))return; if(!confirm('再次确认：余额、预算、分类和账单都会被清空。'))return; clearTransactionDraft();data=freshData();if(!saveData())return;selectMonth(monthKey());render();toast('本机数据已清空'); }
 function toast(msg,options={}){
   document.querySelector('.toast')?.remove();
   if(activeUndo){clearTimeout(activeUndo);activeUndo=null;}
@@ -1202,9 +1192,9 @@ function toast(msg,options={}){
 // Global navigation
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;render();window.scrollTo({top:0,behavior:'smooth'});});
 document.getElementById('addButton').onclick=()=>openTransactionModal();
-document.getElementById('monthButton').onclick=openMonthModal;
-document.getElementById('prevMonthButton')?.addEventListener('click',()=>shiftMonth(-1));
-document.getElementById('nextMonthButton')?.addEventListener('click',()=>shiftMonth(1));
+const writeFinanceDay=bindDayPicker(document.querySelector('.day-picker'),date=>{
+  ui.day=date;ui.selectedMonth=date.slice(0,7);ui.dayOnly=true;render();
+});
 document.getElementById('settingsButton').onclick=openSettingsModal;
 document.getElementById('importInput').addEventListener('change', async e=>{
   const file=e.target.files?.[0];e.target.value='';if(!file)return;
@@ -1224,7 +1214,7 @@ document.getElementById('importInput').addEventListener('change', async e=>{
 });
 
 if(recoveryRequired){
-  document.querySelector('#open-finance-ai').hidden=true;
+  document.querySelector('[data-open-ai]').hidden=true;
   document.querySelector('.tabbar').hidden=true;
   document.querySelector('.topbar').hidden=true;
   const app=document.querySelector('#app');
@@ -1232,14 +1222,9 @@ if(recoveryRequired){
   document.querySelector('#save-damaged').onclick=()=>downloadBlob('Airplane-damaged-backup.json',JSON.stringify({primary:financeStore.getItem(STORAGE_KEY),recovery:financeStore.getItem(RECOVERY_KEY)}),'application/json');
   document.querySelector('#import-repair').onclick=()=>document.querySelector('#importInput').click();
 }else {
-  attachFinanceAssistant({categories:()=>data.categories,today:localISO,
-    revision:()=>{
-      if(observedFinanceRaw!==financeStore.getItem(STORAGE_KEY))throw Error('账本已在其他页面变更，请刷新后重新识别');
-      return dataRevision;
-    },openEntry:draft=>openTransactionModal(null,draft)});
   render();
 }
-window.addEventListener('storage',()=>{
+function refreshFinanceLedger(){
   if(recoveryRequired||document.querySelector('#modalRoot .modal'))return;
   try{
     const raw=financeStore.getItem(STORAGE_KEY);
@@ -1247,7 +1232,9 @@ window.addEventListener('storage',()=>{
     data=parseStoredData(raw).value;observedFinanceRaw=raw;
     dataRevision++;monthTxCache.clear();balanceCache.revision=-1;render();
   }catch{}
-});
+}
+window.addEventListener('storage',refreshFinanceLedger);
+window.addEventListener('airplane:finance-saved',refreshFinanceLedger);
 if(window.airplanePendingPurchase)toast('有待处理的采购更正，请在健康库存页完成同步',{duration:5500});
 const purchaseQuery=new URL(location.href).searchParams.get('purchase');
 if(purchaseQuery&&!recoveryRequired)readHealthState().then(health=>{

@@ -1,51 +1,28 @@
 import {resumePurchaseUpdate} from './health/purchase-sync.mjs';
 import {hydrateShell} from './shell.mjs';
 import {installKeyDialog} from './ai/client.mjs';
-import {accountKeys, privateAccount} from './account.mjs';
+import {installChat} from './ai/chat.mjs';
 import {installUpdates} from './updates.mjs';
+import {localDate,syncCalendarFields} from './calendar.mjs';
 
-const health = document.body.dataset.module === 'health';
-const isPrivate = new URL(location.href).searchParams.has('private');
-const accountLink = document.querySelector('[data-account]');
-const gate = document.querySelector('#account-gate');
-const content = document.querySelector('[data-shell]');
+const health=document.body.dataset.module==='health';
+const params=new URL(location.href).searchParams;
+const account={finance:localStorage};
+window.airplaneAccount=account;
 installUpdates();
 hydrateShell();
+const headerDay=document.querySelector('.day-picker');
+headerDay.querySelector('input[type=date]').value=localDate();
+syncCalendarFields(headerDay);
+try {await resumePurchaseUpdate(account);}
+catch {window.airplanePendingPurchase=true;}
+if(health)await import('./health/app.mjs');
+else await import('./app.js');
 const openKeys=installKeyDialog();
-if (isPrivate) {
-  content.hidden = true;
-  gate.hidden = false;
-  gate.querySelector('input').focus();
-  // A restored back/forward entry must also be locked.
-  addEventListener('pagehide', () => { content.hidden = true; });
-  addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
-  gate.onsubmit = async e => {
-    e.preventDefault();
-    const input = gate.querySelector('input');
-    try {
-      const keys = await accountKeys(input.value.trim());
-      await import('./vendor/nacl-fast.min.js');
-      const account = privateAccount(keys, globalThis.nacl, localStorage);
-      input.value = '';
-      accountLink.textContent = '锁定账户';
-      accountLink.href = '?private=1';
-      document.querySelector('[data-module-link]').href += '?private=1';
-      await start(account);
-      gate.hidden = true;
-      content.hidden = false;
-    } catch (err) { gate.querySelector('output').textContent = err.message; }
-  };
-} else {
-  await start({finance: localStorage});
-}
-
-async function start(account) {
-  window.airplaneAccount = account;
-  try {await resumePurchaseUpdate(account);}
-  catch {window.airplanePendingPurchase=true;}
-  if (health) await import('./health/app.mjs');
-  else await import('./app.js');
-  const openFromLink=()=>{if(location.hash==='#model') openKeys();};
-  window.addEventListener('hashchange',openFromLink);
-  openFromLink();
-}
+installChat(openKeys);
+const openFromLink=()=>{if(location.hash==='#model')openKeys();};
+window.addEventListener('hashchange',openFromLink);
+if(params.has('private')){
+ const {showLegacyExport}=await import('./legacy-export.mjs');
+ await showLegacyExport();
+}else openFromLink();
