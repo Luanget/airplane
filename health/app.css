@@ -136,11 +136,6 @@ body[data-module="health"] [data-shell] .shopping-row input[type=number] { width
 .inventory-food:active { background:var(--surface-2) }
 .inventory-food:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
 .form-panel:has(> .setting-row) { padding:0 }
-details > summary.setting-row { list-style:none; cursor:pointer; padding:10px 14px; border:0 }
-details > summary.setting-row::-webkit-details-marker { display:none }
-details[open] > summary.setting-row { border-bottom:1px solid var(--line) }
-details[open] > summary > .chevron { transform:rotate(90deg) }
-details > summary.setting-row:focus-visible { outline:2px solid var(--green); outline-offset:-2px; border-radius:12px }
 .form-panel:has(> .setting-row) > :is(form, div, section, p, button) { margin:10px 14px }
 .inventory-tool + .inventory-tool { border-top:1px solid var(--line) }
 .inventory-tool > summary.setting-row { padding-inline-start:22px }

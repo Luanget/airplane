@@ -31,13 +31,19 @@ const readPanel=$('[data-read-preview]').closest('section'),share=$('[data-share
 const consentPanel=$('#assistant-consent'),approve=$('[data-approve-send]'),cancelSend=$('[data-cancel-send]');
 const consentKey='airplane-ai-send-consent-v1';
 const skillForm=$('#assistant-skill form'),skillOutput=skillForm.querySelector('output');
-const keyPanel=$('#assistant-key-panel');
+const keyPanel=$('#assistant-key-panel'),settings=$('#assistant-settings-sheet');
 let busy=false,saving=false,prepared=null,pending=null,activeRequest=null,deletingThread=null,followUp=null,photoRun=null;
 let firstSend=!demo&&localStorage.getItem(consentKey)!=='yes';
 
 hydrateShell();
+$('#assistant-settings').onclick=()=>settings.showModal();
+settings.addEventListener('close',()=>{
+ if(location.hash==='#api-key')history.replaceState(history.state,'',location.pathname+location.search);
+});
 if(demo){
  $('.assistant-demo').hidden=false;
+ keyPanel.hidden=false;
+ keyPanel.querySelector('[data-demo-key]').hidden=false;
  for(const link of document.querySelectorAll('.topbar-actions a'))link.search='?demo=1';
  composer.elements.allowRead.checked=true;
 }else{
@@ -51,13 +57,15 @@ if(demo){
  void readDeviceKey().then(key=>{
   if(!key&&!keyStatus.textContent)keyStatus.textContent='请导入 OpenAI API Key';
  }).catch(err=>{if(!keyStatus.textContent)keyStatus.textContent=err.message;});
- const openKeySettings=()=>{if(location.hash==='#api-key')revealKeySettings();};
- window.addEventListener('hashchange',openKeySettings);
- openKeySettings();
 }
+const openKeySettings=()=>{if(location.hash==='#api-key')revealKeySettings();};
+window.addEventListener('hashchange',openKeySettings);
+openKeySettings();
 
 function revealKeySettings(){
- keyPanel.open=true;keyPanel.scrollIntoView({block:'nearest'});
+ keyPanel.open=true;
+ if(!settings.open)settings.showModal();
+ keyPanel.querySelector('summary').scrollIntoView({block:'nearest'});
 }
 function tell(text){status.textContent=text;}
 function report(err){tell(err.name==='TypeError'?'无法完成请求，请检查网络或本机存储':err.message);}

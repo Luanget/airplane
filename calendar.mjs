@@ -1,4 +1,5 @@
 import {bindFieldPicker,fieldLabel} from './field-picker.mjs';
+import {shellIcon} from './shell.mjs';
 
 const pad=value=>String(value).padStart(2,'0');
 export const localDate=(d=new Date())=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
@@ -41,14 +42,15 @@ function pickerActions(input,panel,write,buttons){
 }
 
 function dateMenu(input,panel,write){
- panel.className='inline-picker-panel calendar-menu';
+ panel.className='inline-picker-panel calendar-menu calendar-date-menu';
  const allowed=fitsField(input),today=localDate();
  const current=input.value||(input.max&&today>input.max?input.max:input.min&&today<input.min?input.min:today);
  const initial=new Date(current+'T12:00:00');
  const month=new Date(initial.getFullYear(),initial.getMonth(),1,12);
  const header=document.createElement('span'),label=document.createElement('strong'),grid=document.createElement('span');
  header.className='calendar-menu-head';grid.className='calendar-date-grid';
- const previous=pickerButton('‹',()=>step(-1)),next=pickerButton('›',()=>step(1));
+ const previous=pickerButton('',()=>step(-1)),next=pickerButton('',()=>step(1));
+ previous.innerHTML=next.innerHTML=shellIcon('chevron');
  previous.setAttribute('aria-label','上个月');next.setAttribute('aria-label','下个月');
  header.append(previous,label,next);
  panel.replaceChildren(header,grid);
@@ -144,6 +146,7 @@ function syncValue(input,control){
 
 export function bindDayPicker(root,onSelect){
  const input=root.querySelector('input[type=date]');
+ input.required=true;
  input.addEventListener('change',()=>{if(input.value)onSelect(input.value);});
  for(const button of root.querySelectorAll('[data-day-step]')){
   button.onclick=()=>{

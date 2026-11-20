@@ -239,6 +239,22 @@ try {
   });
   const financeStyle=await headerStyle();
   assert.equal(await page.locator('.day-picker .calendar-value').textContent(),shortDay(today));
+  await page.setViewportSize({width:320,height:568});
+  const dayTrigger=page.locator('.day-picker .calendar-trigger');
+  assert.equal(await dayTrigger.locator('.chevron').isVisible(),false);
+  const dayCalendar=page.locator('.day-picker .calendar-date-menu');
+  await dayTrigger.click();
+  const weeks=()=>dayCalendar.locator('.calendar-date-grid').evaluate(grid=>Math.ceil((grid.children.length-7)/7));
+  for(let i=0;i<12&&await weeks()<6;i++)await dayCalendar.getByRole('button',{name:'下个月'}).click();
+  assert.equal(await weeks(),6);
+  assert.equal(await dayCalendar.getByRole('button',{name:'清空'}).count(),0);
+  assert.ok(await dayCalendar.evaluate(menu=>{
+    const {left,right,bottom}=menu.getBoundingClientRect();
+    return left>=12&&right<=innerWidth-12&&bottom<=innerHeight&&menu.scrollHeight===menu.clientHeight;
+  }));
+  await page.keyboard.press('Escape');
+  assert.equal(await dayTrigger.getAttribute('aria-expanded'),'false');
+  await page.setViewportSize({width:390,height:844});
   await page.getByRole('button',{name:'前一天'}).click();
   assert.notEqual(await page.locator('#finance-date').inputValue(),today);
   await page.getByRole('button',{name:'查看整月'}).click();
@@ -379,6 +395,9 @@ try {
     await route.fulfill({json:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(parsed)}]}]},headers});
   });
   const access=page.locator('#assistant-key'),chat=page.locator('#airplane-chat');
+  const assistantSettings=page.getByRole('dialog',{name:'设置',exact:true});
+  const openAssistantSettings=()=>page.getByRole('button',{name:'打开设置',exact:true}).click();
+  const closeAssistantSettings=()=>assistantSettings.getByRole('button',{name:'关闭',exact:true}).click();
   const form=chat.locator('.chat-composer'),review=chat.locator('.chat-review');
   async function say(text){
     await form.getByRole('textbox',{name:'消息'}).fill(text);
@@ -386,12 +405,14 @@ try {
   }
   await page.locator('[data-open-ai]').click();
   assert.equal(await access.isVisible(),false);
-  await chat.getByText('API Key',{exact:true}).click();
+  await openAssistantSettings();
+  await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByText('请导入 OpenAI API Key').waitFor();
   assert.equal(await chat.isVisible(),true);assert.equal(calls.length,0);
   await access.locator('[type=file]').setInputFiles({name:'fixture.txt',mimeType:'text/plain',buffer:Buffer.from(testKey)});
   await access.locator('[type=submit]').click();
   await access.getByText('已保存 Key',{exact:true}).waitFor();
+  await closeAssistantSettings();
   await say('合成餐点');
   await form.getByText('还没发送。请在下方确认首次发送。',{exact:true}).waitFor();
   await chat.getByRole('button',{name:'返回编辑'}).click();
@@ -446,6 +467,13 @@ try {
   await page.getByRole('link',{name:'财务',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.day-picker .calendar-value'));
   assert.equal(await page.locator('[data-open-ai] svg').innerHTML(),aiIcon);
+  await page.getByRole('button',{name:'打开设置',exact:true}).click();
+  await page.getByRole('link',{name:/^管理 API Key/}).click();
+  await assistantSettings.waitFor();
+  await access.waitFor();
+  await closeAssistantSettings();
+  await page.waitForFunction(()=>!location.hash);
+  await page.getByRole('link',{name:'财务',exact:true}).click();
   await page.locator('[data-open-ai]').click();await chat.waitFor();
   assert.equal(await access.isVisible(),false);
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
@@ -461,9 +489,11 @@ try {
   await history.getByRole('button',{name:/^合成餐点/}).click();
   await history.waitFor({state:'hidden'});
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
-  await chat.getByText('API Key',{exact:true}).click();
+  await openAssistantSettings();
+  await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByRole('button',{name:'发送连接测试'}).click();
   await access.getByText('已收到 OpenAI 回复：连接正常。',{exact:true}).waitFor();
+  await closeAssistantSettings();
   await say('模拟额度不足');
   await form.getByText(/额度或余额不足.*429.*req_fixture/).waitFor();
   assert.equal(await form.getByRole('textbox',{name:'消息'}).inputValue(),'模拟额度不足');
@@ -563,10 +593,14 @@ try {
   assert.notEqual(photoCalls[0].photo,photoCalls[1].photo);
   assert.equal(photoCalls[0].photo,photoCalls[2].photo);
   console.log('PASS separate photos, individual retry, candidate confirmation and same-name one-off intake');
+  await openAssistantSettings();
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
+  await closeAssistantSettings();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
+  await access.waitFor();
   assert.equal(calls.length,20);
+  await closeAssistantSettings();
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();
   console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');
@@ -714,6 +748,18 @@ try {
   assert.deepEqual(JSON.parse(await ledger()),backup.data);
   // The demo uses its own stored thread and ledger through the same review UI.
   await page.goto(base+'assistant/?demo=1');
+  for(const viewport of [{width:320,height:568},{width:1280,height:800}]){
+    await page.setViewportSize(viewport);
+    assert.ok(await form.evaluate(form=>form.getBoundingClientRect().bottom<=innerHeight));
+    await openAssistantSettings();
+    assert.ok(await assistantSettings.locator('#assistant-skill .chevron svg').evaluate(icon=>icon.getBoundingClientRect().width===16));
+    await assistantSettings.getByText('本轮上下文',{exact:true}).click();
+    await assistantSettings.getByText(/历史 0 条/).waitFor();
+    assert.ok(await assistantSettings.evaluate(sheet=>sheet.scrollWidth===sheet.clientWidth));
+    await assistantSettings.getByText('本轮上下文',{exact:true}).click();
+    await closeAssistantSettings();
+  }
+  await page.setViewportSize({width:390,height:844});
   await chat.getByRole('button',{name:'查昨天饮食'}).click();
   await form.getByRole('button',{name:'发送',exact:true}).click();
   await chat.getByRole('region',{name:'账本摘要'}).getByText(/牛奶 · 250 g/).waitFor();

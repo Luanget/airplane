@@ -1,28 +1,34 @@
-.assistant-shell { width:min(100%,1100px); margin:0 auto; min-height:100dvh }
-.assistant-shell .brand-row h1 { font-size:22px }
-.assistant-workspace {
- display:grid; grid-template-columns:minmax(0,1fr) minmax(220px,280px); gap:16px;
- grid-template-areas:"conversation tools"; align-content:start; min-height:calc(100dvh - 76px); padding-bottom:16px
-}
-.assistant-sidebar { grid-area:tools; display:grid; align-content:start; gap:10px; min-width:0 }
-.assistant-panel,.assistant-demo { padding:14px }
-.assistant-panel summary { cursor:pointer; padding:4px 0; font-weight:700 }
-.assistant-panel p,.assistant-demo p { color:var(--muted); font-size:13px; line-height:1.45; margin:8px 0 0 }
+.assistant-shell { width:min(100%,780px); min-height:100dvh; margin:0 auto }
+.assistant-shell .brand-row h1 { font-size:clamp(18px,5.5vw,24px); white-space:nowrap }
+.assistant-workspace { padding-bottom:calc(12px + var(--safe-bottom)) }
+.assistant-demo { margin:2px 0 6px; color:var(--muted); font-size:12px }
+.assistant-settings-sheet > .modal-head { position:sticky; top:-12px; z-index:2; background:var(--bg) }
+.assistant-settings-sheet .stack { gap:10px }
+.assistant-panel { padding:0 }
+.assistant-panel > .assistant-fields,.assistant-panel-body { padding:12px 14px }
+.assistant-panel > :empty { display:none }
+.assistant-panel p { color:var(--muted); font-size:13px; line-height:1.5; margin:0 }
+.assistant-panel p+p { margin-top:8px }
 .assistant-prompt { margin-top:12px; font-size:13px }
-.assistant-prompt summary { color:var(--muted); font-weight:500 }
+.assistant-prompt summary { color:var(--muted); cursor:pointer; padding-block:6px }
 .assistant-prompt pre,.assistant-read pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; line-height:1.5 }
 .chat-source { justify-self:start; max-width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface) }
 .chat-source summary { cursor:pointer; color:var(--muted); font-size:13px }
 .chat-source pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; font:inherit; font-size:13px; line-height:1.55 }
-.assistant-fields { margin-top:8px }
 .assistant-fields label { display:block; margin:8px 0; color:var(--muted); font-size:13px }
-.assistant-fields :is(input,textarea) { width:100%; max-width:100%; margin:4px 0; padding:8px; color:var(--text); background:var(--surface-2); border:1px solid var(--line); border-radius:12px; font-size:16px }
-.assistant-fields output { display:block; margin-bottom:8px; font-size:13px; color:var(--muted) }
-.assistant-fields .ai-actions button { min-height:44px; padding:6px 10px; text-align:left; background:var(--surface-2); border-radius:12px }
+.assistant-fields :is(input,textarea) { display:block; width:100%; min-height:44px; margin:5px 0; padding:8px 10px; color:var(--text); background:var(--surface-2); border:1px solid var(--line); border-radius:12px; font-size:16px }
+.assistant-fields input[type=file] { font-size:13px; padding:5px; color:var(--muted) }
+.assistant-fields input::file-selector-button { padding:7px 10px; border:0; border-radius:8px; margin-inline-end:8px; color:var(--text); background:var(--surface); font:inherit; cursor:pointer }
+.assistant-fields output:not(:empty) { display:block; margin:8px 0; font-size:13px; color:var(--muted) }
+.assistant-fields .ai-actions button { min-height:44px; padding:6px 10px; text-align:left; background:var(--surface-2); border-radius:12px; font-size:13px; font-weight:650 }
 .assistant-fields .ai-actions button[type=submit] { background:var(--green); color:white }
+.assistant-fields .ai-actions [data-remove] { color:var(--red) }
+.assistant-fields .chat-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px }
+.assistant-fields .chat-actions button { margin:0 }
 .assistant-conversation {
- grid-area:conversation; display:grid; grid-template-rows:auto minmax(180px,1fr) auto;
- height:min(850px,calc(100dvh - 76px)); min-height:520px; padding:16px; min-width:0
+ display:grid; grid-template-rows:auto minmax(120px,1fr) auto;
+ min-height:480px; height:calc(100dvh - 94px - env(safe-area-inset-top, 0px) - var(--safe-bottom));
+ padding:14px; min-width:0
 }
 .assistant-toolbar { padding-bottom:8px; border-bottom:1px solid var(--line) }
 .assistant-toolbar-row { display:flex; justify-content:space-between; align-items:center; gap:8px }
@@ -41,7 +47,7 @@
 .assistant-new-thread span { color:var(--green) }
 .assistant-history {
  margin-top:6px; padding:5px; background:var(--surface-2); border:1px solid var(--line); border-radius:14px;
- max-height:202px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin
+ max-height:min(202px,25dvh); overflow:auto; overscroll-behavior:contain; scrollbar-width:thin
 }
 .assistant-history ul { display:grid; gap:2px; list-style:none; margin:0; padding:0 }
 .assistant-history li { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px }
@@ -89,16 +95,19 @@
 .food-edit-diff dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:5px 10px; margin:0 }
 .food-edit-diff dt { color:var(--muted) }
 .food-edit-diff dd { margin:0; overflow-wrap:anywhere }
-.assistant-query { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--text); font-size:13px; margin-top:9px }
+.assistant-query { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-height:36px; margin-top:3px; color:var(--text); font-size:13px; cursor:pointer }
+.assistant-query input { width:16px; height:16px }
 .assistant-query span { color:var(--muted); font-size:12px }
 .assistant-conversation .chat-composer { border-top:1px solid var(--line); padding-top:8px }
-@media (max-width:700px) {
- .assistant-workspace { grid-template-columns:minmax(0,1fr); grid-template-areas:"tools" "conversation"; gap:10px; padding-inline:10px }
- .assistant-sidebar { display:flex; flex-wrap:wrap; gap:6px }
- .assistant-sidebar > * { flex:0 1 auto }
- .assistant-sidebar > [open], .assistant-demo { flex:1 1 100% }
- .assistant-panel { padding:6px 10px }
- .assistant-conversation { height:min(770px, calc(100dvh - 145px)); min-height:475px; padding:12px }
+.assistant-workspace .chat-attach { flex:none }
+@media (max-width:390px) {
+ .assistant-shell .topbar { gap:8px }
+ .assistant-shell .topbar-actions { gap:6px }
+ .assistant-shell .brand-row { gap:6px }
+ .assistant-conversation { padding:10px }
+ .assistant-start { padding:12px 0 }
+ .assistant-examples { gap:6px }
+ .assistant-examples button { padding-inline:9px; font-size:13px }
 }
 
 .assistant-request-status { display:flex; align-items:center; gap:8px; justify-content:space-between }

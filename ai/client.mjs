@@ -67,7 +67,7 @@ function apiError(response,body){
 export async function recognize(input,{signal,onReply,onTool,...options}={}) {
  if(!navigator.onLine)throw Error('目前离线，手动录入仍可用');
  const key=await readDeviceKey();
- if(!key)throw Error('请先点「API Key」导入自己的密钥');
+ if(!key)throw Error('请在设置的「API Key」中导入自己的密钥');
  const request={...modelRequest(input,options),stream:true};
  const controller=new AbortController(),cancel=()=>controller.abort();
  if(signal?.aborted)cancel();
