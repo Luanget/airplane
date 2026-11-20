@@ -1,4 +1,4 @@
-import {allocateStock,batchBalances,inventoryWithMoves,isStockReference,makeId,numeric,NUTRIENTS,round,validDate,zero} from './core.mjs';
+import {allocateStock,batchBalances,inventoryWithMoves,isOnHand,isStockReference,makeId,numeric,NUTRIENTS,round,validDate} from './core.mjs';
 
 export function measuredGrams({before='',after='',tare=''}) {
   const gross=numeric(before), leftover=numeric(after), packageWeight=numeric(tare);
@@ -60,31 +60,55 @@ export function saveSku(state,fields) {
   return row;
 }
 
-export function addBatch(state,{id=makeId('batch'),foodId,date,time,quantity,costCents=null,expires=null,raw=null,cooked=null,reason='采购',parent=null}) {
+export function addBatch(state,{id=makeId('batch'),foodId,date,time,quantity,costCents=null,expires=null,raw=null,cooked=null,reason='采购',parent=null,portion=false}) {
   quantity=numeric(quantity);
   if(!validDate(date) || !(quantity>0) || expires&&!validDate(expires) || !inventoryWithMoves(state).some(s=>s.id===foodId))
     throw Error('请检查批次数量、食品和日期');
   if(costCents!==null && (!Number.isSafeInteger(costCents)||costCents<0))throw Error('价格须精确到分');
   const batches=state.local.batches??=[];
   if(batches.some(b=>b.id===id))throw Error('此批次已入库');
-  const batch={id,foodId,date,quantity,costCents,expires,raw,cooked,parent};
+  const batch={id,foodId,date,quantity,costCents,expires,raw,cooked,parent,...(portion?{portion}: {})};
   batches.push(batch);
   state.local.stockMoves.push({id:makeId('stock'),batchId:id,foodId,date,...(time?{time}:{}),delta:quantity,reason,createdAt:new Date().toISOString()});
   return batch;
 }
 
-// Split in the SKU's storage unit. A serving may have a different cooked weight.
+export function portionSources(state,sku,date){
+  if(!sku||!isOnHand(sku))return [];
+  const batches=batchBalances(state,sku.id);
+  const loose=round(sku.qty-batches.reduce((total,batch)=>total+batch.remaining,0),6);
+  return [...(loose>0?[{id:'',remaining:loose}]:[]),...batches.filter(batch=>batch.remaining>0&&batch.date<=date)];
+}
+
+export function registerPortions(state,{foodId,batchId='',date,quantities}){
+  const sku=inventoryWithMoves(state).find(row=>row.id===foodId);
+  const source=portionSources(state,sku,date).find(part=>part.id===batchId);
+  const invalid=()=>Error('请核对各份数量与原库存余量');
+  if(!source||!validDate(date)||!quantities.length||quantities.some(quantity=>!Number.isFinite(quantity)||quantity<0.000001))throw invalid();
+  const portions=quantities.map(quantity=>round(quantity,6));
+  const total=round(portions.reduce((sum,quantity)=>sum+quantity,0),6);
+  if(total>source.remaining||total>sku.qty)throw invalid();
+  const [{costCents}]=allocateStock(state,foodId,total,batchId,date);
+  const id=makeId('split');
+  state.local.stockMoves.push({id,batchId:batchId||null,foodId,date,delta:-total,costCents,reason:'分装转出',createdAt:new Date().toISOString()});
+  let cumulative=0,assigned=0;
+  return portions.map((quantity,i)=>{
+   cumulative+=quantity;
+   const next=costCents===null?0:Math.round(cumulative/total*costCents);
+   const batch=addBatch(state,{...source,id:id+'-'+i,foodId,date,quantity,parent:batchId||null,portion:true,
+    costCents:costCents===null?null:next-assigned,reason:'分装转入'});
+   assigned=next;
+   return batch;
+  });
+}
+
+// Equal portions use the same bookkeeping as individually weighed portions.
 export function splitBatch(state,{batchId,date,quantity,count}) {
-  const batch=batchBalances(state).find(b=>b.id===batchId);
+  const batch=(state.local.batches??[]).find(b=>b.id===batchId);
   const part=numeric(quantity), parts=numeric(count);
-  const total=round(part*parts,6);
-  if(!batch || !validDate(date) || !(part>0)||!Number.isInteger(parts)||parts<1||parts>100||total>batch.remaining+1e-6)
+  if(!batch || !(part>0)||!Number.isInteger(parts)||parts<1||parts>100)
     throw Error('请检查分装数量和原批次余量（一次最多 100 份）');
-  const [{costCents}]=allocateStock(state,batch.foodId,total,batchId,date);
-  const actionId=makeId('split');
-  state.local.stockMoves.push({id:actionId,batchId,foodId:batch.foodId,date,delta:-total,costCents,reason:'分装转出',createdAt:new Date().toISOString()});
-  return Array.from({length:parts},(_,i)=>addBatch(state,{...batch,id:actionId+'-'+i,date,quantity:part,parent:batchId,
-    costCents:costCents===null?null:Math.round((i+1)*costCents/parts)-Math.round(i*costCents/parts),reason:'分装转入'}));
+  return registerPortions(state,{foodId:batch.foodId,batchId,date,quantities:Array(parts).fill(part)});
 }
 
 export function stockAlerts(state,today) {

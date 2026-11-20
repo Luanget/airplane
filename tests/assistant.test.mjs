@@ -6,6 +6,7 @@ import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validat
 import {addBatch,saveSku} from '../health/inventory.mjs';
 import {summarizeFoodHistory,reviseFoodPortion} from '../health/food-history.mjs';
 import {readLedger} from '../ai/workspace.mjs';
+import {skillLibrary} from '../ai/skills.mjs';
 import {confirmItems,resolveItem} from '../health/candidates.mjs';
 import {matches,resultSchema,validInput,assistantInput} from '../health/contract.mjs';
 import {accountKeys,privateAccount} from '../account.mjs';
@@ -18,6 +19,50 @@ const nutrition={kcal:100,protein:10,carbs:8,fat:3,sodium:20};
 const part={name:'样品',sku:null,amount:2,unit:'包',action:'eat',basisAmount:100,basisUnit:'g',
   packageSize:50,packageUnit:'g',nutrients:nutrition,uncertainty:'合成标签'};
 const date='2030-01-01';
+test('default rules, legacy preferences and individual Skills remain independent',()=>{
+ const data=new Map([['airplane-ai-skill-v1','保留旧的个人偏好']]);
+ const library=skillLibrary({getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value)});
+ const defaults=library.list().filter(item=>item.preset);
+ assert.equal(defaults.length,5);
+ assert.equal(library.active().length,5);
+ assert.equal(library.active().at(-1).text,'保留旧的个人偏好');
+ assert.equal(data.size,1);
+ const stock=defaults.find(item=>item.id==='l-stock');
+ library.enable(stock.id,false);
+ library.save({id:stock.id,name:stock.name,text:'本机修改的库存规则'},stock);
+ assert.equal(library.active().some(row=>row.name===stock.name),false);
+ assert.throws(()=>library.save({id:stock.id,name:stock.name,text:'旧编辑器'},stock),/已变更/);
+ library.restore(stock.id);
+ library.enable(stock.id,true);
+ assert.equal(library.active().find(row=>row.name===stock.name).text,stock.text);
+ library.save({name:'新偏好',text:'回答先给结论'});
+ const input={mode:'chat',text:'下一餐怎么吃',date,photo:null,history:[]};
+ const payload=JSON.parse(modelRequest(input,{skills:library.active()}).input[0].content[0].text);
+ assert.deepEqual(payload.skills,library.active());
+ assert.equal(payload.skills.some(row=>row.name==='L · 餐食偏好'),false);
+ assert.deepEqual(payload.skills.at(-1),{name:'新偏好',text:'回答先给结论'});
+});
+
+test('scoped progress queries use local weight and cycle reports without exporting history',async()=>{
+ const state=newState(),today='2030-04-09',yesterday='2030-04-08';
+ state.settings.cycleAnchor=yesterday;
+ state.settings.cycleDays=4;
+ state.settings.cycleTarget=4200;
+ state.settings.baselineTdee=2600;
+ for(let i=0;i<8;i++)state.local.weights.push({source:'manual',date:addDays(today,i-7),kg:88-i/4,isMorning:true});
+ state.local.weights.push({source:'manual',date:addDays(today,1),kg:100,isMorning:true});
+ addFood(state,{date:yesterday,meal:'午餐',name:'测试食品',kcal:1500,nutrition});
+ const workspace={readHealth:async()=>state};
+ const weight=await readLedger(workspace,{scope:'weight',query:''},today);
+ assert.deepEqual(weight,{asOf:today,latest:{date:today,kg:86.25,tentative:false},change:-0.25,count:7,last7:87,previous7:87.25,delta:-0.25});
+ const cycle=await readLedger(workspace,{scope:'cycle',query:''},today);
+ assert.equal(cycle.days,4);
+ assert.equal(cycle.goal,4200);
+ assert.equal(cycle.closedThrough,yesterday);
+ assert.equal(cycle.deficit,1100);
+ assert.equal(cycle.today.conditionalDeficit,null);
+ assert.equal('entries' in cycle,false);
+});
 test('same browser keeps two account ledgers encrypted and guest data intact',async()=>{
   const values=new Map([['old','guest']]);
   const storage={getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,v)};

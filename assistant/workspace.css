@@ -9,9 +9,31 @@
 .assistant-panel > :empty { display:none }
 .assistant-panel p { color:var(--muted); font-size:13px; line-height:1.5; margin:0 }
 .assistant-panel p+p { margin-top:8px }
+.assistant-model-options { grid-template-columns:repeat(3,minmax(0,1fr)) }
+.assistant-model-options [aria-pressed=true] { color:var(--text); background:var(--surface); box-shadow:var(--shadow) }
+.assistant-billing-links { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px }
+.assistant-billing-links a { display:inline-flex; align-items:center; padding:0 6px; min-height:44px; color:var(--text); font-size:13px; text-decoration:underline; text-underline-offset:3px }
 .assistant-prompt { margin-top:12px; font-size:13px }
 .assistant-prompt summary { color:var(--muted); cursor:pointer; padding-block:6px }
-.assistant-prompt pre,.assistant-read pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; line-height:1.5 }
+.assistant-prompt pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; line-height:1.5 }
+.skill-group { margin-bottom:10px }
+.skill-group h3 { margin:0 0 4px; font-size:12px; color:var(--muted) }
+.skill-row { display:flex; align-items:center; justify-content:space-between; gap:8px; border-bottom:1px solid var(--line) }
+.skill-row label { display:flex; flex:1; align-items:center; gap:8px; min-width:0; min-height:44px; font-size:14px; cursor:pointer; overflow-wrap:anywhere }
+.skill-row input { flex:none; width:16px; height:16px; margin:0 }
+.skill-row button { min-width:44px; flex:none }
+.skill-new { padding:0 4px }
+.skill-editor { padding:4px 10px 8px; border:1px solid var(--line); border-radius:12px }
+.assistant-panel-body > output:not(:empty) { display:block; margin-top:6px; font-size:13px; color:var(--muted) }
+.skill-edit-review h3 { font-size:14px; margin-bottom:8px }
+.skill-edit-review :is(label,summary,p) { font-size:12px; line-height:1.5 }
+.skill-edit-review details { margin:0 0 8px }
+.skill-edit-review summary { padding-block:6px; color:var(--muted); cursor:pointer }
+.skill-edit-review p { margin:4px 0 8px; color:var(--muted); white-space:pre-wrap }
+.skill-edit-review .choice-trigger { font-size:14px }
+.assistant-workspace .skill-edit-review :is(input,textarea) { line-height:1.5 }
+.assistant-workspace .skill-edit-review :is(input,textarea):not(:focus) { font-size:14px }
+.chat-review:has(> .skill-edit-review) > .chat-actions button { font-size:13px }
 .chat-source { justify-self:start; max-width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface) }
 .chat-source summary { cursor:pointer; color:var(--muted); font-size:13px }
 .chat-source pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; font:inherit; font-size:13px; line-height:1.55 }
@@ -26,7 +48,7 @@
 .assistant-fields .chat-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px }
 .assistant-fields .chat-actions button { margin:0 }
 .assistant-conversation {
- display:grid; grid-template-rows:auto minmax(120px,1fr) auto;
+ display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(120px,1fr) auto;
  min-height:480px; height:calc(100dvh - 94px - env(safe-area-inset-top, 0px) - var(--safe-bottom));
  padding:14px; min-width:0
 }
@@ -87,17 +109,17 @@
 .assistant-start p { color:var(--muted); margin:0 0 12px; font-size:14px; line-height:1.55 }
 .assistant-examples { display:flex; flex-wrap:wrap; gap:8px }
 .assistant-examples button { width:auto; padding:6px 12px }
-.assistant-read { margin-top:12px; padding:12px }
-.assistant-read h3 { margin:0 0 8px; font-size:16px }
-.assistant-read pre { color:var(--text); background:var(--surface-2); border-radius:12px; padding:10px }
-.assistant-read button:disabled { opacity:.55 }
+.chat-review .assistant-plan-note { margin:0 0 10px; color:var(--muted); font-size:12px; line-height:1.5 }
+.chat-review .assistant-plan-item { margin:8px 0; padding:2px 10px 6px }
+.assistant-plan-item legend { font-size:14px; font-weight:650 }
+.assistant-plan-item > p { margin:3px 0 0; color:var(--muted); font-size:12px; line-height:1.45; font-variant-numeric:tabular-nums }
+.assistant-plan-item > details > summary { padding:8px 0; color:var(--muted); cursor:pointer }
 .food-edit-diff { margin:8px 0; padding:8px 10px; border-radius:12px; background:var(--surface-2); font-size:13px }
 .food-edit-diff dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:5px 10px; margin:0 }
 .food-edit-diff dt { color:var(--muted) }
 .food-edit-diff dd { margin:0; overflow-wrap:anywhere }
 .assistant-query { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-height:36px; margin-top:3px; color:var(--text); font-size:13px; cursor:pointer }
 .assistant-query input { width:16px; height:16px }
-.assistant-query span { color:var(--muted); font-size:12px }
 .assistant-conversation .chat-composer { border-top:1px solid var(--line); padding-top:8px }
 .assistant-workspace .chat-attach { flex:none }
 @media (max-width:390px) {
@@ -112,6 +134,3 @@
 
 .assistant-request-status { display:flex; align-items:center; gap:8px; justify-content:space-between }
 .assistant-request-status button { flex:none }
-.assistant-send-confirmation { margin-top:8px; padding:10px; background:var(--surface-2); border-radius:12px }
-.assistant-send-confirmation h3 { margin:0; font-size:14px }
-.assistant-send-confirmation p { margin:5px 0 8px; color:var(--muted); font-size:13px; line-height:1.45 }

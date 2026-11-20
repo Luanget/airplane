@@ -52,22 +52,18 @@
             <h2>今天想记录什么？</h2>
             <p>可以用一句话记收支、吃了什么、买了什么或盘点食材。</p>
             <div class="assistant-examples" aria-label="示例">
-              <button type="button" class="secondary-button" data-example="昨天吃了什么" data-use-ledger>查昨天饮食</button>
-              <button type="button" class="secondary-button" data-example="查库存和今日支出" data-use-ledger>查库存和支出</button>
-              <button type="button" class="secondary-button" data-example="按分类看看本月的消费习惯" data-use-ledger>分析本月消费</button>
-              <button type="button" class="secondary-button" data-example="更正昨天的牛奶为 300g，补记今天午餐 28 元，然后按更新后的库存安排晚餐" data-use-ledger>更正饮食、记账并安排晚餐</button>
-              <button type="button" class="secondary-button" data-example="查一下燕麦，然后盘点为 300 g" data-use-ledger>盘点库存</button>
-              <button type="button" class="secondary-button" data-example="用库存安排晚餐" data-use-ledger>安排晚餐</button>
+              <button type="button" class="secondary-button" data-example="昨天吃了什么">查昨天饮食</button>
+              <button type="button" class="secondary-button" data-example="查库存和今日支出">查库存和支出</button>
+              <button type="button" class="secondary-button" data-example="按分类看看本月的消费习惯">分析本月消费</button>
+              <button type="button" class="secondary-button" data-example="更正昨天的牛奶为 300g，补记今天午餐 28 元，然后按更新后的库存安排晚餐">更正饮食、记账并安排晚餐</button>
+              <button type="button" class="secondary-button" data-example="查一下燕麦，然后盘点为 300 g">盘点库存</button>
+              <button type="button" class="secondary-button" data-example="用库存安排晚餐">安排晚餐</button>
               <button type="button" class="secondary-button" data-example="午餐花了 28 元">记一笔账</button>
               <button type="button" class="secondary-button" data-example="帮我修改 Skill，以后晚餐优先推荐高蛋白">修改 Skill</button>
             </div>
           </section>
           <div class="chat-transcript" role="log" aria-label="对话" aria-live="polite"></div>
           <div class="photo-results" data-photo-results></div>
-          <section class="card assistant-read" aria-label="账本摘要" hidden>
-            <h3>发送账本摘要</h3><p data-read-label></p><pre data-read-preview></pre>
-            <div class="chat-actions"><button type="button" class="secondary-button" data-skip-read>取消本轮</button><button type="button" class="primary-button" data-share-read>发送摘要</button></div>
-          </section>
           <form class="card chat-review" aria-label="核对候选" hidden></form>
         </div>
         <form class="chat-composer">
@@ -77,14 +73,9 @@
             <span data-attachment></span><button type="button" class="text-button" data-remove-photo hidden>移除照片</button>
             <button type="submit" class="primary-button">发送</button>
           </div>
-          <label class="assistant-query"><input type="checkbox" name="allowRead"> 允许本轮查询账本<span>每次核对摘要后才发送</span></label>
+          <label class="assistant-query"><input type="checkbox" name="allowRead" checked> 允许本轮查询账本</label>
           <div class="assistant-request-status"><output data-status aria-live="polite"></output><button type="button" class="text-button" data-stop-request hidden>停止等待</button></div>
           <button type="button" class="text-button" data-retry-follow-up hidden>重试后续请求</button>
-          <section class="assistant-send-confirmation" id="assistant-consent" aria-labelledby="assistant-consent-title" hidden>
-            <h3 id="assistant-consent-title">首次发送给 OpenAI</h3>
-            <p>会发送本轮消息、设备日期、个人 Skill 和近期对话。已选照片逐张识别。账本摘要仍需单独确认。</p>
-            <div class="chat-actions"><button type="button" class="secondary-button" data-cancel-send>返回编辑</button><button type="button" class="primary-button" data-approve-send>确认发送</button></div>
-          </section>
         </form>
       </section>
     </main>
@@ -97,13 +88,36 @@
           <form id="assistant-key" class="assistant-fields"></form>
           <div class="assistant-panel-body" data-demo-key hidden><p>演示使用预设回复，无需导入 Key。</p></div>
         </details>
+        <details class="card assistant-panel" id="assistant-model-panel">
+          <summary class="setting-row">
+            <span class="mini-icon" data-shell-icon="chart"></span>
+            <span class="setting-copy"><span class="setting-title">模型与用量</span><span class="setting-sub" data-current-model></span></span>
+            <span class="chevron" data-shell-icon="chevron"></span>
+          </summary>
+          <div class="assistant-panel-body">
+            <div class="segmented assistant-model-options" role="group" aria-label="选择模型" data-model-options></div>
+            <output role="status"></output>
+            <div class="assistant-billing-links">
+              <a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">API 余额</a>
+              <a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">用量明细</a>
+            </div>
+          </div>
+        </details>
         <details class="card assistant-panel" id="assistant-skill">
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">Skill</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
-            <form class="assistant-fields">
-              <label>个人偏好<textarea name="skill" rows="3" maxlength="320" placeholder="例如：晚餐用常见食材，少油，优先高蛋白。"></textarea></label>
-              <div class="chat-actions"><button type="submit" class="secondary-button">保存 Skill</button><output role="status"></output></div>
+            <div data-skill-items></div>
+            <button type="button" class="text-button skill-new" data-new-skill>新建 Skill</button>
+            <form class="assistant-fields skill-editor" hidden>
+              <label>名称<input name="name" required></label>
+              <label>工作规则<textarea name="text" rows="5" placeholder="例如：优先安排库存里的食材，份量用克。" required></textarea></label>
+              <div class="chat-actions">
+                <button type="button" class="text-button" data-close-skill>收起</button>
+                <button type="button" class="text-button" data-restore-skill hidden>恢复原版</button>
+                <button type="submit" class="primary-button">保存 Skill</button>
+              </div>
             </form>
+            <output role="status"></output>
             <details class="assistant-prompt"><summary>查看内置提示词</summary><pre></pre></details>
           </div>
         </details>
@@ -111,7 +125,7 @@
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="activity"></span><span class="setting-copy setting-title">本轮上下文</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
             <p data-context-size></p>
-            <p>发送范围包括本轮消息、选中的照片、当天日期、Skill 和最近四条短消息。账本摘要另行确认。</p>
+            <p>OpenAI 会收到本轮消息、选中的照片、当天日期、已启用的 Skill 和最近四条短消息。开启查询时，还会收到本轮所需的账本摘要。</p>
           </div>
         </details>
       </div>

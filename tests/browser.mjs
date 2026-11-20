@@ -75,7 +75,7 @@ try {
   await page.locator('.update-banner-action').waitFor();
   assert.equal(await page.locator('#finance-date').count(),0);
   await page.locator('.update-banner-action').click();
-  await page.locator('#finance-date').waitFor();
+  await page.locator('.day-picker .calendar-trigger').waitFor();
   assert.equal(await ledger(),before);
   assert.equal(await page.evaluate(()=>localStorage.getItem('airplane-pwa-recovery-v1')),before);
   await page.locator('#settingsButton').click();
@@ -112,7 +112,7 @@ try {
   await openBackups();
   const fixtureDay=await page.locator('#report-date').inputValue();
   const otherFixtureDay=fixtureDay.slice(0,8)+(fixtureDay.endsWith('-01')?'02':'01');
-  const synthetic={tables:{
+  const synthetic={updated_at:fixtureDay+'T10:00:00+08:00',tables:{
     food_events:['早餐','午餐（外食）','晚餐（计划）'].map((meal,i)=>({
       日期:i===2?otherFixtureDay:fixtureDay,
       餐次:meal,'食物/饮品':'合成菜单'+i,'份量/重量':'1 份',状态:'计划'
@@ -128,7 +128,8 @@ try {
       {'食品ID':'unknown','名称':'未知数量样品','库存值':null,'库存单位':'个'},
       {'食品ID':'mirror','名称':'合计样品（仅总量核对）','库存值':5,'库存单位':'包（仅镜像）'},
       {'食品ID':'variant-a','名称':'合成瓶','库存值':2,'库存单位':'瓶（型号 A）'},
-      {'食品ID':'variant-b','名称':'合成瓶','库存值':3,'库存单位':'瓶（型号 B）'}
+      {'食品ID':'variant-b','名称':'合成瓶','库存值':3,'库存单位':'瓶（型号 B）'},
+      {'食品ID':'portions','名称':'合成分装食品','库存值':675,'库存单位':'g熟重','标准份量':'100g熟重','库存基准':'余3袋 [180,220,275]','库存份数估算':3,kcal:100}
     ]
   }};
   const importFile={name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(synthetic))};
@@ -189,12 +190,35 @@ try {
     await picker.getByRole('button',{name:option}).click();
     await picker.waitFor({state:'hidden'});
   }
+  assert.deepEqual(await manual.locator('#food-select option').evaluateAll(options=>options.map(option=>option.value).sort()),
+    ['','fixture','fixture-pieces','portions','variant-a','variant-b']);
+  await choose(manual,'foodId',/^合成分装食品/,'分装');
+  assert.equal(await manual.locator('[name=amount]').inputValue(),'');
+  await choose(manual,'batchId',/^220 g/);
+  assert.equal(await manual.locator('[name=amount]').inputValue(),'220');
+  assert.equal(await manual.locator('[name=kcal]').inputValue(),'220');
+  await manual.locator('[type=submit]').click();
+  const portionRow=page.locator('#local-events').getByRole('button',{name:/合成分装食品/});
+  await portionRow.waitFor();
+  const remainingPortions=()=>page.evaluate(async()=>{
+    const state=await (await import('./storage.mjs')).readState();
+    return (await import('./core.mjs')).availableBatches(state,'portions').map(batch=>batch.remaining);
+  });
+  assert.deepEqual(await remainingPortions(),[180,275]);
+  await portionRow.click();
+  assert.match(await manual.locator('#food-portion-picker .choice-value').textContent(),/^220 g/);
+  await page.getByRole('button',{name:'删除这条记录'}).click();
+  await page.getByRole('button',{name:'确认删除'}).click();
+  await portionRow.waitFor({state:'hidden'});
+  assert.deepEqual(await remainingPortions(),[180,220,275]);
+  await page.locator('#add-health').click();
   await choose(manual,'foodId',/^合成计数食品/,'计数');
   await manual.getByLabel('份量（个）',{exact:true}).fill('6');
   assert.equal(await manual.locator('[name=portion]').inputValue(),'6 个');
   assert.equal(await manual.locator('[name=stockQty]').inputValue(),'6');
   assert.equal(await manual.locator('[name=kcal]').inputValue(),'120');
   await choose(manual,'foodId',/^合成库存/,'合成库存');
+  await manual.locator('[name=amount]').fill('1');
   const dateField=manual.locator('.calendar-field:has(input[name=date])');
   await checkPickerSpacing(dateField.locator('.calendar-trigger'));
   await dateField.locator('.calendar-trigger').click();
@@ -204,6 +228,7 @@ try {
   await dateMenu.getByRole('button',{name:'今天',exact:true}).click();
   assert.equal(await manual.locator('[name=date]').inputValue(),fixtureDay);
   assert.equal(await dateMenu.isVisible(),false);
+  await manual.locator('#food-options > summary').click();
   await choose(manual,'status','计划');
   await manual.locator('[type=submit]').click();
   await page.locator('#local-events').getByText('合成库存',{exact:true}).waitFor();
@@ -215,10 +240,23 @@ try {
   await page.locator('#local-events').getByRole('button',{name:/合成库存/}).click();
   await page.getByRole('button',{name:'删除这条记录'}).click();
   await page.locator('#confirm-delete-health').getByRole('button',{name:'取消',exact:true}).click();
+  await manual.locator('#food-options > summary').click();
   await choose(manual,'status','已吃（计入）');
   await manual.locator('[type=submit]').click();
   await page.locator('#toast').getByText('饮食已保存').waitFor();
   assert.equal(await quantity(),4);
+  await page.locator('#add-health').click();
+  await page.locator('[data-entry=activity]').click();
+  const activity=page.locator('#activity-form');
+  assert.equal(await activity.locator('[name=includedInBase]').count(),0);
+  await activity.getByLabel('运动名称').fill('合成额外骑行');
+  await activity.getByLabel('额外活动热量 kcal').fill('125');
+  await activity.locator('[type=submit]').click();
+  await page.getByText('运动已保存',{exact:true}).waitFor();
+  assert.equal(await page.evaluate(async()=>{
+    const state=await (await import('./storage.mjs')).readState();
+    return state.local.activities.at(-1).includedInBase;
+  }),false);
   await page.locator('[data-tab="inventory"]').click();
   await page.locator('#inventory-list').getByText('合成库存',{exact:true}).waitFor();
   const inventory=page.locator('#inventory-list');
@@ -311,9 +349,12 @@ try {
   const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
 
   const calls=[],testKey='sk-fixture-browser-only';
+  const enabledSkills=['L · 记录与纠错','L · 配餐与营养','L · 库存与采购','原有个人偏好','测试个人 Skill'];
+  await page.evaluate(()=>localStorage.setItem('airplane-ai-skill-v1','合成旧用户偏好'));
   const batchText='盘点合成新食品为 90g，补记 43 元午餐，再查更新后的库存';
   let resumeAttempts=0;
   let firstPhotoAttempts=0;
+  let expectedModel='gpt-6-luna';
   let releaseDelayed,markDelayed;
   const delayedStarted=new Promise(resolve=>{markDelayed=resolve;});
   const aiIcon=await page.locator('.topbar-actions [data-open-ai] svg').innerHTML();
@@ -323,12 +364,29 @@ try {
     if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
     assert.equal(route.request().headers().authorization,'Bearer '+testKey);
     const body=route.request().postDataJSON(),content=body.input[0].content;
+    assert.equal(body.model,expectedModel);
+    assert.equal(body.reasoning.effort,expectedModel==='gpt-6.2-sol'?'low':'none');
     assert.equal(body.store,false);assert.equal(body.stream,true);assert.equal(body.text.format.strict,true);
     const input=JSON.parse(content[0].text);
-    assert.deepEqual(Object.keys(input).sort(),input.applied?['applied','date','history','text']:['date','history','text']);
+    const connectionTest=input.text.startsWith('这是连接测试');
+    const fields=['date','history','text'];
+    if(!connectionTest){
+      fields.push('skills');
+      assert.deepEqual(input.skills.map(item=>item.name),enabledSkills);
+      assert.ok(input.skills.every(item=>Object.keys(item).sort().join(',')==='name,text'));
+    }
+    if(input.applied)fields.push('applied');
+    assert.deepEqual(Object.keys(input).sort(),fields.sort());
     assert.ok(!content[0].text.includes('synthetic legacy entry'));
     assert.ok(!content[0].text.includes('private synthetic'));
     calls.push({...input,photo:content[1]?.image_url});
+    if(input.text==='合成餐点')assert.ok(body.tools.some(tool=>tool.name==='read_ledger'));
+    if(input.text==='记录照片里的合成分装'){
+      assert.equal(content[1].type,'input_image');
+      return route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',
+        text:JSON.stringify({reply:'请核对分装数量。',proposal:{mode:'portions',date:null,
+          result:{name:'合成计数食品',quantities:[3,7],unit:'个'}}})}]}]}});
+    }
     if(input.text==='识别合成两张照片'){
       assert.equal(content.length,2);
       assert.equal(content[1].type,'input_image');
@@ -343,8 +401,9 @@ try {
         text:JSON.stringify({reply:'已识别合成图 '+photoIndex+'。',proposal:{mode:'entry',date:null,result:{note:'',items:[item]}}})}]}]}});
     }
     if(input.text==='模拟额度不足'){
+      assert.equal(body.tools,undefined);
       return route.fulfill({status:429,headers:{...headers,'Access-Control-Expose-Headers':'X-Request-ID','X-Request-ID':'req_fixture'},
-        json:{error:{code:'insufficient_quota'}}});
+        json:{error:{code:'credit_balance_exhausted'}}});
     }
     const fixtureReply={status:'completed',output:[{type:'message',content:[{type:'output_text',
       text:'{"reply":"连接正常。","proposal":null}'}]}]};
@@ -424,9 +483,25 @@ try {
     await form.getByRole('textbox',{name:'消息'}).fill(text);
     await form.getByRole('button',{name:'发送',exact:true}).click();
   }
-  await page.locator('[data-open-ai]').click();
+  await page.locator('.topbar-actions [data-open-ai]').click();
   assert.equal(await access.isVisible(),false);
+  assert.ok(await form.locator('[name=allowRead]').isChecked());
   await openAssistantSettings();
+  await page.mouse.click(8,8);
+  await assistantSettings.waitFor({state:'hidden'});
+  await openAssistantSettings();
+  const skillSettings=assistantSettings.locator('#assistant-skill');
+  await skillSettings.getByText('Skill',{exact:true}).click();
+  await skillSettings.getByText('L 系列 · 栾云煦创',{exact:true}).waitFor();
+  assert.ok(await skillSettings.getByRole('checkbox',{name:'原有个人偏好',exact:true}).isChecked());
+  assert.equal(await skillSettings.getByRole('checkbox',{name:'L · 餐食偏好',exact:true}).isChecked(),false);
+  await skillSettings.getByRole('checkbox',{name:'L · 运动与周期',exact:true}).uncheck();
+  await skillSettings.getByRole('button',{name:'新建 Skill',exact:true}).click();
+  await skillSettings.getByLabel('名称',{exact:true}).fill('测试个人 Skill');
+  await skillSettings.getByLabel('工作规则',{exact:true}).fill('合成个人规则，验证启用情况。');
+  await skillSettings.getByRole('button',{name:'保存并启用'}).click();
+  assert.ok(await skillSettings.getByRole('checkbox',{name:'测试个人 Skill',exact:true}).isChecked());
+  await skillSettings.getByText('Skill',{exact:true}).click();
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByText('请导入 OpenAI API Key').waitFor();
   assert.equal(await chat.isVisible(),true);assert.equal(calls.length,0);
@@ -435,11 +510,6 @@ try {
   await access.getByText('已保存 Key',{exact:true}).waitFor();
   await closeAssistantSettings();
   await say('合成餐点');
-  await form.getByText('还没发送。请在下方确认首次发送。',{exact:true}).waitFor();
-  await chat.getByRole('button',{name:'返回编辑'}).click();
-  assert.equal(calls.length,0);
-  await say('合成餐点');
-  await chat.getByRole('button',{name:'确认发送'}).click();
   await review.waitFor();
   await checkPickerSpacing(review.locator('.calendar-trigger'));
   assert.equal(calls.length,1);
@@ -454,7 +524,12 @@ try {
   assert.match(food.time,/^\d{2}:\d{2}$/);
   await say('用我描述的合成蔬菜规划一餐');await review.waitFor();
   assert.equal(calls[1].history[0].text,'合成餐点');
-  await review.getByRole('button',{name:/^动作，计划/}).waitFor();
+  const planCard=review.locator('.assistant-plan-item');
+  await planCard.getByText(/120 g.*120 kcal/).waitFor();
+  assert.equal(await planCard.getByLabel('数量',{exact:true}).isVisible(),false);
+  await planCard.getByText('调整份量与营养',{exact:true}).click();
+  await planCard.getByLabel('数量',{exact:true}).waitFor();
+  await planCard.getByText('调整份量与营养',{exact:true}).click();
   await review.getByRole('button',{name:'保存为饮食计划'}).click();
   await chat.getByText('已保存饮食计划。',{exact:true}).waitFor();
   await page.getByRole('link',{name:'健康',exact:true}).click();
@@ -488,7 +563,7 @@ try {
   // Both modules use the same assistant and the same previously imported key.
   await page.getByRole('link',{name:'财务',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.day-picker .calendar-value'));
-  assert.equal(await page.locator('[data-open-ai] svg').innerHTML(),aiIcon);
+  assert.equal(await page.locator('.topbar-actions [data-open-ai] svg').innerHTML(),aiIcon);
   await page.getByRole('button',{name:'打开设置',exact:true}).click();
   await page.getByRole('link',{name:/^管理 API Key/}).click();
   await assistantSettings.waitFor();
@@ -496,15 +571,14 @@ try {
   await closeAssistantSettings();
   await page.waitForFunction(()=>!location.hash);
   await page.getByRole('link',{name:'财务',exact:true}).click();
-  await page.locator('[data-open-ai]').click();await chat.waitFor();
+  await page.locator('.topbar-actions [data-open-ai]').click();await chat.waitFor();
   assert.equal(await access.isVisible(),false);
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
-  await form.locator('[name=allowRead]').check();
+  assert.ok(await form.locator('[name=allowRead]').isChecked());
   await say('查一下合成库存');
-  await chat.getByRole('region',{name:'账本摘要'}).waitFor();
-  assert.equal(calls.length,7);
-  await chat.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('合成库存还有 4 包。',{exact:true}).waitFor();
+  assert.equal(calls.length,8);
+  assert.equal(await chat.getByRole('button',{name:'发送摘要'}).count(),0);
   await chat.getByRole('button',{name:'新对话',exact:true}).click();
   await chat.getByRole('button',{name:'对话记录',exact:true}).click();
   const history=chat.getByRole('region',{name:'对话记录',exact:true});
@@ -512,12 +586,28 @@ try {
   await history.waitFor({state:'hidden'});
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
   await openAssistantSettings();
+  const modelPanel=assistantSettings.locator('#assistant-model-panel');
+  await modelPanel.getByText('模型与用量',{exact:true}).click();
+  assert.equal(await modelPanel.getByRole('button',{name:'Luna',exact:true}).getAttribute('aria-pressed'),'true');
+  assert.equal(await modelPanel.getByRole('link',{name:'API 余额'}).getAttribute('href'),
+    'https://platform.openai.com/settings/organization/billing/overview');
+  assert.equal(await modelPanel.getByRole('link',{name:'用量明细'}).getAttribute('href'),'https://platform.openai.com/usage');
+  await modelPanel.getByRole('button',{name:'Terra',exact:true}).click();
+  expectedModel='gpt-6.1-terra';
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByRole('button',{name:'发送连接测试'}).click();
-  await access.getByText('已收到 OpenAI 回复：连接正常。',{exact:true}).waitFor();
+  await access.getByText('GPT-6.1 Terra · 连接正常。',{exact:true}).waitFor();
+  await modelPanel.getByRole('button',{name:'Sol',exact:true}).click();
+  expectedModel='gpt-6.2-sol';
   await closeAssistantSettings();
+  await page.reload();
+  await openAssistantSettings();
+  await modelPanel.getByText('模型与用量',{exact:true}).click();
+  assert.equal(await modelPanel.getByRole('button',{name:'Sol',exact:true}).getAttribute('aria-pressed'),'true');
+  await closeAssistantSettings();
+  await form.locator('[name=allowRead]').uncheck();
   await say('模拟额度不足');
-  await form.getByText(/额度或余额不足.*429.*req_fixture/).waitFor();
+  await form.getByText(/预付余额已用完.*429.*req_fixture/).waitFor();
   assert.equal(await form.getByRole('textbox',{name:'消息'}).inputValue(),'模拟额度不足');
   await say('模拟等待');
   await delayedStarted;
@@ -529,8 +619,9 @@ try {
     const fetchRequest=window.fetch.bind(window);
     window.fetch=(url,options)=>{
       if(url!=='https://api.openai.com/v1/responses')return fetchRequest(url,options);
-      const input=JSON.parse(JSON.parse(options.body).input[0].content[0].text);
+      const payload=JSON.parse(options.body),input=JSON.parse(payload.input[0].content[0].text);
       if(input.text!=='模拟流式回复')return fetchRequest(url,options);
+      if(payload.model!=='gpt-6.2-sol'||payload.reasoning.effort!=='low')throw Error('Sol model settings not applied');
       const encoder=new TextEncoder();
       return Promise.resolve(new Response(new ReadableStream({start(controller){
         const emit=event=>controller.enqueue(encoder.encode('data: '+JSON.stringify(event)+'\n\n'));
@@ -568,20 +659,15 @@ try {
   const savedBatch=await ledger();
   assert.equal(JSON.parse(savedBatch).transactions.at(-1).amount,43);
   await retry.click();
-  const batchSummary=chat.getByRole('region',{name:'账本摘要'});
-  await batchSummary.getByText(/合成新食品 · 90 g/).waitFor();
-  assert.equal(calls.at(-1).applied.length,2);
-  await batchSummary.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('保存后还剩 90 g。',{exact:true}).waitFor();
+  assert.equal(calls.at(-1).applied.length,2);
   assert.equal(await ledger(),savedBatch);
   console.log('PASS batch save before fresh read, minimal follow-up context and no duplicate writes on retry');
   await form.locator('[name=allowRead]').check();
   const beforeAnalysis=calls.length;
   await say('分析合成月度分类支出');
-  await batchSummary.getByText(/按分类汇总/).waitFor();
-  assert.equal(calls.length,beforeAnalysis+1);
-  await batchSummary.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('已按分类查看本月支出。',{exact:true}).waitFor();
+  assert.equal(calls.length,beforeAnalysis+2);
   assert.equal(await ledger(),savedBatch);
   const twoImages=await page.evaluate(()=>['red','blue'].map(color=>{
    const canvas=document.createElement('canvas');canvas.width=canvas.height=40;
@@ -614,14 +700,28 @@ try {
   assert.equal(photoCalls.length,3);
   assert.notEqual(photoCalls[0].photo,photoCalls[1].photo);
   assert.equal(photoCalls[0].photo,photoCalls[2].photo);
+  const photographedPortions=()=>page.evaluate(async()=>{
+    const state=await (await import('../health/storage.mjs')).readState();
+    const {inventoryWithMoves,batchBalances}=await import('../health/core.mjs');
+    return {qty:inventoryWithMoves(state).find(row=>row.id==='fixture-pieces').qty,
+      portions:batchBalances(state,'fixture-pieces').map(batch=>batch.remaining)};
+  });
+  await form.locator('[type=file]').setInputFiles({name:'portions.png',mimeType:'image/png',buffer:Buffer.from(pixels,'base64')});
+  await say('记录照片里的合成分装');
+  await review.getByRole('button',{name:'确认分装',exact:true}).waitFor();
+  assert.deepEqual(await photographedPortions(),{qty:2,portions:[]});
+  await review.getByRole('button',{name:'确认分装',exact:true}).click();
+  await chat.getByText('已保存分装重量。',{exact:true}).waitFor();
+  assert.deepEqual(await photographedPortions(),{qty:2,portions:[0.3,0.7]});
   console.log('PASS separate photos, individual retry, candidate confirmation and same-name one-off intake');
   await openAssistantSettings();
+  await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await closeAssistantSettings();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
   await access.waitFor();
-  assert.equal(calls.length,20);
+  assert.equal(calls.length,21);
   await closeAssistantSettings();
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();
@@ -755,6 +855,7 @@ try {
 
   // The list can feed a purchase draft without touching inventory until confirmation.
   await page.locator('#inventory-list').getByRole('button',{name:'合成库存'}).click();
+  await page.locator('#inventory-list').getByRole('button',{name:'编辑食品',exact:true}).click();
   await page.locator('#sku-form').waitFor();
   await page.locator('#sku-form [name=minimum]').fill('7');
   await page.locator('#sku-form [type=submit]').click();
@@ -798,8 +899,6 @@ try {
   await page.setViewportSize({width:390,height:844});
   await chat.getByRole('button',{name:'查昨天饮食'}).click();
   await form.getByRole('button',{name:'发送',exact:true}).click();
-  await chat.getByRole('region',{name:'账本摘要'}).getByText(/牛奶 · 250 g/).waitFor();
-  await chat.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('记录里有燕麦 60 g、牛奶 250 g。',{exact:true}).waitFor();
   await chat.getByText('查看本次饮食记录 · 2 条',{exact:true}).waitFor();
   await page.reload();
@@ -821,15 +920,10 @@ try {
   await chat.getByRole('button',{name:'新对话',exact:true}).click();
   await chat.getByRole('button',{name:'查库存和支出'}).click();
   await form.getByRole('button',{name:'发送',exact:true}).click();
-  const summary=chat.getByRole('region',{name:'账本摘要'});
-  await summary.getByText(/燕麦 · 390 g/).waitFor();
-  assert.equal(await summary.getByText(/支出 12 元/).count(),0);
-  await summary.getByRole('button',{name:'发送摘要'}).click();
-  await summary.getByText(/支出 12 元/).waitFor();
-  assert.equal(await chat.getByText('查到 3 种食品，今天已支出 12 元。',{exact:true}).count(),0);
-  await summary.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('查到 3 种食品，今天已支出 12 元。',{exact:true}).waitFor();
-  await chat.getByText('查看本轮 2 次查询的数据',{exact:true}).waitFor();
+  await chat.getByText('查看本轮 2 次查询的数据',{exact:true}).click();
+  await chat.locator('.chat-source').getByText(/燕麦 · 390 g/).waitFor();
+  await chat.locator('.chat-source').getByText(/支出 12 元/).waitFor();
   await chat.locator('[data-toggle-threads]').click();
   const deleteFoodChat=history.getByRole('button',{name:'删除对话 昨天吃了什么',exact:true});
   await deleteFoodChat.click();
@@ -847,7 +941,7 @@ try {
   await history.getByText('还没有对话记录').waitFor();
   assert.equal(await chat.getByText('查到 3 种食品，今天已支出 12 元。',{exact:true}).count(),0);
   assert.deepEqual(await demoMilk(),milk);
-  console.log('PASS two separately approved ledger reads and local deletion of active and inactive chats');
+  console.log('PASS automatically scoped ledger reads and local deletion of active and inactive chats');
   await page.getByRole('link',{name:'健康',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#hero-goal').textContent.includes('kcal'));
   await page.getByRole('button',{name:'前一天'}).click();
@@ -883,15 +977,34 @@ try {
   const stagedLedger=await demoLedger();
   assert.equal(stagedLedger.transactions.length,originalDemoLedger.transactions.length+1);
   await review.getByRole('button',{name:'继续同步',exact:true}).click();
-  await summary.getByText(/牛奶 · 430 g/).waitFor();
+  await chat.getByText(/更新后的牛奶库存是 430 g/).waitFor();
   assert.deepEqual(await demoLedger(),stagedLedger);
   assert.deepEqual((await demoMilk()).map(row=>[row.id,row.portion,row.nutrition.kcal]),[[original.id,'320 g',198.4]]);
-  await summary.getByRole('button',{name:'发送摘要'}).click();
-  await chat.getByText(/更新后的牛奶库存是 430 g/).waitFor();
   await review.getByRole('button',{name:'保存为饮食计划'}).click();
   await chat.getByText('已保存饮食计划。',{exact:true}).waitFor();
   assert.deepEqual(await demoLedger(),stagedLedger);
   console.log('PASS invalid batch leaves both ledgers intact, interrupted local commit settles once and dinner uses fresh inventory');
+  await say('帮我修改 Skill');
+  await review.getByRole('button',{name:'确认更新 Skill'}).waitFor();
+  assert.ok(await chat.evaluate(page=>page.scrollWidth===page.clientWidth));
+  assert.ok(await review.locator('button[type=submit]').evaluate(button=>
+    button.getBoundingClientRect().bottom<=button.closest('.chat-thread').getBoundingClientRect().bottom));
+  const skillText=review.getByLabel('新规则',{exact:true});
+  assert.equal(await skillText.evaluate(field=>getComputedStyle(field).fontSize),'14px');
+  await skillText.focus();
+  assert.equal(await skillText.evaluate(field=>getComputedStyle(field).fontSize),'16px');
+  await review.getByRole('button',{name:/^保存到/}).click();
+  await review.locator('.inline-picker-panel').getByRole('button',{name:'L · 餐食偏好',exact:true}).click();
+  await review.getByRole('button',{name:'确认更新 Skill'}).click();
+  await chat.getByText('Skill 已更新。',{exact:true}).waitFor();
+  await page.reload();
+  await openAssistantSettings();
+  await skillSettings.getByText('Skill',{exact:true}).click();
+  assert.equal(await skillSettings.getByRole('checkbox',{name:'L · 餐食偏好',exact:true}).isChecked(),false);
+  await skillSettings.getByRole('button',{name:'编辑 L · 餐食偏好',exact:true}).click();
+  assert.match(await skillSettings.getByLabel('工作规则',{exact:true}).inputValue(),/搭配易采购的蔬菜/);
+  await closeAssistantSettings();
+  console.log('PASS skill migration, selected request context and targeted edits');
   assert.deepEqual(errors,[]);
   console.log('PASS dated food lookup, thread reload, confirmed in-place correction and health timeline');
   console.log('PASS damaged finance recovery and synthetic-only fixtures');

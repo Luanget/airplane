@@ -1,4 +1,4 @@
-import {inventoryWithMoves, addFood, localStockChange, round, makeId} from './core.mjs';
+import {inventoryWithMoves, availableBatches, addFood, localStockChange, round, makeId} from './core.mjs';
 import {localClock} from '../calendar.mjs';
 import {measuredGrams,saveSku,stockMeasure} from './inventory.mjs';
 import {nutrientKeys} from './contract.mjs';
@@ -89,8 +89,10 @@ export function confirmItems(current, candidates, date, meal, time=localClock())
       localStockChange(next,{date,time,foodId:id,delta:(stockQty ?? amount)*(c.action==='add'?1:-1),reason:'确认智能候选'});
     } else {
       if (c.action === 'eat' && sku && stockQty === null) throw Error('无法换算扣库数量，请调整单位或选择自定义食物');
+      const exactPortion=c.action==='eat'&&availableBatches(next,sku?.id,date).find(batch=>
+        (batch.portion||batch.parent)&&Math.abs(batch.remaining-stockQty)<1e-6);
       const entry = addFood(next,{date,time,meal,name:sku?.name ?? c.name,portion:`${amount} ${unit}`,
-        ...nutrition,foodId:sku?.id,stockQty,amount,amountUnit:unit,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
+        ...nutrition,foodId:sku?.id,batchId:exactPortion?.id,stockQty,amount,amountUnit:unit,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
       entry.source = 'confirmed-assistant';
       entry.uncertainty = c.uncertainty;
     }

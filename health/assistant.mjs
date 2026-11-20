@@ -1,7 +1,7 @@
 import {localClock,syncCalendarFields} from '../calendar.mjs';
 import {cents,newPurchaseId,recordPurchase} from './purchases.mjs';
 import {displayStockQuantity,saveSku,stockMeasure} from './inventory.mjs';
-import {inventoryWithMoves,isStockReference,recordEvent,numeric,validDate} from './core.mjs';
+import {inventoryWithMoves,isOnHand,isStockReference,recordEvent,numeric,validDate} from './core.mjs';
 import {confirmItems, resolveItem} from './candidates.mjs';
 import {matches, resultSchema, activitySchema, purchaseSchema, units, nutrientKeys} from './contract.mjs';
 
@@ -41,16 +41,20 @@ function field(parent, title, options={}) {
 const pairs = values => values.map(x=>[x,x]);
 function editRow(container, original, state, mode) {
   const {stockSource,...c} = structuredClone(original);
+  const plan=mode==='plan';
   const block = document.createElement('fieldset');
+  if(plan)block.className='assistant-plan-item';
   const legend = document.createElement('legend');
   const keep = document.createElement('input');
   keep.type='checkbox'; keep.checked=true; keep.setAttribute('aria-label','保留这项');
-  legend.append(keep,' '+c.name); block.append(legend);
-  const desc = document.createElement('p'); desc.textContent=c.uncertainty; block.append(desc);
-  const grid = document.createElement('div'); grid.className='form-grid'; block.append(grid);
+  const name=document.createElement('span'); name.textContent=' '+c.name;
+  legend.append(keep,name); block.append(legend);
+  const desc = document.createElement('p'); desc.textContent=c.uncertainty;
+  const grid = document.createElement('div'); grid.className='form-grid';
   const stock = inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s));
+  const eligible=()=>['eat','plan'].includes(c.action)?stock.filter(isOnHand):stock;
   if (!c.sku&&(c.action!=='eat'||stockSource==='inventory')) {
-    const exact=stock.filter(s=>s.name.trim()===c.name.trim());
+    const exact=eligible().filter(s=>s.name.trim()===c.name.trim());
     if (exact.length===1) c.sku=exact[0].id;
   }
   const details = document.createElement('details');
@@ -58,8 +62,15 @@ function editRow(container, original, state, mode) {
   const params=document.createElement('div'); params.className='form-grid'; details.append(params);
   const output = document.createElement('p');
   function update() {
+    name.textContent=' '+(c.name||'食品');
     try {
+      if (c.action==='eat'&&stockSource==='inventory'&&!c.sku)throw Error('请选择本次使用的在库食品');
       const {sku,stockQty,nutrition,amount,unit} = resolveItem(state,c);
+      if(plan){
+        output.textContent=[amount+' '+unit,nutrition.kcal==null?null:Number(nutrition.kcal.toFixed(1))+' kcal',
+          ...[['protein','蛋白'],['carbs','碳水'],['fat','脂肪']].flatMap(([key,label])=>nutrition[key]==null?[]:[label+' '+Number(nutrition[key].toFixed(1))+' g'])].filter(Boolean).join(' · ');
+        return;
+      }
       const delta = c.action==='plan' ? '计划不扣库' : sku ? `库存变化 ${stockQty==null?'待核对':(c.action==='add'?'+':'−')+Number(displayStockQuantity(sku,stockQty).toFixed(3))+' '+stockMeasure(sku).unit}` : c.action==='add' ? '创建库存食品' : '未关联库存';
       output.textContent = amount+' '+unit+' ｜ '+Object.entries(nutrition).map(([k,v])=>labels[k]+' '+(v??'待补')).join(' · ') + ' ｜ '+delta;
     } catch (err) { output.textContent=err.message; }
@@ -70,10 +81,18 @@ function editRow(container, original, state, mode) {
       target[key] = el.value === '' ? null : el.type==='number' ? el.valueAsNumber : el.value;
       update();
     });
+    return el;
   }
   bind(grid,'食品名称','name',{});
-  bind(grid,'匹配食品','sku',{choices:[['','自定义食品'],...stock.map(s=>[s.id,s.name])]});
-  bind(grid,'动作','action',{choices:mode==='plan' ? [['plan','计划']] : mode==='purchase' ? [['add','入库']] : Object.entries(actions)});
+  const matches=()=>[['','自定义食品'],...eligible().map(s=>[s.id,s.name])];
+  const skuPicker=bind(grid,'匹配食品','sku',{choices:matches()});
+  const actionPicker=plan?null:bind(grid,'动作','action',{choices:mode==='purchase' ? [['add','入库']] : Object.entries(actions)});
+  actionPicker?.addEventListener('change',()=>{
+    const choices=matches();
+    skuPicker.replaceChildren(...choices.map(([id,name])=>new Option(name,id)));
+    if(!choices.some(([id])=>id===c.sku))c.sku=null;
+    skuPicker.value=c.sku??'';update();
+  });
   bind(grid,'数量','amount',{type:'number'});
   if (mode==='purchase')bind(grid,'此项实付 ¥','itemCost',{type:'number'});
   bind(grid,'单位','unit',{choices:pairs(units)});
@@ -89,8 +108,17 @@ function editRow(container, original, state, mode) {
     const clear=document.createElement('button');clear.type='button';clear.textContent='改用手填份量';
     clear.onclick=()=>{c.weighing=null;clear.disabled=true;update();};params.append(clear);
   }
-  block.append(details,output); container.append(block); update();
-  return () => keep.checked ? c : null;
+  if(plan){
+    const edit=document.createElement('details'),title=document.createElement('summary');
+    title.textContent='调整份量与营养';edit.append(title,grid,desc,details);
+    block.append(output,edit);
+  }else block.append(desc,grid,details,output);
+  container.append(block); update();
+  return () => {
+    if(!keep.checked)return null;
+    if(c.action==='eat'&&stockSource==='inventory'&&!c.sku)throw Error('请选择本次使用的在库食品');
+    return c;
+  };
 }
 
 function editActivity(panel,item){
@@ -122,10 +150,16 @@ export function healthReview(container, proposal, state, today) {
   if(!result.activity&&!result.items?.length)return null;
   const heading={activity:'运动记录',purchase:'采购与入库',plan:'饮食计划',entry:'饮食或库存记录'}[mode];
   const title=document.createElement('h3');title.textContent=heading;container.append(title);
-  if(result.note){const note=document.createElement('p');note.textContent=result.note;container.append(note);}
+  if(mode==='plan'||result.note){
+    const note=document.createElement('p');
+    note.textContent=mode==='plan'?['计划不计入摄入，也不扣库存。',result.note].filter(Boolean).join(' '):result.note;
+    if(mode==='plan')note.className='assistant-plan-note';
+    container.append(note);
+  }
   const dates=document.createElement('div');dates.className='form-grid';container.append(dates);
   const date=field(dates,'日期',{type:'date',value:validDate(proposal.date)?proposal.date:today});
   date.required=true;
+  if(mode==='plan')date.dataset.shortDate='';
   const meal=result.items?.some(c=>['eat','plan'].includes(c.action))?
     field(dates,'餐次',{choices:pairs(['早餐','午餐','晚餐','加餐']),value:mode==='plan'?'晚餐':'午餐'}):null;
   const extras=document.createElement('div');extras.className='form-grid';container.append(extras);

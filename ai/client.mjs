@@ -1,9 +1,10 @@
-import {MODEL,OPENAI_URL,modelRequest,parseResult,pendingLedgerRead} from './responses.mjs';
+import {OPENAI_URL,modelRequest,parseResult,pendingLedgerRead} from './responses.mjs';
 import {readResponseStream,ResponseStreamError} from './stream.mjs';
 import {readKey,importKey,forgetKey} from './keys.mjs';
 import {localDate} from '../calendar.mjs';
+import {readChatModel} from './models.mjs';
 
-const keyFields=`  <p>导入自己的 OpenAI Key 后直接调用 ${MODEL}。Key 加密保存在本机。</p>
+const keyFields=`  <p>用自己的 OpenAI Key 调用选定模型。Key 加密保存在本机。</p>
   <label>OpenAI API Key<input name="key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="sk-…"></label>
   <label>或选择仅包含 Key 的文本文件<input name="file" type="file" accept=".txt,text/plain"></label>
   <output role="status"></output>
@@ -27,10 +28,12 @@ export function bindKeyForm(form,onSaved=()=>{}) {
  };
  const check=form.querySelector('[data-check]');
  check.onclick=async()=>{
-  check.disabled=true;out.textContent='正在向 OpenAI 发送测试消息…';
+  check.disabled=true;
   try{
-   const result=await recognize({mode:'chat',date:localDate(),history:[],photo:null,text:'这是连接测试，请回复「连接正常」。'});
-   out.textContent='已收到 OpenAI 回复：'+result.reply;
+   const model=readChatModel();
+   out.textContent='正在测试 '+model.title+'…';
+   const result=await recognize({mode:'chat',date:localDate(),history:[],photo:null,text:'这是连接测试，请回复「连接正常」。'},{model:model.id});
+   out.textContent=model.title+' · '+result.reply;
   }catch(err){out.textContent=err.message;}
   finally{check.disabled=false;}
  };
@@ -46,18 +49,23 @@ export async function readDeviceKey(){
  catch{throw Error('无法读取本机 API Key，请打开设置重新导入。');}
 }
 
-function apiError(response,body){
+function apiError(response,body,model){
  const code=body?.error?.code;
  const causes={
   context_length_exceeded:'本轮内容超过模型能处理的范围，请缩小本轮查询范围',
   invalid_json_schema:'OpenAI 拒绝了当前版本的输出格式，请更新 Airplane',
   insufficient_quota:'此 Key 所属项目的 API 额度或余额不足',
+  credit_balance_exhausted:'此 Key 所属组织的预付余额已用完',
+  organization_usage_limit_exceeded:'此 Key 所属组织已达到 API 使用额度',
+  organization_spend_limit_exceeded:'此 Key 所属组织已达到支出上限',
+  project_spend_limit_exceeded:'此 Key 所属项目已达到支出上限',
+  model_not_found:'当前项目无法访问 '+model+'，请核对模型权限或切换模型',
   unsupported_country_region_territory:'OpenAI 拒绝了当前网络所在地区的 API 请求'
  };
  const errors={
   400:'OpenAI 拒绝了请求参数',401:'OpenAI 未接受这个 Key，请核对并重新导入',
   403:'OpenAI 拒绝了当前 Key 的访问，请核对项目权限',
-  404:'当前项目无法访问 '+MODEL,429:'OpenAI 触发本项目的额度或频率限制'
+  404:'当前项目无法访问 '+model,429:'OpenAI 触发本项目的额度或频率限制'
  };
  const reason=Object.hasOwn(causes,code)?causes[code]:errors[response.status]??'OpenAI 暂时无法处理请求';
  const id=response.headers.get('x-request-id')??'';
@@ -103,7 +111,7 @@ export async function recognize(input,{signal,onReply,onTool,...options}={}) {
  }finally{
   clearTimeout(timeout);signal?.removeEventListener('abort',cancel);
  }
- if(!response.ok)throw apiError(response,body);
+ if(!response.ok)throw apiError(response,body,request.model);
  if(body?.status==='incomplete')throw Error('OpenAI 返回了未完成的响应。可以重试，原账本数据仍保留。');
  if(body?.status==='failed')throw Error('OpenAI 在生成回复时失败，请稍后重试。');
  try{

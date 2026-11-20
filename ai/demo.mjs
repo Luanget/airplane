@@ -2,6 +2,7 @@ import {addDays,addFood,inventoryWithMoves} from '../health/core.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {freshData,STORAGE_KEY} from '../finance-storage.mjs';
 import {readState,saveState} from '../health/storage.mjs';
+import {skillLibrary} from './skills.mjs';
 
 // A per-tab namespace lets all three demo pages show the same fictitious ledger.
 export async function demoWorkspace(today){
@@ -34,7 +35,7 @@ export async function demoWorkspace(today){
   catch(err){if(!(await readState(account)).revision)throw err;}
  }
  const workspace={account,finance,readHealth:()=>readState(account),saveHealth:(next,expected)=>saveState(next,expected,account),
-  readSkill:()=>finance.getItem('skill')??'',saveSkill:value=>finance.setItem('skill',value)};
+  skills:skillLibrary(finance,'skill')};
  async function respond(input,{allowRead,continuation=[],applied=[],photoPosition}={}){
   const latest=continuation.at(-1);
   const text=input.text;
@@ -99,7 +100,7 @@ export async function demoWorkspace(today){
    return {reply:rows?.length?'记录里有'+rows.map(row=>row.name+' '+row.portion).join('、')+'。':
     rows?'这一天没有匹配的实际饮食记录。':'请开启本轮账本查询。',proposal:null};
   }
-  if(/偏好|高蛋白|skill/i.test(text))return propose('我整理了一条可长期使用的饮食偏好。','skill',{text:'晚餐优先安排高蛋白食材，搭配易采购的蔬菜。'});
+  if(/偏好|高蛋白|skill/i.test(text))return propose('我整理了一条可长期使用的饮食偏好。','skill',{name:'晚餐偏好',text:'晚餐优先安排高蛋白食材，搭配易采购的蔬菜。'});
   if(/花了|支出|收入|记账/.test(text)&&/\d+(?:\.\d+)?\s*元/.test(text)){
    const amount=Number(text.match(/(\d+(?:\.\d+)?)\s*元/)[1]),type=text.includes('收入')?'income':'expense';
    return propose('金额已提取。可以核对日期、分类和预算选项。','finance',{note:'',entry:{type,amount,date:today,note:'演示收支',categoryId:type==='income'?'工资':'餐饮'}});

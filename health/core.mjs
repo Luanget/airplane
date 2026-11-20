@@ -53,6 +53,41 @@ export function isStockReference(row){
  return /仅(?:镜像|总量核对|库存容器)|不另计可用库存|不(?:可|得)与[^；。]*重复相加/.test(
   [row.name,row.unitDescription,row.note].join(' '));
 }
+export const isOnHand = row => row.active && row.qty>0 && !isStockReference(row);
+
+// A main-ledger snapshot already includes these weights in the SKU total.
+export function recoverLegacyPortions(state){
+ const legacy=state?.legacy, local=state?.local;
+ const raw=legacy?.sourceSnapshot, rows=raw?.tables?.food_inventory;
+ const date=String(raw?.updated_at??'').slice(0,10);
+ if(!Array.isArray(rows)||legacy.portionsRecovered||!validDate(date)||!Array.isArray(local?.stockMoves)||
+   !Array.isArray(legacy.inventory)||local.batches!=null&&!Array.isArray(local.batches))return state;
+ const looseUse=new Set(local.stockMoves.filter(move=>move.delta<0&&!move.batchId).map(move=>move.foodId));
+ const catalog=new Map(legacy.inventory.map(sku=>[sku.id,sku]));
+ const seen=new Set();
+ for(const [index,row] of rows.entries()){
+  const id=String(row?.['食品ID']||`legacy-inventory-${index}`), sku=catalog.get(id);
+  if(!sku||seen.has(id))continue;
+  seen.add(id);
+  if(sku.unit!=='g'||!isOnHand(sku)||looseUse.has(id))continue;
+  const snapshots=[...String(row['库存基准']??'').normalize('NFKC')
+   .matchAll(/(?:剩余|剩|余)\s*(\d+)\s*(?:袋|包|份)\s*[:：]?\s*\[([\d.,、，\s]+)\]/g)];
+  const latest=snapshots.at(-1);
+  if(!latest)continue;
+  const portions=latest[2].split(/[,、，]/).map(numeric),count=numeric(row['库存份数估算']);
+  if(portions.length!==Number(latest[1])||count!==null&&count!==portions.length||
+    portions.some(weight=>!(weight>0))||Math.abs(portions.reduce((total,weight)=>total+weight,0)-sku.qty)>1e-6)continue;
+  const batches=local.batches??=[];
+  const price=sku.priceBasis===sku.unit&&sku.pricePerUnit>=0?numeric(sku.pricePerUnit):null;
+  for(const [part,quantity] of portions.entries()){
+   const batchId=`opening-portion-${index}-${part}`;
+   if(!batches.some(batch=>batch.id===batchId))
+    batches.push({id:batchId,foodId:id,date,quantity,costCents:price===null?null:Math.round(price*quantity*100),openingPortion:true,portion:true});
+  }
+ }
+ legacy.portionsRecovered=true;
+ return state;
+}
 export function importedDietTargets(rules){
  const rule=String((Array.isArray(rules)?rules:[]).find(row=>row?.key==='04_diet_targets_preferences')?.value??'').normalize('NFKC');
  const kcal=numeric(rule.match(/普通日[约为\s]*(\d+(?:\.\d+)?)\s*kcal/i)?.[1]);
@@ -109,7 +144,7 @@ export function normalizeLedger(raw){
  const days=findSetting('周期天数','cycleDays');
  if (Number.isInteger(days) && days<=31) result.settings.cycleDays=days;
  const anchor=String(params['周期日期']||params['起始日期']||params.cycleAnchor||'').slice(0,10);if(validDate(anchor))result.settings.cycleAnchor=anchor;
- return result;
+ return recoverLegacyPortions(result);
 }
 export function validateAppState(state){
  const object = x => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -184,8 +219,8 @@ export function latestWeights(state){
  }
  return [...lastByDate.values()].sort((a,b)=>a.date.localeCompare(b.date));
 }
-export function weightTrend(state){
- const all=latestWeights(state);const n=all.length;
+export function weightTrend(state,asOf){
+ const all=latestWeights(state).filter(row=>!asOf||row.date<=asOf);const n=all.length;
  const last=all.slice(-7), previous=all.slice(-8,-1);
  const avg=arr=>arr.length?round(arr.reduce((s,x)=>s+x.kg,0)/arr.length,3):null;
  return {last:all[n-1]||null,points:all,last7:avg(last),previous7:previous.length===7?avg(previous):null,delta:previous.length===7?round(avg(last)-avg(previous),3):null};
@@ -230,8 +265,17 @@ export function batchBalances(state,foodId){
  const balances=new Map();
  for (const m of state.local.stockMoves) if (m.batchId) balances.set(m.batchId,(balances.get(m.batchId)??0)+m.delta);
  return (state.local.batches??[]).filter(b=>!foodId||b.foodId===foodId)
-   .map(b=>({...b,remaining:round(balances.get(b.id)??0,6)}))
+   .map(b=>({...b,remaining:round((b.openingPortion===true?b.quantity:0)+(balances.get(b.id)??0),6)}))
    .sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+}
+export function availableBatches(state,foodId,date,editId){
+ if(!foodId)return [];
+ const restored=new Map();
+ if(editId)for(const move of state.local.stockMoves){
+  if(move.linkedFoodId===editId&&move.batchId)restored.set(move.batchId,(restored.get(move.batchId)??0)-move.delta);
+ }
+ return batchBalances(state,foodId).map(batch=>({...batch,remaining:round(batch.remaining+(restored.get(batch.id)??0),6)}))
+  .filter(batch=>batch.remaining>0&&(!date||batch.date<=date||restored.has(batch.id)));
 }
 export function makeId(prefix='local'){return prefix+'-'+crypto.randomUUID();}
 

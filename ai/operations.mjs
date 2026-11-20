@@ -1,9 +1,10 @@
 import {displayDay,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
-import {dayIntake,inventoryWithMoves,isStockReference,localStockChange,validDate} from '../health/core.mjs';
+import {dayIntake,inventoryWithMoves,isOnHand,isStockReference,localStockChange,numeric,validDate} from '../health/core.mjs';
 import {matchFoodRecords,reviseFoodPortion} from '../health/food-history.mjs';
 import {setShoppingItem} from '../health/shopping.mjs';
-import {displayStockQuantity,stockMeasure,storedStockQuantity} from '../health/inventory.mjs';
-import {cleanSkill,SKILL_LIMIT} from './workspace.mjs';
+import {displayStockQuantity,portionSources,registerPortions,stockMeasure,storedStockQuantity} from '../health/inventory.mjs';
+import {quantityInUnit} from '../health/candidates.mjs';
+import {SKILL_LIMIT,SKILL_NAME_LIMIT,skillText} from './skills.mjs';
 
 function field(parent,name,control){
  const label=document.createElement('label');
@@ -12,13 +13,73 @@ function field(parent,name,control){
 function heading(parent,text){
  const title=document.createElement('h3');title.textContent=text;parent.append(title);
 }
-export function skillReview(container,current,suggested){
- heading(container,'更新 Skill');
- const before=document.createElement('p');before.textContent='原偏好：'+(current||'未设置');
- container.append(before);
- const edit=field(container,'新偏好',document.createElement('textarea'));
- edit.maxLength=SKILL_LIMIT;edit.rows=3;edit.value=suggested;edit.required=true;
- return ()=>cleanSkill(edit.value);
+export function skillReview(container,items,suggested){
+ const card=document.createElement('section');
+ card.className='skill-edit-review';container.append(card);
+ heading(card,'核对 Skill 修改');
+ const target=field(card,'保存到',document.createElement('select'));
+ target.dataset.pickerVerbatim='';
+ target.add(new Option('新建并启用个人 Skill',''));
+ for(const item of items)target.add(new Option(item.name,item.id));
+ const match=items.filter(item=>item.name===suggested.name);
+ if(match.length===1)target.value=match[0].id;
+ const name=field(card,'名称',document.createElement('input'));
+ name.maxLength=SKILL_NAME_LIMIT;name.value=suggested.name??'我的偏好';
+ const before=document.createElement('details'),summary=document.createElement('summary'),previous=document.createElement('p');
+ summary.textContent='查看原规则';before.append(summary,previous);card.append(before);
+ const edit=field(card,'新规则',document.createElement('textarea'));
+ edit.maxLength=SKILL_LIMIT;edit.rows=4;edit.value=suggested.text;edit.required=true;
+ const selected=()=>items.find(item=>item.id===target.value);
+ function update(){
+  const item=selected();
+  name.parentElement.hidden=!!item;
+  before.hidden=!item;name.required=!item;
+  previous.textContent=item?.text??'';
+ }
+ target.onchange=update;update();
+ return ()=>{
+  const current=selected();
+  return {changes:{id:current?.id,name:current?.name??name.value,text:skillText(edit.value)},current};
+ };
+}
+export function portionReview(container,proposal,current,today){
+ const {name,quantities,unit}=proposal.result;
+ heading(container,'记录库存分装');
+ const stock=inventoryWithMoves(current).filter(isOnHand);
+ const item=field(container,'食品',document.createElement('select'));
+ item.required=true;item.dataset.pickerSearch='';
+ item.add(new Option('选择在库食品',''));
+ for(const sku of stock)item.add(new Option(sku.name,sku.id));
+ const matches=stock.filter(sku=>sku.name===name);
+ if(matches.length===1)item.value=matches[0].id;
+ const sources=field(container,'原库存',document.createElement('select'));
+ const weights=field(container,'各份数量（'+unit+'）',document.createElement('textarea'));
+ weights.rows=2;weights.required=true;weights.value=quantities.join('、');
+ const date=validDate(proposal.date)&&proposal.date<=today?proposal.date:today;
+ const preview=document.createElement('p');container.append(preview);
+ function read(currentState=current){
+  const sku=inventoryWithMoves(currentState).find(row=>row.id===item.value);
+  if(!sku||!isOnHand(sku))throw Error('请选择仍有库存的食品');
+  const parts=weights.value.normalize('NFKC').trim().split(/[,、;；\s]+/).map(value=>quantityInUnit(sku,numeric(value),unit,sku.unit));
+  const next=structuredClone(currentState);
+  registerPortions(next,{foodId:sku.id,batchId:sources.value,date,quantities:parts});
+  return next;
+ }
+ function update(){
+  try{read();preview.textContent=displayDay(date)+' · 分装后库存总量不变';}
+  catch(err){preview.textContent=err.message;}
+ }
+ function updateSources(){
+  const sku=stock.find(row=>row.id===item.value),selected=sources.value;
+  const available=portionSources(current,sku,date);
+  sources.replaceChildren(...available.map(source=>new Option(
+   (source.date?displayDay(source.date):'未分批库存')+' · 余 '+displayStockQuantity(sku,source.remaining)+' '+stockMeasure(sku).unit,source.id)));
+  if(available.some(source=>source.id===selected))sources.value=selected;
+  update();
+ }
+ item.onchange=updateSources;sources.onchange=update;weights.oninput=update;
+ updateSources();
+ return {apply:read,label:'确认分装',saved:'已保存分装重量。'};
 }
 export function inventoryReview(container,proposal,current,today){
  const {operation,name,quantity,unit}=proposal.result,shopping=operation==='shopping';

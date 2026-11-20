@@ -2,13 +2,14 @@ import {shellIcon} from './shell.mjs';
 import {bindFieldPicker,fieldLabel} from './field-picker.mjs';
 
 const controls=new WeakMap();
+const labelParts=(select,label)=>select.hasAttribute('data-picker-verbatim')?[label]:label.split(' · ');
 
 function renderChoices(select,control){
  const query=control.panel.querySelector('.choice-search').value.trim().normalize('NFKC').toLowerCase();
  const options=[...select.options].filter(option=>!option.hidden&&option.label.normalize('NFKC').toLowerCase().includes(query));
  const rows=options.map(option=>{
   const row=document.createElement('button'),copy=document.createElement('span');
-  const [title,...details]=option.label.split(' · ');
+  const [title,...details]=labelParts(select,option.label);
   const name=document.createElement('span');name.className='setting-title';name.textContent=title;
   row.type='button';row.className='setting-row choice-option';row.disabled=option.disabled||!!option.closest('optgroup')?.disabled;
   const picked=option===select.selectedOptions[0];
@@ -51,7 +52,7 @@ function fillChoices(select,control){
 
 function reflect(select,control) {
  const label=select.selectedOptions[0]?.label||'请选择';
- control.value.textContent=label.split(' · ')[0];
+ control.value.textContent=labelParts(select,label)[0];
  control.trigger.setAttribute('aria-label',control.title+'，'+label);
  control.trigger.disabled=select.matches(':disabled');
 }

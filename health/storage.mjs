@@ -1,4 +1,4 @@
-import {newState, validateAppState} from './core.mjs';
+import {newState, recoverLegacyPortions, validateAppState} from './core.mjs';
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -24,7 +24,7 @@ async function readSlot(key,account) {
 }
 
 export async function readState(account=globalThis.airplaneAccount) {
-  return (await readSlot(slot(account),account)) ?? newState();
+  return recoverLegacyPortions((await readSlot(slot(account),account)) ?? newState());
 }
 export async function readRestoreSnapshot(account=globalThis.airplaneAccount) {
   return readSlot(slot(account)+':before-restore',account);
