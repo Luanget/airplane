@@ -219,8 +219,8 @@ export function latestWeights(state){
  }
  return [...lastByDate.values()].sort((a,b)=>a.date.localeCompare(b.date));
 }
-export function weightTrend(state){
- const all=latestWeights(state);const n=all.length;
+export function weightTrend(state,asOf){
+ const all=latestWeights(state).filter(row=>!asOf||row.date<=asOf);const n=all.length;
  const last=all.slice(-7), previous=all.slice(-8,-1);
  const avg=arr=>arr.length?round(arr.reduce((s,x)=>s+x.kg,0)/arr.length,3):null;
  return {last:all[n-1]||null,points:all,last7:avg(last),previous7:previous.length===7?avg(previous):null,delta:previous.length===7?round(avg(last)-avg(previous),3):null};

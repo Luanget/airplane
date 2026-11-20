@@ -7,8 +7,9 @@ import {healthReview,jpeg} from '../health/assistant.mjs';
 import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
 import {financeReview} from './finance.mjs';
 import {chatInstructions} from './responses.mjs';
-import {cleanSkill,localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
+import {localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
 import {foodEditReview,inventoryReview,portionReview,skillReview} from './operations.mjs';
+import {mountSkillSettings} from './skills.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 import {batchReview} from './batch.mjs';
@@ -27,12 +28,11 @@ const retryFollowUp=$('[data-retry-follow-up]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
 const historySearch=historyPanel.querySelector('input');
 const historyConfirmation=$('[data-delete-confirm]'),historyDelete=$('[data-delete-apply]');
-const skillForm=$('#assistant-skill form'),skillOutput=skillForm.querySelector('output');
 const keyPanel=$('#assistant-key-panel'),settings=$('#assistant-settings-sheet');
 let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null,photoRun=null;
 
 hydrateShell();
-$('#assistant-settings').onclick=()=>settings.showModal();
+$('#assistant-settings').onclick=()=>{settings.showModal();refreshSkills();};
 function onSettingsBackdrop(event){
  if(event.target!==settings)return false;
  const {left,top,right,bottom}=settings.getBoundingClientRect();
@@ -116,9 +116,10 @@ stop.onclick=()=>{
 function updateContext(){
  const turns=shortHistory((book.current?.messages??[]).filter(m=>m?.carry&&['user','assistant'].includes(m.role)&&typeof m.text==='string'));
  const chars=turns.reduce((n,row)=>n+row.text.length,0);
- const skill=workspace.readSkill().slice(0,320);
- $('[data-context-size]').textContent='历史 '+turns.length+' 条 · '+chars+'/900 字，Skill '+skill.length+'/320 字。';
- return {turns,skill};
+ const skills=workspace.skills.active();
+ const skillChars=skills.reduce((total,skill)=>total+skill.text.length,0);
+ $('[data-context-size]').textContent='历史 '+turns.length+' 条 · '+chars+'/900 字，已启用 '+skills.length+' 个 Skill · '+skillChars+' 字。';
+ return {turns,skills};
 }
 function syncThreads(){
  const active=book.current;
@@ -231,16 +232,9 @@ function renderThread(){
  for(const m of messages)if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source);
  clearReview();clearFollowUp();clearComposer();syncThreads();updateContext();lock();
 }
-function refreshSkill(){skillForm.elements.skill.value=workspace.readSkill().slice(0,320);updateContext();}
 $('#assistant-skill pre').textContent=chatInstructions;
-skillForm.onsubmit=e=>{
- e.preventDefault();
- try{
-  workspace.saveSkill(cleanSkill(skillForm.elements.skill.value));
-  refreshSkill();skillOutput.textContent='已保存到本机';
- }catch(err){skillOutput.textContent=err.message;}
-};
-renderThread();refreshSkill();
+const refreshSkills=mountSkillSettings($('#assistant-skill'),workspace.skills,updateContext);
+renderThread();
 newChat.onclick=()=>{
  try{book.start();openHistory(false);tell('');renderThread();}
  catch(err){report(err);}
@@ -279,11 +273,12 @@ async function makeReview(proposal,flow,photoJob){
   confirm=financeReview(review,result.entry,today,workspace.finance);
   label='确认记账';
  }else if(mode==='skill'){
-  const current=workspace.readSkill(),read=skillReview(review,current,result.text);
+  const read=skillReview(review,workspace.skills.list(),result);
   label='确认更新 Skill';
   confirm=()=>{
-   if(workspace.readSkill()!==current)throw Error('Skill 已变更，请重新提出建议');
-   workspace.saveSkill(read());refreshSkill();return 'Skill 已更新。';
+   const {changes,current}=read();
+   workspace.skills.save(changes,current);refreshSkills();
+   return current?'Skill 已更新。':'Skill 已新增并启用。';
   };
  }else{
   const current=await workspace.readHealth();
@@ -336,7 +331,7 @@ async function makeReview(proposal,flow,photoJob){
    if(continuationApproved){
     followUp={
      input:{...flow.input,date:localDate(),text:flow.input.text||'继续完成刚才照片中的请求。',history:[],photo:null},
-     options:{skill:flow.options.skill,allowRead:flow.options.allowRead,applied:result.operations.map(operation=>operation.mode)},
+     options:{skills:flow.options.skills,allowRead:flow.options.allowRead,applied:result.operations.map(operation=>operation.mode)},
      steps:[]
     };
     resume=true;
@@ -367,6 +362,26 @@ async function complete(response,flow,source){
 }
 function describeSummary(scope,summary){
  if(scope==='expenses')return summary.date+' · 支出 '+summary.expense+' 元 · 收入 '+summary.income+' 元 · '+summary.count+' 笔';
+ if(scope==='weight'){
+  const kg=value=>value===null?'待补':value+' kg';
+  if(!summary.latest)return '截至 '+displayDay(summary.asOf,true)+' 暂无有效晨重';
+  return [
+   '最新晨重 '+displayDay(summary.latest.date,true)+' · '+kg(summary.latest.kg)+(summary.latest.tentative?' · 暂定':''),
+   '比上次 '+kg(summary.change),
+   '最近 7 次均重 '+kg(summary.last7)+' · 当前窗口 '+summary.count+' 次',
+   '上一窗口 '+kg(summary.previous7)+' · 均重变化 '+kg(summary.delta)
+  ].join('\n');
+ }
+ if(scope==='cycle'){
+  const day=summary.today,source={device_total:'设备全天消耗',imported_energy_model:'导入的消耗模型',base_tdee_estimate:'基础 TDEE 估计'};
+  return [
+   displayDay(summary.start,true)+'至'+displayDay(summary.end,true)+' · 已结算 '+summary.closedDays+'/'+summary.days+' 天',
+   '最近结算 '+(summary.closedThrough?displayDay(summary.closedThrough):'暂无')+' · 待补 '+summary.unreported+' 天',
+   '已结算缺口 '+summary.deficit+' / '+summary.goal+' kcal · 进度 '+summary.progress+'% · 剩余 '+summary.remaining+' kcal',
+   '理论脂肪当量 '+summary.fatEquivalent+' kg',
+   '今日条件缺口 '+(day.conditionalDeficit??'待补')+' · 摄入 '+(day.intake??'待补')+' · 消耗 '+(day.tdee??'待补')+' kcal'+(day.source?' · '+source[day.source]:'')
+  ].join('\n');
+ }
  if(scope==='expense_summary')return [
   summary.start+' 至 '+summary.end,
   '按'+expenseGroupLabels[summary.groupBy]+'汇总 · 支出 '+summary.expense+' 元 · '+summary.count+' 笔',
@@ -523,9 +538,9 @@ composer.onsubmit=async e=>{
    tell('正在读取本机 API Key…');
    if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
   }
-  const photo=files.length===1?await jpeg(files[0]):null,{turns,skill}=updateContext();
+  const photo=files.length===1?await jpeg(files[0]):null,{turns,skills}=updateContext();
   const input={mode:'chat',text,photo,date:localDate(),history:turns};
-  const options={skill,allowRead:composer.elements.allowRead.checked};
+  const options={skills,allowRead:composer.elements.allowRead.checked};
   if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
  }catch(err){report(err);}

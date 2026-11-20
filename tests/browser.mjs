@@ -349,6 +349,8 @@ try {
   const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
 
   const calls=[],testKey='sk-fixture-browser-only';
+  const enabledSkills=['L · 记录与纠错','L · 配餐与营养','L · 库存与采购','原有个人偏好','测试个人 Skill'];
+  await page.evaluate(()=>localStorage.setItem('airplane-ai-skill-v1','合成旧用户偏好'));
   const batchText='盘点合成新食品为 90g，补记 43 元午餐，再查更新后的库存';
   let resumeAttempts=0;
   let firstPhotoAttempts=0;
@@ -363,7 +365,15 @@ try {
     const body=route.request().postDataJSON(),content=body.input[0].content;
     assert.equal(body.store,false);assert.equal(body.stream,true);assert.equal(body.text.format.strict,true);
     const input=JSON.parse(content[0].text);
-    assert.deepEqual(Object.keys(input).sort(),input.applied?['applied','date','history','text']:['date','history','text']);
+    const connectionTest=input.text.startsWith('这是连接测试');
+    const fields=['date','history','text'];
+    if(!connectionTest){
+      fields.push('skills');
+      assert.deepEqual(input.skills.map(item=>item.name),enabledSkills);
+      assert.ok(input.skills.every(item=>Object.keys(item).sort().join(',')==='name,text'));
+    }
+    if(input.applied)fields.push('applied');
+    assert.deepEqual(Object.keys(input).sort(),fields.sort());
     assert.ok(!content[0].text.includes('synthetic legacy entry'));
     assert.ok(!content[0].text.includes('private synthetic'));
     calls.push({...input,photo:content[1]?.image_url});
@@ -477,6 +487,18 @@ try {
   await page.mouse.click(8,8);
   await assistantSettings.waitFor({state:'hidden'});
   await openAssistantSettings();
+  const skillSettings=assistantSettings.locator('#assistant-skill');
+  await skillSettings.getByText('Skill',{exact:true}).click();
+  await skillSettings.getByText('L 系列 · 栾云煦创',{exact:true}).waitFor();
+  assert.ok(await skillSettings.getByRole('checkbox',{name:'原有个人偏好',exact:true}).isChecked());
+  assert.equal(await skillSettings.getByRole('checkbox',{name:'L · 餐食偏好',exact:true}).isChecked(),false);
+  await skillSettings.getByRole('checkbox',{name:'L · 运动与周期',exact:true}).uncheck();
+  await skillSettings.getByRole('button',{name:'新建 Skill',exact:true}).click();
+  await skillSettings.getByLabel('名称',{exact:true}).fill('测试个人 Skill');
+  await skillSettings.getByLabel('工作规则',{exact:true}).fill('合成个人规则，验证启用情况。');
+  await skillSettings.getByRole('button',{name:'保存并启用'}).click();
+  assert.ok(await skillSettings.getByRole('checkbox',{name:'测试个人 Skill',exact:true}).isChecked());
+  await skillSettings.getByText('Skill',{exact:true}).click();
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByText('请导入 OpenAI API Key').waitFor();
   assert.equal(await chat.isVisible(),true);assert.equal(calls.length,0);
@@ -942,6 +964,20 @@ try {
   await chat.getByText('已保存饮食计划。',{exact:true}).waitFor();
   assert.deepEqual(await demoLedger(),stagedLedger);
   console.log('PASS invalid batch leaves both ledgers intact, interrupted local commit settles once and dinner uses fresh inventory');
+  await say('帮我修改 Skill');
+  await review.getByRole('button',{name:'确认更新 Skill'}).waitFor();
+  await review.getByRole('button',{name:/^保存到/}).click();
+  await review.locator('.inline-picker-panel').getByRole('button',{name:'L · 餐食偏好',exact:true}).click();
+  await review.getByRole('button',{name:'确认更新 Skill'}).click();
+  await chat.getByText('Skill 已更新。',{exact:true}).waitFor();
+  await page.reload();
+  await openAssistantSettings();
+  await skillSettings.getByText('Skill',{exact:true}).click();
+  assert.equal(await skillSettings.getByRole('checkbox',{name:'L · 餐食偏好',exact:true}).isChecked(),false);
+  await skillSettings.getByRole('button',{name:'编辑 L · 餐食偏好',exact:true}).click();
+  assert.match(await skillSettings.getByLabel('工作规则',{exact:true}).inputValue(),/搭配易采购的蔬菜/);
+  await closeAssistantSettings();
+  console.log('PASS skill migration, selected request context and targeted edits');
   assert.deepEqual(errors,[]);
   console.log('PASS dated food lookup, thread reload, confirmed in-place correction and health timeline');
   console.log('PASS damaged finance recovery and synthetic-only fixtures');

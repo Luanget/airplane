@@ -76,10 +76,10 @@ const ledgerOperations=[
   proposal('portions',object({name:string(80,1),quantities:{...list(number(100000,0.001)),minItems:1},unit}))
 ];
 export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
-  {type:'null'},...ledgerOperations,proposal('skill',object({text:string(320,1)})),
+  {type:'null'},...ledgerOperations,proposal('skill',object({name:optional(string(60,1)),text:string(320,1)})),
   proposal('batch',object({operations:{...list({anyOf:ledgerOperations}),minItems:1},next:choice('done','continue')}))
 ]}});
-export const ledgerReadSchema=object({scope:choice('stock','meal','expenses'),query:string()});
+export const ledgerReadSchema=object({scope:choice('stock','meal','expenses','weight','cycle'),query:string()});
 export const foodHistoryReadSchema=object({date:string(10,10),query:string()});
 export const expenseSummaryReadSchema=object({start:string(10,10),end:string(10,10),groupBy:choice('category','day','month')});
 const jpegPhoto=photo=>photo?.startsWith('data:image/jpeg;base64,/9j/') &&

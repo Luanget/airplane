@@ -4,7 +4,7 @@ import {matchFoodRecords,reviseFoodPortion} from '../health/food-history.mjs';
 import {setShoppingItem} from '../health/shopping.mjs';
 import {displayStockQuantity,portionSources,registerPortions,stockMeasure,storedStockQuantity} from '../health/inventory.mjs';
 import {quantityInUnit} from '../health/candidates.mjs';
-import {cleanSkill,SKILL_LIMIT} from './workspace.mjs';
+import {SKILL_LIMIT,SKILL_NAME_LIMIT,skillText} from './skills.mjs';
 
 function field(parent,name,control){
  const label=document.createElement('label');
@@ -13,13 +13,32 @@ function field(parent,name,control){
 function heading(parent,text){
  const title=document.createElement('h3');title.textContent=text;parent.append(title);
 }
-export function skillReview(container,current,suggested){
- heading(container,'更新 Skill');
- const before=document.createElement('p');before.textContent='原偏好：'+(current||'未设置');
- container.append(before);
- const edit=field(container,'新偏好',document.createElement('textarea'));
- edit.maxLength=SKILL_LIMIT;edit.rows=3;edit.value=suggested;edit.required=true;
- return ()=>cleanSkill(edit.value);
+export function skillReview(container,items,suggested){
+ heading(container,'核对 Skill 修改');
+ const target=field(container,'保存到',document.createElement('select'));
+ target.dataset.pickerVerbatim='';
+ target.add(new Option('新建并启用个人 Skill',''));
+ for(const item of items)target.add(new Option(item.name,item.id));
+ const match=items.filter(item=>item.name===suggested.name);
+ if(match.length===1)target.value=match[0].id;
+ const name=field(container,'名称',document.createElement('input'));
+ name.maxLength=SKILL_NAME_LIMIT;name.value=suggested.name??'我的偏好';
+ const before=document.createElement('details'),summary=document.createElement('summary'),previous=document.createElement('p');
+ summary.textContent='查看原规则';before.append(summary,previous);container.append(before);
+ const edit=field(container,'新规则',document.createElement('textarea'));
+ edit.maxLength=SKILL_LIMIT;edit.rows=4;edit.value=suggested.text;edit.required=true;
+ const selected=()=>items.find(item=>item.id===target.value);
+ function update(){
+  const item=selected();
+  name.parentElement.hidden=!!item;
+  before.hidden=!item;name.required=!item;
+  previous.textContent=item?.text??'';
+ }
+ target.onchange=update;update();
+ return ()=>{
+  const current=selected();
+  return {changes:{id:current?.id,name:current?.name??name.value,text:skillText(edit.value)},current};
+ };
 }
 export function portionReview(container,proposal,current,today){
  const {name,quantities,unit}=proposal.result;

@@ -91,10 +91,18 @@
         <details class="card assistant-panel" id="assistant-skill">
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">Skill</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
-            <form class="assistant-fields">
-              <label>个人偏好<textarea name="skill" rows="3" maxlength="320" placeholder="例如：晚餐用常见食材，少油，优先高蛋白。"></textarea></label>
-              <div class="chat-actions"><button type="submit" class="secondary-button">保存 Skill</button><output role="status"></output></div>
+            <div data-skill-items></div>
+            <button type="button" class="text-button skill-new" data-new-skill>新建 Skill</button>
+            <form class="assistant-fields skill-editor" hidden>
+              <label>名称<input name="name" required></label>
+              <label>工作规则<textarea name="text" rows="5" placeholder="例如：优先安排库存里的食材，份量用克。" required></textarea></label>
+              <div class="chat-actions">
+                <button type="button" class="text-button" data-close-skill>收起</button>
+                <button type="button" class="text-button" data-restore-skill hidden>恢复原版</button>
+                <button type="submit" class="primary-button">保存 Skill</button>
+              </div>
             </form>
+            <output class="skill-status" role="status"></output>
             <details class="assistant-prompt"><summary>查看内置提示词</summary><pre></pre></details>
           </div>
         </details>
@@ -102,7 +110,7 @@
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="activity"></span><span class="setting-copy setting-title">本轮上下文</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
             <p data-context-size></p>
-            <p>OpenAI 会收到本轮消息、选中的照片、当天日期、Skill 和最近四条短消息。开启查询时，还会收到本轮所需的账本摘要。</p>
+            <p>OpenAI 会收到本轮消息、选中的照片、当天日期、已启用的 Skill 和最近四条短消息。开启查询时，还会收到本轮所需的账本摘要。</p>
           </div>
         </details>
       </div>
