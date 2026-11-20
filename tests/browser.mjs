@@ -587,11 +587,9 @@ try {
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
   await openAssistantSettings();
   const modelPanel=assistantSettings.locator('#assistant-model-panel');
-  await modelPanel.getByText('模型与用量',{exact:true}).click();
+  await modelPanel.getByText('模型',{exact:true}).click();
   assert.equal(await modelPanel.getByRole('button',{name:'Luna',exact:true}).getAttribute('aria-pressed'),'true');
-  assert.equal(await modelPanel.getByRole('link',{name:'API 余额'}).getAttribute('href'),
-    'https://platform.openai.com/settings/organization/billing/overview');
-  assert.equal(await modelPanel.getByRole('link',{name:'用量明细'}).getAttribute('href'),'https://platform.openai.com/usage');
+  assert.equal(await assistantSettings.getByRole('link',{name:/API 余额|用量明细/}).count(),0);
   await modelPanel.getByRole('button',{name:'Terra',exact:true}).click();
   expectedModel='gpt-6.1-terra';
   await assistantSettings.getByText('API Key',{exact:true}).click();
@@ -602,7 +600,7 @@ try {
   await closeAssistantSettings();
   await page.reload();
   await openAssistantSettings();
-  await modelPanel.getByText('模型与用量',{exact:true}).click();
+  await modelPanel.getByText('模型',{exact:true}).click();
   assert.equal(await modelPanel.getByRole('button',{name:'Sol',exact:true}).getAttribute('aria-pressed'),'true');
   await closeAssistantSettings();
   await form.locator('[name=allowRead]').uncheck();

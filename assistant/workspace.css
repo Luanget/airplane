@@ -11,8 +11,6 @@
 .assistant-panel p+p { margin-top:8px }
 .assistant-model-options { grid-template-columns:repeat(3,minmax(0,1fr)) }
 .assistant-model-options [aria-pressed=true] { color:var(--text); background:var(--surface); box-shadow:var(--shadow) }
-.assistant-billing-links { display:flex; flex-wrap:wrap; gap:8px; margin-top:6px }
-.assistant-billing-links a { display:inline-flex; align-items:center; padding:0 6px; min-height:44px; color:var(--text); font-size:13px; text-decoration:underline; text-underline-offset:3px }
 .assistant-prompt { margin-top:12px; font-size:13px }
 .assistant-prompt summary { color:var(--muted); cursor:pointer; padding-block:6px }
 .assistant-prompt pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; line-height:1.5 }
