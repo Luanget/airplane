@@ -13,12 +13,52 @@ const fmt=(v,d=0)=> v===null||v===undefined?'—':Number(v).toLocaleString('zh-C
 const dateNow=()=>{const d=new Date();const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`;};
 let state=newState(), selectedDate=dateNow(),tab='overview',toastHandle;
 const editing={};
+const dirtyEntries=new Set();
+let activeEntryType='food';
 let updatePurchases=()=>{};
 const settingKeys=['calorieTarget','baselineTdee','cycleTarget','cycleDays','cycleAnchor','proteinMin','proteinMax','fatMin','sodiumTarget'];
-function toast(message){const t=$('toast');t.textContent=String(message);t.classList.add('show');clearTimeout(toastHandle);toastHandle=setTimeout(()=>t.classList.remove('show'),3500);}
+function toast(message){
+ const t=$('toast'),sheet=Array.from(document.querySelectorAll('.health-sheet[open]')).at(-1);
+ (sheet??document.body).append(t);t.textContent=String(message);t.hidden=false;
+ clearTimeout(toastHandle);toastHandle=setTimeout(()=>{t.hidden=true;},3500);
+}
 function text(id,value){$(id).textContent=String(value);}
-function switchTab(next){tab=next;document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x.dataset.tab===next));document.querySelectorAll('.view').forEach(x=>x.classList.toggle('hidden',x.id!==`view-${next}`));render();window.scrollTo({top:0,behavior:'instant'});}
-function render(){ if(tab==='inventory')updatePurchases();if(tab==='overview')renderOverview();if(tab==='record')renderRecord();if(tab==='inventory')renderInventory();if(tab==='settings')renderSettings();if(tab==='trends')renderTrends(); }
+function switchTab(next){
+ tab=next;
+ document.querySelectorAll('[data-tab]').forEach(x=>{
+  const current=x.dataset.tab===next;
+  x.classList.toggle('active',current);
+  if(current)x.setAttribute('aria-current','page');else x.removeAttribute('aria-current');
+ });
+ document.querySelectorAll('.view').forEach(x=>x.classList.toggle('hidden',x.id!==`view-${next}`));
+ render();window.scrollTo({top:0,behavior:'instant'});
+}
+function render(){
+ if(tab==='overview')renderOverview();
+ if(tab==='record')renderRecord();
+ if(tab==='inventory'){updatePurchases();renderInventory();}
+ if(tab==='trends')renderTrends();
+ if($('health-settings-sheet').open)renderSettings();
+}
+function selectEntry(type){
+ activeEntryType=type;
+ document.querySelectorAll('[data-entry]').forEach(b=>{
+  const selected=b.dataset.entry===type;
+  b.classList.toggle('active',selected);b.setAttribute('aria-pressed',String(selected));
+ });
+ document.querySelectorAll('[data-entry-panel]').forEach(panel=>panel.hidden=panel.dataset.entryPanel!==type);
+}
+function openEntry(){
+ for(const type of Object.keys(historyTypes)){
+  const form=$(`${type}-form`);
+  if(editing[type])resetEditor(form,type);
+  if(!dirtyEntries.has(type))form.elements.date.value=selectedDate;
+ }
+ selectEntry(activeEntryType);$('health-entry').showModal();
+}
+function openSettings(){
+ renderSettings();$('health-settings-sheet').showModal();
+}
 function progress(id,val){$(id).style.width=`${Math.max(0,Math.min(100,Number(val)||0))}%`;}
 function renderOverview(){
  const today=dateNow(),intake=dayIntake(state,selectedDate),cals=intake.totals.kcal,known=intake.reported;
@@ -78,8 +118,8 @@ function editEvent(type,id){
   if(type==='weight')form.elements.isMorning.checked=!!(row.isMorning??/^(是|纳入|暂定纳入)/.test(row.trendStatus??''));
   if(type==='activity')form.elements.includedInBase.checked=!!row.includedInBase;
  }
- form.closest('details').open=true;
- form.scrollIntoView({block:'start'});
+ selectEntry(type);
+ if(!$('health-entry').open)$('health-entry').showModal();
 }
 function fillForm(form,fields){
  for(const [key,value] of Object.entries(fields)){
@@ -138,7 +178,7 @@ async function removeEvent(type,id){
  catch(err){toast(err.message);}
 }
 function resetEditor(form,type){
- delete editing[type];form.reset();setDateDefaults();
+ delete editing[type];dirtyEntries.delete(type);form.reset();setDateDefaults();
  if(type==='food')$('food-editing').hidden=$('cancel-food-edit').hidden=true;
 }
 function applyAmount(){
@@ -159,7 +199,7 @@ async function handleImport(file,kind){try{const raw=JSON.parse(await file.text(
  $('import-preview').innerHTML=`<div class="notice notice-info">文件已解析：${E(file.name)}<br>饮食 ${imported.legacy.foods.length} 条 · 晨重 ${imported.legacy.weights.length} 条 · 库存 ${imported.legacy.inventory.length} 项</div>`;
  if(!confirm(msg))return;
  if(state.revision || state.importInfo || Object.values(state.local).some(list => list.length)) backup();
- await commit(imported,kind==='backup'?'健康备份恢复成功':'历史健康数据已导入',combinedBackup(state,null));switchTab('overview');
+ await commit(imported,kind==='backup'?'健康备份恢复成功':'历史健康数据已导入',combinedBackup(state,null));$('health-settings-sheet').close();switchTab('overview');
  }catch(e){toast('导入失败：'+e.message);}}
 function bindForm(type,update,message){
  const form=$(`${type}-form`);
@@ -173,6 +213,7 @@ function bindForm(type,update,message){
    update(next,Object.fromEntries(new FormData(form)),form);
    await commit(next,message);
    resetEditor(form,type);
+   if(historyTypes[type])$('health-entry').close();
   }catch(err){toast(err.message);}
   finally{button.disabled=false;}
  };
@@ -183,12 +224,20 @@ function attach(){
  for(const select of document.querySelectorAll('[data-units]'))select.innerHTML=units.map(u=>`<option>${E(u)}</option>`).join('');
  document.querySelector('[data-nutrients]').innerHTML=NUTRIENTS.map((k,i)=>`<label>${['热量 kcal','蛋白质 g','碳水 g','脂肪 g','钠 mg'][i]}<input type="number" name="${k}" min="0" step="any"></label>`).join('');
 
- $('open-assistant').onclick=()=>{switchTab('assistant');document.querySelector('.assistant-panel').open=true;$('assistant-form').elements.text.focus();};
+ $('open-health-ai').onclick=()=>{$('health-ai-sheet').showModal();$('assistant-form').elements.text.focus();};
+ $('add-health').onclick=openEntry;
+ for(const type of Object.keys(historyTypes)) $(`${type}-form`).addEventListener('input',()=>dirtyEntries.add(type));
+ $('health-settings').onclick=openSettings;
+ document.querySelectorAll('[data-entry]').forEach(b=>b.onclick=()=>selectEntry(b.dataset.entry));
+ document.querySelectorAll('.health-sheet').forEach(d=>d.addEventListener('close',()=>{
+  const t=$('toast');
+  if(d.contains(t))document.body.append(t);
+ }));
  attachAssistant({getState:()=>state, commit, today:dateNow});
  $('check-update').onclick=()=>checkForAppUpdate(true);
- document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
+ document.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>switchTab(b.dataset.tab)));
  $('report-date').addEventListener('change',e=>{if(validDate(e.target.value)){selectedDate=e.target.value;renderOverview();}});
- $('jump-import').addEventListener('click',()=>switchTab('settings'));$('quick-record').addEventListener('click',()=>switchTab('record'));$('inventory-search').addEventListener('input',()=>renderInventory());
+ $('jump-import').addEventListener('click',openSettings);$('quick-record').addEventListener('click',openEntry);$('inventory-search').addEventListener('input',()=>renderInventory());
  $('history-date').onchange=renderRecord;
  $('local-events').onclick=e=>{
   const button=e.target.closest('[data-type]');
@@ -221,7 +270,7 @@ function attach(){
   }catch(err){toast(err.message);}
  };
  $('save-template').onclick=async()=>{
-  const form=$('food-form'),date=$('history-date').value||form.elements.date.value,meal=form.elements.meal.value;
+  const date=$('history-date').value||selectedDate,meal=$('template-meal').value;
   const items=foodsForDay(state,date).filter(e=>e.meal===meal);
   if(!items.length){toast('所选日期和餐次没有实际记录');return;}
   const name=prompt('模板名称',meal)?.trim();
@@ -237,6 +286,7 @@ function attach(){
   try{
    for(const item of t.items)addFood(next,{...item,...item.nutrition,date,meal,status,batchId:null,cost:null});
    await commit(next,'已录入餐食模板');
+   $('health-entry').close();
   }catch(err){toast(err.message);}
  };
  bindForm('food', (next,d)=>addFood(next,d,editing.food),'饮食已保存');

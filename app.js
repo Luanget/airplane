@@ -1,3 +1,4 @@
+import {bindSheetSwipe,shellGlyphs} from './shell.mjs';
 import {readState as readHealthState} from './health/storage.mjs';
 import {purchaseTransactionId} from './health/purchases.mjs';
 import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,validateFinanceBackup} from './finance-storage.mjs';
@@ -13,22 +14,14 @@ const APP_VERSION = '0.9.0';
 const VERSION = SCHEMA_VERSION;
 
 const ICONS = {
-  plane: '<path d="M3 14.5 21 3l-6.2 18-4.1-6.2L3 14.5Z"/><path d="m10.7 14.8 4.1-4.1"/>',
+  ...shellGlyphs,
   calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/>',
-  home: '<path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10M9 20v-6h6v6"/>',
-  list: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
-  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21h-4v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3v-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V3h4v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1H21v4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
   shield: '<path d="M12 3 20 6v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6l8-3Z"/><path d="m8.5 12 2.3 2.3 4.8-5"/>',
-  wallet: '<path d="M4 7h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3h12v4"/><path d="M16 12h5v4h-5a2 2 0 1 1 0-4Z"/>',
   food: '<path d="M7 3v8M4 3v5a3 3 0 0 0 6 0V3M7 11v10M16 3c3 2 4 5 4 9h-4V3Zm0 9v9"/>',
   car: '<path d="m5 11 2-5h10l2 5"/><path d="M4 11h16v7H4z"/><circle cx="7" cy="18" r="1.5"/><circle cx="17" cy="18" r="1.5"/>',
-  bag: '<path d="M5 8h14l-1 13H6L5 8Z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/>',
   game: '<path d="M8 8h8a5 5 0 0 1 4.7 6.7l-1.1 3.1a2 2 0 0 1-3.2.8L14 16h-4l-2.4 2.6a2 2 0 0 1-3.2-.8l-1.1-3.1A5 5 0 0 1 8 8Z"/><path d="M7 12v4M5 14h4M16 13h.01M18 15h.01"/>',
   house: '<path d="m3 11 9-7 9 7"/><path d="M5 10v10h14V10M9 20v-6h6v6"/>',
   book: '<path d="M4 5a4 4 0 0 1 4-2h4v17H8a4 4 0 0 0-4 2V5Z"/><path d="M20 5a4 4 0 0 0-4-2h-4v17h4a4 4 0 0 1 4 2V5Z"/>',
-  health: '<path d="M12 21s-8-4.8-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.2-8 11-8 11Z"/><path d="M9 12h6M12 9v6"/>',
   travel: '<rect x="4" y="7" width="16" height="13" rx="3"/><path d="M9 7V5a3 3 0 0 1 6 0v2M8 11v5M16 11v5"/>',
   gift: '<rect x="3" y="9" width="18" height="12" rx="2"/><path d="M12 9v12M3 13h18M7.5 9C5 9 4 7.5 5 6c1.2-1.8 4.2.3 7 3M16.5 9C19 9 20 7.5 19 6c-1.2-1.8-4.2.3-7 3"/>',
   more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
@@ -379,7 +372,7 @@ async function ensurePersistentStorage(showToast=false){
 
 function render(){
   document.getElementById('monthButton').innerHTML = `${monthLabel(ui.selectedMonth)} ${icon('chevron')}`;
-  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===ui.tab));
+  document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active', b.dataset.tab===ui.tab));
   const app=document.getElementById('app');
   try{
     app.innerHTML = ui.tab==='stats' ? renderStats() : renderHome();
@@ -606,7 +599,7 @@ function openModal(content, options={}){
   const modal=root.querySelector('.modal');
   backdrop.addEventListener('click',e=>{if(e.target===backdrop)closeModal({reason:'backdrop'});});
   root.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closeModal({reason:'cancel'}));
-  bindSheetSwipe(modal,backdrop);
+  bindSheetSwipe(modal,backdrop,()=>closeModal({reason:'swipe'}));
 }
 function closeModal({runDismiss=true,reason='dismiss'}={}){
   const root=document.getElementById('modalRoot');
@@ -621,97 +614,6 @@ function closeModal({runDismiss=true,reason='dismiss'}={}){
   return true;
 }
 function modalHead(title,saveLabel='保存',cancelLabel='取消'){ const right=saveLabel===null?'<span></span>':`<button class="save" id="modalSave">${saveLabel}</button>`; return `<div class="modal-head"><button class="cancel" data-close>${cancelLabel}</button><h2>${title}</h2>${right}</div>`; }
-
-function bindSheetSwipe(modal,backdrop){
-  const grabber=modal.querySelector('.modal-grabber');
-  let startX=0,startY=0,lastY=0,startAt=0,tracking=false,dragging=false,forceHandle=false;
-  const pointXY=p=>({x:Number.isFinite(p?.screenX)?p.screenX:p?.clientX||0,y:Number.isFinite(p?.screenY)?p.screenY:p?.clientY||0});
-  const reset=()=>{
-    tracking=false;dragging=false;forceHandle=false;
-    modal.style.transition='transform .18s ease-out';
-    backdrop.style.transition='background .18s ease-out';
-    modal.style.transform='';backdrop.style.background='';
-    setTimeout(()=>{modal.style.transition='';backdrop.style.transition='';},190);
-  };
-  const beginDrag=()=>{
-    if(dragging)return true;
-    if(!forceHandle && modal.scrollTop>1)return false;
-    const active=document.activeElement;
-    if(active&&modal.contains(active)&&active.matches('input,textarea,select')) active.blur();
-    dragging=true;startAt=performance.now();
-    modal.style.transition='none';backdrop.style.transition='none';
-    return true;
-  };
-  const begin=(point,target,force=false)=>{
-    if(target?.closest?.('.drag-handle'))return false;
-    // Arm the gesture from the whole sheet, including controls. Nothing is
-    // prevented on touchstart, so a normal tap still behaves like a tap. Only
-    // after a clearly downward movement do we take over and dismiss the sheet.
-    const p=pointXY(point);startX=p.x;startY=lastY=p.y;tracking=true;dragging=false;forceHandle=force;
-    if(force)beginDrag();
-    return true;
-  };
-  const move=point=>{
-    if(!tracking)return false;
-    const p=pointXY(point);lastY=p.y;
-
-    if(!dragging && !forceHandle && modal.scrollTop>1){
-      // Let native scrolling consume the gesture until the sheet reaches its
-      // top edge. Rebase the origin continuously so dismissal can hand off
-      // smoothly if the user keeps pulling downward after reaching the top.
-      startX=p.x;startY=lastY=p.y;
-      return false;
-    }
-
-    const dy=lastY-startY,dx=p.x-startX;
-    if(!dragging){
-      // A small movement remains a normal tap/scroll. Once the gesture is
-      // clearly downward and mostly vertical, the sheet itself follows it.
-      if(dy<10 || dy<Math.abs(dx)*1.15)return false;
-      if(!beginDrag())return false;
-    }
-    const down=Math.max(0,dy);
-    modal.style.transform=`translateY(${down}px)`;
-    backdrop.style.background=`rgba(15,18,15,${Math.max(.08,.38-down/700)})`;
-    return true;
-  };
-  const finish=()=>{
-    if(!tracking)return;
-    if(!dragging){tracking=false;forceHandle=false;return;}
-    tracking=false;dragging=false;
-    const dy=Math.max(0,lastY-startY);
-    const velocity=dy/Math.max(1,performance.now()-startAt);
-    if(dy>Math.min(92,modal.clientHeight*.13)||velocity>.56){
-      modal.style.transition='transform .16s ease-in';
-      modal.style.transform='translateY(110%)';
-      setTimeout(()=>{if(closeModal({reason:'swipe'})===false)reset();},140);
-    }else reset();
-  };
-
-  // The whole sheet can be pulled down, not only the grabber. We do not call
-  // preventDefault until the gesture is clearly downward and the sheet is at
-  // scrollTop 0, so normal scrolling and taps remain natural.
-  modal.addEventListener('touchstart',e=>{
-    if(e.touches.length!==1)return;
-    const force=!!e.target.closest?.('.modal-grabber');
-    if(begin(e.touches[0],e.target,force)&&force)e.preventDefault();
-  },{passive:false});
-  modal.addEventListener('touchmove',e=>{
-    if(e.touches.length!==1||!tracking)return;
-    if(move(e.touches[0]))e.preventDefault();
-  },{passive:false});
-  modal.addEventListener('touchend',finish,{passive:true});
-  modal.addEventListener('touchcancel',()=>{if(dragging)reset();else{tracking=false;forceHandle=false;}},{passive:true});
-
-  // Desktop/pen testing keeps the explicit grabber affordance.
-  grabber?.addEventListener('pointerdown',e=>{
-    if(e.pointerType==='touch')return;
-    if(begin(e,e.target,true)){grabber.setPointerCapture?.(e.pointerId);e.preventDefault();}
-  });
-  grabber?.addEventListener('pointermove',e=>{if(e.pointerType!=='touch'&&tracking){move(e);e.preventDefault();}});
-  grabber?.addEventListener('pointerup',e=>{if(e.pointerType!=='touch')finish();});
-  grabber?.addEventListener('pointercancel',e=>{if(e.pointerType!=='touch')reset();});
-}
 
 function openMonthModal(){
   let {y,mo}=parseMonth(ui.selectedMonth);
@@ -1252,7 +1154,7 @@ function toast(msg,options={}){
 }
 
 // Global navigation
-document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;render();window.scrollTo({top:0,behavior:'smooth'});});
+document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ui.tab=b.dataset.tab;render();window.scrollTo({top:0,behavior:'smooth'});});
 document.getElementById('addButton').onclick=()=>openTransactionModal();
 document.getElementById('monthButton').onclick=openMonthModal;
 document.getElementById('prevMonthButton')?.addEventListener('click',()=>shiftMonth(-1));

@@ -1,8 +1,8 @@
 import {cents,newPurchaseId,recordPurchase} from './purchases.mjs';
 import {saveSku} from './inventory.mjs';
 import {inventoryWithMoves,recordEvent,numeric,validDate} from './core.mjs';
-import {confirmItems, requestData, resolveItem} from './candidates.mjs';
-import {matches, resultSchema, activitySchema, purchaseSchema, units, validInput, nutrientKeys} from './contract.mjs';
+import {confirmItems, resolveItem} from './candidates.mjs';
+import {matches, resultSchema, activitySchema, purchaseSchema, units, validInput, nutrientKeys, assistantInput} from './contract.mjs';
 import {recognize} from '../ai/client.mjs';
 
 const $ = id => document.getElementById(id);
@@ -131,6 +131,7 @@ export function attachAssistant({getState,commit,today}) {
   }
   form.oninput=()=>{ reset(); $('photo-label').hidden=form.elements.mode.value!=='photo'; };
   $('discard').onclick=reset;
+  $('health-ai-sheet').addEventListener('close',reset);
   form.onsubmit=async e=>{
     e.preventDefault(); reset();
     const id=version;
@@ -138,12 +139,12 @@ export function attachAssistant({getState,commit,today}) {
       const mode=form.elements.mode.value;
       const photo=mode==='photo' ? await jpeg(form.elements.image.files[0]) : null;
       if (id!==version) return;
-      const data=requestData(getState(),mode,form.elements.text.value.trim(),photo,today(),mode!=='activity'&&form.elements.catalog.checked);
+      const data=assistantInput({mode,text:form.elements.text.value.trim(),photo});
       if (!validInput(data)) throw Error('请检查输入文字、库存参数或照片');
       baseRevision=getState().revision ?? 0;
-      const {photo:picture,...fields}=data;
-      $('send-description').textContent='AI 服务会将本次请求发给 OpenAI，包括本次文字'+(photo?'、下方压缩照片':'')+'和所列字段。'+(mode==='plan'?'规划使用今日汇总、目标和所选库存价格。':'')+'完整账本、照片元数据及财务记录保留在本机。';
-      $('send-fields').textContent=JSON.stringify(fields,null,2);
+      const {photo:picture,text}=data;
+      $('send-description').textContent='OpenAI 会收到本次输入'+(photo?'和下方的压缩照片':'')+'。';
+      $('send-fields').textContent=text;
       $('send-image').hidden=!picture; if (picture) $('send-image').src=picture;
       prepared=data; $('send-preview').hidden=false; send.disabled=busy;
     } catch (err) { status.textContent=err.message; }
@@ -193,7 +194,7 @@ export function attachAssistant({getState,commit,today}) {
         next=purchase?approvedPurchase(getState(),items,date,total):confirmItems(getState(),items,date,review.elements.meal.value);
       }
       await commit(next,resultMode==='purchase'?'采购已入库，可在库存页关联支出':'已保存确认的记录');
-      reset(); form.reset(); $('photo-label').hidden=true; status.textContent='已保存确认的记录';
+      reset(); form.reset(); $('photo-label').hidden=true; status.textContent='已保存确认的记录';$('health-ai-sheet').close();
     } catch (err) { status.textContent=err.message; }
     finally { button.disabled=false; }
   };

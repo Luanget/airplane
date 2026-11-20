@@ -1,41 +1,6 @@
-import {inventoryWithMoves, addFood, localStockChange, dayIntake, round, makeId, addDays, cycleForDate} from './core.mjs';
+import {inventoryWithMoves, addFood, localStockChange, round, makeId} from './core.mjs';
 import {measuredGrams,saveSku} from './inventory.mjs';
 import {nutrientKeys} from './contract.mjs';
-
-export function requestData(state, mode, text, photo, date, shareCatalog) {
-  const planning = mode === 'plan';
-  const stock = shareCatalog ? inventoryWithMoves(state).filter(s => s.active) : [];
-  const query=text.toLocaleLowerCase();
-  const rank = s => {
-    const name=s.name.toLocaleLowerCase();
-    if (query.includes(name)) return 1000;
-    let score=s.qty>0 ? 1 : 0;
-    for (let i=1;i<name.length;i++) if (query.includes(name.slice(i-1,i+1))) score+=2;
-    return score;
-  };
-  const scores = new Map(stock.map(s=>[s.id,rank(s)]));
-  stock.sort((a,b)=>scores.get(b.id)-scores.get(a.id));
-  const catalog = stock.slice(0,16).map(s => ({
-    id:s.id, name:s.name, unit:s.unit, standard:s.standard ?? '', basis:s.nutritionBasis,
-    qty:planning ? s.qty : null, price:planning ? s.pricePerUnit ?? null : null,
-    priceBasis:planning ? s.priceBasis ?? '' : '',
-    nutrients:planning ? Object.fromEntries(nutrientKeys.map(k => [k,s.nutrition[k] ?? null])) : null
-  }));
-  let summary = null;
-  if (planning) {
-    const intake = dayIntake(state,date);
-    const {calorieTarget,proteinMin,fatMin,cycleDays,cycleTarget} = state.settings;
-    const cycle=cycleForDate(state,date,date);
-    const recent=[1,2,3].map(n=>{
-      const day=addDays(date,-n),daily=dayIntake(state,day);
-      return {date:day,kcal:daily.incomplete.includes('kcal') ? null : daily.totals.kcal,
-        protein:daily.incomplete.includes('protein') ? null : daily.totals.protein};
-    });
-    summary={totals:intake.reported?intake.totals:null,calorieTarget,proteinMin,fatMin,cycleDays,cycleTarget,
-      cycleDeficit:cycle.closedDays?cycle.deficit:null,closedDays:cycle.closedDays,recent,preferences:String(state.settings.preferences??'').slice(0,300)};
-  }
-  return {mode,text,catalog,summary,photo};
-}
 
 const unitOf = u => ({'袋':'包','克':'g','毫升':'mL','ml':'mL'})[u] ?? u;
 const packed = u => ['包','盒','瓶','个','份'].includes(unitOf(u));

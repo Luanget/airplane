@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' http://127.0.0.1:8787; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' https://api.openai.com; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f6f7f4" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#111311" media="(prefers-color-scheme: dark)" />
@@ -33,24 +33,24 @@
       </div>
       <div class="topbar-actions">
         <a data-account class="account-link" href="?private=1">私人账本</a>
+        <a class="icon-button" data-module-link data-shell-icon="health" href="./health/" aria-label="健康" title="健康"></a>
         <button class="icon-button" id="settingsButton" aria-label="打开设置" data-icon="settings"></button>
       </div>
     </header>
 
-    <nav class="module-switch" aria-label="模块"><span aria-current="page">财务</span><a data-module-link href="./health/">健康</a></nav>
-    <button type="button" class="finance-ai-launch" id="open-finance-ai">AI 记账</button>
-    <dialog class="ai-dialog" id="finance-assistant" aria-labelledby="finance-ai-title"><form>
-      <h2 id="finance-ai-title">AI 记账</h2><button type="button" data-ai-key>AI 权限</button>
+    <dialog class="modal bottom-sheet ai-dialog" id="finance-assistant" aria-labelledby="finance-ai-title"><div class="modal-grabber" aria-hidden="true"></div><form>
+      <div class="modal-head"><button type="button" class="cancel" data-close>关闭</button><h2 id="finance-ai-title">AI 记账</h2><button type="button" class="save" data-ai-key>API Key</button></div>
       <label>描述一笔收支<textarea name="text" maxlength="600" rows="2" required placeholder="例如：昨天坐地铁花了 6 元"></textarea></label>
-      <p>本次只向 OpenAI 发送这句话、今天日期和可用分类。识别后可核对金额、日期与预算选项。</p>
-      <details><summary>本次使用的分类</summary><p data-fields></p></details><output role="status"></output>
-      <div class="ai-actions"><button type="submit">同意发送并识别</button><button type="button" data-close>关闭</button></div></form></dialog>
+      <p>OpenAI 会收到这句话和用于解析相对日期的当天日期。识别后可在本机核对这笔账。</p>
+      <output role="status"></output>
+      <button class="primary-button" type="submit">同意发送并识别</button></form></dialog>
     <main id="app" aria-live="polite"></main>
 
-    <nav class="tabbar" aria-label="主导航">
-      <button data-tab="home" class="tab active"><span data-icon="home"></span><small>首页</small></button>
+    <nav class="tabbar tabbar-with-ai" aria-label="主导航">
+      <div class="tab-group"><button data-tab="home" class="tab active"><span data-icon="home"></span><small>首页</small></button></div>
       <button id="addButton" class="add-button" aria-label="记一笔"><span data-icon="plus"></span></button>
-      <button data-tab="stats" class="tab"><span data-icon="chart"></span><small>统计</small></button>
+      <div class="tab-group"><button data-tab="stats" class="tab"><span data-icon="chart"></span><small>统计</small></button>
+      <button id="open-finance-ai" class="tab ai-tab" type="button" aria-label="AI 助手"><span data-shell-icon="sparkles"></span><small>AI</small></button></div>
     </nav>
   </div>
 

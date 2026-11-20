@@ -68,17 +68,19 @@ try {
 
   await ctx.setOffline(true);
   await page.goto(base+'health/?test=offline');
-  await page.locator('[data-tab="settings"]').click();
+  await page.locator('#health-settings').click();
   const synthetic={tables:{food_events:[],weight_events:[],food_inventory:[{'食品ID':'fixture','名称':'合成库存','库存值':5,'库存单位':'包','标准份量':'每包','kcal':100}]}};
   await page.locator('#import-file').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(synthetic))});
-  await page.waitForFunction(()=>document.querySelector('#view-overview')?.classList.contains('hidden')===false);
-  await page.locator('[data-tab="settings"]').click();
+  await page.locator('#health-settings-sheet').waitFor({state:'hidden'});
+  await page.locator('#health-settings').click();
   const revision=()=>page.evaluate(async()=> (await (await import('./storage.mjs')).readState()).revision);
   const importedRevision=await revision();
   await page.locator('#import-file').setInputFiles({name:'same.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(synthetic))});
   await page.locator('#toast').getByText('这份主账已导入').waitFor();
   assert.equal(await revision(),importedRevision);
+  await page.locator('#health-settings-sheet [data-sheet-close]').click();
   await page.locator('[data-tab="record"]').click();
+  await page.locator('#add-health').click();
   const manual=page.locator('#food-form');
   await manual.locator('[name=foodId]').selectOption('fixture');
   await manual.locator('[name=status]').selectOption('plan');
@@ -98,7 +100,7 @@ try {
   await page.locator('#inventory-list').getByText('合成库存',{exact:true}).waitFor();
   await page.reload();await page.locator('[data-tab="inventory"]').click();
   await page.locator('#inventory-list').getByText('合成库存',{exact:true}).waitFor();
-  await page.locator('[data-tab="settings"]').click();
+  await page.locator('#health-settings').click();
   const healthDownload=page.waitForEvent('download');
   await page.locator('#export-button').click();
   const healthCopy=JSON.parse(readFileSync(await (await healthDownload).path(),'utf8'));
@@ -130,28 +132,31 @@ try {
   await page.locator('[data-tab="inventory"]').click();assert.equal(await page.locator('#inventory-list').getByText('合成库存',{exact:true}).count(),0);
   await ctx.setOffline(false);
   const calls=[];
-  const accessCode=randomBytes(32).toString('hex');
-  await ctx.route('http://127.0.0.1:8787/api/**',async route=>{
-    assert.match(route.request().headers().authorization,/^Bearer [0-9a-f]{64}$/);
-    const headers={'Access-Control-Allow-Origin':new URL(base).origin};
-    if(route.request().method()==='GET'){
-      await route.fulfill({json:{month:'2030-01',calls:0,monthlyCalls:60,billableMicros:0},headers});return;
-    }
-    const input=route.request().postDataJSON();calls.push(input);
+  const testKey='sk-fixture-browser-only';
+  const aiIcon=await page.locator('#open-health-ai svg').innerHTML();
+  await ctx.route('https://api.openai.com/v1/responses',async route=>{
+    const headers={'Access-Control-Allow-Origin':new URL(base).origin,'Access-Control-Allow-Headers':'authorization,content-type','Access-Control-Allow-Methods':'POST'};
+    if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
+    assert.equal(route.request().headers().authorization,'Bearer '+testKey);
+    const body=route.request().postDataJSON(),content=body.input[0].content;
+    const input=JSON.parse(content[0].text);
+    assert.deepEqual(Object.keys(input).sort(),input.mode==='finance'?['date','mode','text']:['mode','text']);
+    calls.push({...input,photo:content[1]?.image_url});
     const item={sku:null,name:'合成餐点',action:input.mode==='plan'?'plan':'eat',amount:120,unit:'g',packageSize:null,packageUnit:null,
       basisAmount:100,basisUnit:'g',nutrients:{kcal:100,protein:10,carbs:10,fat:3,sodium:10},uncertainty:'合成测试估值',weighing:null};
-    const parsed=input.mode==='finance' ? {note:'',entry:{type:'expense',amount:28,date:input.date,note:'午餐',categoryId:input.categories.find(c=>c.name==='餐饮').id}} : {note:'供测试',items:[item]};
-    await route.fulfill({json:parsed,headers});
+    const parsed=input.mode==='finance' ? {note:'',entry:{type:'expense',amount:28,date:input.date,note:'午餐',categoryId:'餐饮'}} : {note:'供测试',items:[item]};
+    await route.fulfill({json:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(parsed)}]}]},headers});
   });
-  const access=page.locator('#ai-access');
-  const authorize=async()=>{
-    await access.locator('[name=code]').fill(accessCode);
-    await access.locator('[type=submit]').click();await access.getByText(/0\/60/).waitFor();
-    await access.locator('[data-close]').click();
-  };
-  await page.locator('[data-tab="assistant"]').click();
-  await page.locator('[data-ai-key]').click();
-  await authorize();
+  const access=page.locator('#ai-keys');
+  async function importKey(fromFile=false){
+    if(fromFile)await access.locator('[type=file]').setInputFiles({name:'fixture.txt',mimeType:'text/plain',buffer:Buffer.from(testKey)});
+    else await access.locator('[name=key]').fill(testKey);
+    await access.locator('[type=submit]').click();
+    await access.waitFor({state:'hidden'});
+  }
+  await page.locator('#open-health-ai').click();
+  await page.locator('#health-ai-sheet [data-ai-key]').click();
+  await importKey(true);
   const form=page.locator('#assistant-form');
   await form.locator('textarea').fill('合成餐点');
   await form.locator('[type=submit]').click();
@@ -163,17 +168,18 @@ try {
   await page.locator('[data-tab="record"]').click();await page.locator('#local-events .event-row').waitFor(); assert.equal(calls.length,1);
   await page.locator('[data-tab="overview"]').click();
   assert.equal(await page.locator('#hero-calories').textContent(),'90');
-  await page.locator('[data-tab="assistant"]').click();await form.getByRole('combobox').selectOption('plan');
+  await page.locator('#open-health-ai').click();await form.getByRole('combobox').selectOption('plan');
+  await form.locator('textarea').fill('用我描述的合成蔬菜规划一餐');
   await form.locator('[type=submit]').click();await page.locator('#send-request').click();
-  await page.locator('#candidate-list legend').waitFor();assert.equal(calls[1].summary.totals.kcal,90);
+  await page.locator('#candidate-list legend').waitFor();assert.equal(calls[1].text,'用我描述的合成蔬菜规划一餐');
   await page.locator('#candidate-form [type=submit]').click();
   await page.waitForFunction(()=>document.querySelector('#candidate-form').hidden);
-  await form.getByRole('combobox').selectOption('photo');
+  await page.locator('#open-health-ai').click();await form.getByRole('combobox').selectOption('photo');
   const pixels=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=40;c.height=40;return c.toDataURL('image/png').split(',')[1];});
   await form.locator('[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(pixels,'base64')});
   await form.locator('[type=submit]').click();await page.locator('#send-image').waitFor();
   assert.equal(calls.length,2);await page.locator('#send-request').click();await page.locator('#candidate-list legend').waitFor();
-  assert.ok(calls[2].photo.startsWith('data:image/jpeg;base64,/9j/'));await page.locator('#discard').click();
+  assert.ok(calls[2].photo.startsWith('data:image/jpeg;base64,/9j/'));await page.locator('#discard').click();await page.locator('#health-ai-sheet [data-sheet-close]').click();
   await page.locator('[data-tab="overview"]').click();assert.equal(await page.locator('#hero-calories').textContent(),'90');
   await unlock(base+'health/',codes[1]); assert.equal(await page.locator('#hero-calories').textContent(),'—');
   // Refuse malformed backups and detect stale writes in the actual IndexedDB.
@@ -185,7 +191,8 @@ try {
     throw Error('stale write accepted');
   });
   await page.goto(base+'#model');
-  await access.getByText('尚未授权 AI').waitFor(); await authorize();
+  await access.getByText('请导入 OpenAI API Key').waitFor();await importKey();
+  assert.equal(await page.locator('#open-finance-ai svg').innerHTML(),aiIcon);
   await page.locator('#open-finance-ai').click();
   const finance=page.locator('#finance-assistant');
   await finance.locator('textarea').fill('午餐 28 元');await finance.locator('[type=submit]').click();
@@ -194,9 +201,9 @@ try {
   await page.locator('#txSubmit').click();assert.equal(JSON.parse(await ledger()).transactions.at(-1).amount,28);
   assert.equal(calls.at(-1).mode,'finance');
   await page.locator('#open-finance-ai').click();await finance.locator('[data-ai-key]').click();
-  await access.locator('[data-remove]').click();await access.locator('[data-close]').click();
+  await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();await access.locator('[data-close]').click();
   await finance.locator('textarea').fill('未授权的请求');await finance.locator('[type=submit]').click();
-  await finance.getByText(/输入管理员提供的访问码/).waitFor();
+  await finance.getByText(/导入自己的密钥/).waitFor();
   assert.equal(calls.length,4);await finance.locator('[data-close]').click();
 
   // Start in finance, reuse the saved expense, then start a separate purchase in inventory.
@@ -220,7 +227,7 @@ try {
   assert.equal(JSON.parse(await ledger()).transactions.length,count+1);
 
   // Export both ledgers and restore the selected section.
-  await page.goto(base+'health/');await page.locator('[data-tab="settings"]').click();
+  await page.goto(base+'health/');await page.locator('#health-settings').click();
   const combined=page.locator('#combined-backup');
   const bothDownload=page.waitForEvent('download');await combined.locator('[data-export]').click();
   const both=JSON.parse(readFileSync(await (await bothDownload).path(),'utf8'));
@@ -236,7 +243,7 @@ try {
   await combined.locator('[name=finance]').check();
   await combined.locator('[type=file]').setInputFiles({name:'both.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(both))});
   await page.waitForFunction(expected=>JSON.parse(localStorage.getItem('airplane-pwa-v1')).transactions.length===expected,count+1);
-  console.log('PASS secure AI gateway client, both purchase directions, duplicate protection and selective backup restore');
+  console.log('PASS BYOK with private request payload, both purchase directions, duplicate protection and selective backup restore');
   await page.goto(base);
   await page.evaluate(()=>{localStorage.setItem('airplane-pwa-v1','{');localStorage.setItem('airplane-pwa-recovery-v1','invalid');});
   await page.reload();await page.getByRole('button',{name:'导出原始副本'}).waitFor();

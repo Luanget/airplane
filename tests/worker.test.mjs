@@ -49,6 +49,6 @@ test('finance accepts a single dated expense with an existing category and rejec
   assert.throws(()=>modelRequest({...req,transactions:[]}));
 });
 test('read-only example flags wrong quantities and missing SKU instead of reporting a successful deduction',()=>{
-  assert.deepEqual(input.catalog.map(s=>s.qty),[null,null,null]);
+  assert.deepEqual(input.catalog,[]);
   const rows=assessExample({items:[],note:''});assert.equal(rows.length,3);assert.ok(rows.every(s=>s.includes('核对')));
 });

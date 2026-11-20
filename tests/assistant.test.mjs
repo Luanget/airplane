@@ -1,8 +1,9 @@
+import {modelRequest} from '../ai/responses.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {newState, validDate, validateAppState, inventoryWithMoves, dayIntake, energyForDay, cycleForDate} from '../health/core.mjs';
-import {confirmItems,resolveItem,requestData} from '../health/candidates.mjs';
-import {matches,resultSchema,validInput} from '../health/contract.mjs';
+import {confirmItems,resolveItem} from '../health/candidates.mjs';
+import {matches,resultSchema,validInput,assistantInput} from '../health/contract.mjs';
 import {accountKeys,privateAccount} from '../account.mjs';
 import nacl from '../vendor/nacl-fast.min.js';
 import {randomBytes} from 'node:crypto';
@@ -49,10 +50,16 @@ test('explicit gram and mL units require a defensible conversion',()=>{
 });
 test('requests never serialize the health snapshot, financial data or historical identifiers',()=>{
   const state=newState();state.legacy.sourceSnapshot={privateField:'local-only'};
-  const data=requestData(state,'entry','测试',null,date,true);
+  const data=assistantInput({mode:'entry',text:'测试',state});
   assert.ok(validInput(data));assert.equal(data.summary,null);
   assert.ok(!JSON.stringify(data).includes('local-only'));
-  assert.ok(validInput(requestData(state,'plan','',null,date,false)));
+  const finance=assistantInput({mode:'finance',text:'测试',date});
+  finance.categories=[{id:'fixture-id',name:'本地私有分类',type:'expense'}];
+  assert.deepEqual(JSON.parse(modelRequest(finance).input[0].content[0].text),{mode:'finance',text:'测试',date});
+  const plan=assistantInput({mode:'plan',text:'测试'});
+  plan.catalog=[{id:'fixture-id',name:'本地私有食品',unit:'g',standard:'100g',basis:'per100g',qty:100,price:5,priceBasis:'g',nutrients:null}];
+  assert.deepEqual(JSON.parse(modelRequest(plan).input[0].content[0].text),{mode:'plan',text:'测试'});
+  assert.ok(validInput(assistantInput({mode:'plan',text:'只用我输入的食材'})));
   assert.ok(!validInput({...data,ledger:state}));assert.ok(!validInput({...data,photo:'https://example.invalid'}));
   assert.ok(!matches(resultSchema,{items:[{...part,amount:-1}],note:''}));
 });

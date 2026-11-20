@@ -1,6 +1,6 @@
 # Airplane PWA 0.9.0
 
-Airplane 在设备上保存财务和健康账本。顶部「财务 / 健康」切换模块。健康页提供饮食、体重、运动、库存和可配置的周期汇总，记录页可以手动填写，也可以从智能助手的候选开始。
+Airplane 在设备上保存财务和健康账本。通过顶部设置旁的健康或财务图标切换模块。两页底部共用「＋」录入及 AI 图标。健康页提供饮食、体重、运动、库存和可配置的周期汇总，记录页可以手动填写，也可以从智能助手的候选开始。
 
 ## 本地运行
 
@@ -19,14 +19,11 @@ python3 serve.py
 - 财务和健康的单独备份继续可用。健康设置可导出所选账本的统一备份，也可只恢复其中一个。确认前先预览，替换前在本机保存快照。
 - 私人账本由本机账户码加密。普通设备账本可直接使用，数据存储随浏览器配置文件独立。
 
-## AI 权限与服务端配置
+## AI 与 API Key
 
-1. 配置服务器的 `OPENAI_API_KEY` 和 `AI_USERS`。本地开发使用被 Git 忽略的 `worker/.dev.vars`，远程 Worker 使用 Secret。运行 `node worker/issue-account.mjs` 生成访问码和摘要，只将摘要放入 `AI_USERS` 的 JSON 数组。访问码私下发给受权使用者。
-2. 分别运行 `npm run dev:api` 和 `python3 serve.py`。浏览器打开「AI 权限」，输入访问码后可查看当前月用量。访客可直接离线记账。升级自 0.8.1 的用户可以在此清理旧版浏览器密钥。
-3. 在 `worker/wrangler.toml` 配置 `ALLOWED_ORIGINS`、`AI_MODEL`、`AI_MAX_OUTPUT_TOKENS`、`AI_REASONING`、`USER_RPM`、`USER_MONTHLY_CALLS`、`MONTHLY_BUDGET_CENTS`、`TOTAL_BUDGET_CENTS`。部署时，将本机以外的前端环境接到同源 `/api/assist` 和 `/api/usage`，并绑定 `QUOTA`。只支持有定价表的模型，服务端按标准价保守预留预算，有用量后按实际 token 结算，异常缺失用量时保留预留。每月额度按 UTC 月计算。
-4. 文字录入、照片、运动、采购与晚餐规划提交前预览字段。食品库按文本相关度选择，规划包含近期三日的简要营养、周期、库存和用户填写的偏好。模型仅返回候选，当前账本由用户确认后写入。
+从底部 AI 图标打开助手，在弹出的表单中导入自己的 OpenAI API Key。可以粘贴或选择只包含 Key 的纯文本文件。Key 加密保存在当前本机账本，财务和健康共用。调用 OpenAI Responses API 时，模型收到你在表单填写的文字和选择的图片；财务记账另提供当天日期，用于理解“昨天”等相对日期。用户核对候选后在本机保存，分类和 SKU 在本机匹配。
 
-接口与模型见 [Responses](https://developers.openai.com/api/reference/resources/responses/methods/create)、[结构化输出](https://developers.openai.com/api/docs/guides/structured-outputs) 和 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)。
+默认使用 `gpt-6-luna`。只运行 `python3 serve.py` 即可查看本地版，AI 需要个人 Key 和能访问 OpenAI 的网络。晚餐建议根据手动提供的食材、预算和偏好生成。已单独部署的 Worker 可以继续通过原接口独立使用。
 
 ## 验证
 

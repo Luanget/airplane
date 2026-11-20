@@ -1,6 +1,7 @@
 // The user's recognition check uses a synthetic catalog. Never open the ledger.
 import {newState} from '../../health/core.mjs';
-import {requestData,resolveItem} from '../../health/candidates.mjs';
+import {assistantInput} from '../../health/contract.mjs';
+import {resolveItem} from '../../health/candidates.mjs';
 export const exampleText='示例鱼肉120g、两包饼干、示例酸奶喝了88g';
 const foods=[['chicken','示例鱼肉','g',120],['noodles','饼干','包',2],['milk','示例酸奶','g',88]];
 function demoState() {
@@ -10,7 +11,7 @@ function demoState() {
     nutrition:{kcal:null,protein:null,carbs:null,fat:null,sodium:null}}));
   return state;
 }
-export function exampleInput() {return requestData(demoState(),'entry',exampleText,null,'',true);}
+export function exampleInput() {return assistantInput({mode:'entry',text:exampleText});}
 export function assessExample(result) {
   const state=demoState(),lines=[];
   for (const [id,name,unit,amount] of foods) {

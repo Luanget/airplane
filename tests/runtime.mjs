@@ -5,8 +5,7 @@ import {readFileSync} from 'node:fs';
 import {randomBytes} from 'node:crypto';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {accountKeys} from '../account.mjs';
-import {newState} from '../health/core.mjs';
-import {requestData} from '../health/candidates.mjs';
+import {assistantInput} from '../health/contract.mjs';
 
 const a=await accountKeys(randomBytes(32).toString('hex'));
 const b=await accountKeys(randomBytes(32).toString('hex'));
@@ -33,7 +32,7 @@ const mf=new Miniflare(convertV4MiniflareOptions({
 try {
   const send=bearer=>mf.dispatchFetch('http://127.0.0.1/api/assist',{method:'POST',
     headers:{Origin:origin,'Content-Type':'application/json',Authorization:'Bearer '+bearer},
-    body:JSON.stringify(requestData(newState(),'entry','测试',null,'2030-01-01',false))});
+    body:JSON.stringify(assistantInput({mode:'entry',text:'测试'}))});
   assert.equal((await send('invalid')).status,401);
   assert.equal(calls,0);
   const both=await Promise.all([send(a.bearer),send(b.bearer)]);

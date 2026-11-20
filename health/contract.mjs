@@ -62,7 +62,7 @@ export const financeSchema=object({note:string(400),entry:optional(object({
 export function validFinanceEntry(entry,input) {
   return calendarDate(entry.date) && entry.date<=input.date
     && Math.abs(entry.amount*100-Math.round(entry.amount*100))<0.00001
-    && input.categories.some(c=>c.id===entry.categoryId && c.type===entry.type);
+    && (!input.categories.length || input.categories.some(c=>c.id===entry.categoryId && c.type===entry.type));
 }
 export function validInput(data) {
   if (data?.mode==='finance') return matches(financeInput,data) && !!data.text.trim() && calendarDate(data.date);
@@ -71,5 +71,10 @@ export function validInput(data) {
     if (!data.photo?.startsWith('data:image/jpeg;base64,/9j/') ||
         !/^[A-Za-z0-9+/]+={0,2}$/.test(data.photo.slice(23))) return false;
   } else if (data.photo !== null) return false;
-  return (!['entry','activity','purchase'].includes(data.mode) || !!data.text.trim()) && (data.mode === 'plan' ? !!data.summary : data.summary === null);
+  return (data.mode==='photo'||!!data.text.trim()) && (data.mode==='plan'||data.summary===null);
+}
+// Deliberately accepts only manually supplied fields. Ledger state is resolved
+// in the UI after the model result has returned.
+export function assistantInput({mode,text,photo=null,date}){
+  return mode==='finance'?{mode,text,date,categories:[]}:{mode,text,photo,catalog:[],summary:null};
 }

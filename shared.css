@@ -58,6 +58,19 @@
 
 .ai-dialog pre { white-space:pre-wrap; font:inherit; overflow-wrap:anywhere; }
 
-.module-switch { display:flex; gap:4px; width:fit-content; margin:.65rem 1rem; border:1px solid var(--line,var(--border)); border-radius:12px; padding:3px; background:var(--surface) }
-.module-switch > * { min-width:54px; padding:8px 12px; text-align:center; color:inherit; text-decoration:none; border-radius:8px; font-weight:650 }
-.module-switch [aria-current] { background:var(--green-soft,var(--blue-light)); color:var(--green,#23683d) }
+
+/* Both module bars keep the primary add button centered and AI on the right. */
+.tabbar.tabbar-with-ai { grid-template-columns:minmax(0,1fr) 56px minmax(0,1fr); padding-inline:10px }
+.tab-group { display:flex; min-width:0; align-items:end }
+.tab-group .tab { flex:1; min-width:0; min-height:46px }
+.ai-tab:focus-visible,.tab-group .tab:focus-visible,.topbar-actions .icon-button:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+dialog.bottom-sheet {
+  position:fixed; inset:auto 0 0; margin:0 auto; border:1px solid var(--line);
+  color:var(--text); width:min(100%,560px); background:var(--bg); border-radius:26px 26px 0 0
+}
+dialog.bottom-sheet::backdrop { background:rgba(15,18,15,.38); backdrop-filter:blur(3px) }
+dialog.bottom-sheet .modal-head .cancel, dialog.bottom-sheet .modal-head .save {
+  border:0; background:transparent; padding-inline:3px; min-height:44px
+}
+dialog.bottom-sheet .modal-head h2 { margin:0; text-align:center }
+dialog.ai-dialog.bottom-sheet { padding:12px 16px calc(24px + var(--safe-bottom)); font:inherit }
