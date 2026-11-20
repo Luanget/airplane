@@ -19,9 +19,14 @@
 .skill-row { display:flex; align-items:center; justify-content:space-between; gap:8px; border-bottom:1px solid var(--line) }
 .skill-row label { display:flex; flex:1; align-items:center; gap:8px; min-width:0; min-height:44px; font-size:14px; cursor:pointer; overflow-wrap:anywhere }
 .skill-row input { flex:none; width:16px; height:16px; margin:0 }
-.skill-row button { min-width:44px; flex:none }
+.skill-row button { min-width:44px; min-height:44px; flex:none }
+.skill-row button[aria-expanded=true] { color:var(--text) }
 .skill-new { padding:0 4px }
-.skill-editor { padding:4px 10px 8px; border:1px solid var(--line); border-radius:12px }
+.skill-editor { margin:6px 0 10px; padding:4px 10px 8px; background:var(--surface-2); border:1px solid var(--line); border-radius:12px }
+.skill-editor :is(input,textarea) { background:var(--surface) }
+.skill-editor [data-skill-error]:not(:empty) { color:var(--red) }
+.skill-status:empty { display:none }
+.skill-status:not(:empty) { display:block; padding:4px 6px; color:var(--muted); font-size:13px }
 .assistant-panel-body > output:not(:empty) { display:block; margin-top:6px; font-size:13px; color:var(--muted) }
 .skill-edit-review h3 { font-size:14px; margin-bottom:8px }
 .skill-edit-review :is(label,summary,p) { font-size:12px; line-height:1.5 }
@@ -32,7 +37,7 @@
 .assistant-workspace .skill-edit-review :is(input,textarea) { line-height:1.5 }
 .assistant-workspace .skill-edit-review :is(input,textarea):not(:focus) { font-size:14px }
 .chat-review:has(> .skill-edit-review) > .chat-actions button { font-size:13px }
-.chat-source { justify-self:start; max-width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface) }
+.chat-source { justify-self:start; margin-inline-start:36px; max-width:calc(100% - 36px); padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface) }
 .chat-source summary { cursor:pointer; color:var(--muted); font-size:13px }
 .chat-source pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; font:inherit; font-size:13px; line-height:1.55 }
 .assistant-fields label { display:block; margin:8px 0; color:var(--muted); font-size:13px }
@@ -83,7 +88,13 @@
 .assistant-delete-confirmation { padding:8px; border-top:1px solid var(--line) }
 .assistant-delete-confirmation p { margin:0 0 6px; color:var(--text); overflow-wrap:anywhere }
 .assistant-delete-confirmation .danger-button { width:auto; padding:8px 12px }
-.assistant-conversation .streaming-reply::after { content:''; display:inline-block; width:6px; height:6px; margin-inline-start:5px; border-radius:50%; background:var(--green) }
+.chat-message:not([hidden]) { display:flex; align-items:flex-start; gap:8px; max-width:min(94%,620px); min-width:0; justify-self:start }
+.chat-message.user { flex-direction:row-reverse; justify-self:end }
+.chat-message .chat-bubble { max-width:100%; min-width:0 }
+.chat-avatar { width:28px; height:28px; margin-top:4px; border-radius:10px; display:grid; place-items:center; flex:none; background:var(--surface-2); color:var(--muted) }
+.chat-avatar svg { width:16px; height:16px }
+.chat-message.assistant .chat-avatar { background:var(--green-soft); color:color-mix(in srgb,var(--green) 70%,var(--text)) }
+.assistant-conversation .streaming-reply .chat-bubble::after { content:''; display:inline-block; width:6px; height:6px; margin-inline-start:5px; border-radius:50%; background:var(--green) }
 .photo-batch { margin-top:10px; padding:4px 12px }
 .photo-result { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px 12px; padding:8px 0 }
 .photo-result+.photo-result { border-top:1px solid var(--line) }

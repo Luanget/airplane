@@ -17,6 +17,7 @@ import {accountKeys,privateAccount} from '../account.mjs';
 import nacl from '../vendor/nacl-fast.min.js';
 import {randomBytes} from 'node:crypto';
 import {STORAGE_KEY,freshData} from '../finance-storage.mjs';
+import {monthlyMetrics,currentBalanceFor} from '../finance-metrics.mjs';
 import {displayStockQuantity,stockMeasure} from '../health/inventory.mjs';
 
 const nutrition={kcal:100,protein:10,carbs:8,fat:3,sodium:20};
@@ -394,4 +395,51 @@ test('local USD estimates count regular, cached and written tokens once at model
  assert.equal(estimatedCost('gpt-6-luna',{input_tokens:5,output_tokens:1,input_tokens_details:{cached_tokens:10}}),null);
  assert.equal(displayUsage(null),'');
  assert.equal(displayUsage(152250000),'本机已用约 US$0.000152');
+});
+
+test('balance and budget tools share the finance page calculations and return scoped summaries',async()=>{
+ const ledger=freshData(),today='2030-01-10';
+ ledger.prefs.initialBalance=125.45;
+ ledger.balanceAdjustments=[{delta:20.55}];
+ ledger.budgets['2030-01']=200;
+ ledger.transactions=[
+  {id:'added-income',type:'income',date:today,amount:30,budgetSync:true,note:'synthetic income memo'},
+  {id:'day-expense',type:'expense',date:today,amount:3,note:'synthetic private memo'},
+  {id:'outside-budget',type:'expense',date:today,amount:4,budgetExcluded:true},
+  {id:'future-expense',type:'expense',date:'2030-02-01',amount:99}
+ ];
+ const workspace={finance:{getItem:key=>key===STORAGE_KEY?JSON.stringify(ledger):null}};
+ assert.equal(currentBalanceFor(ledger,today),169);
+ assert.deepEqual(await readLedger(workspace,{scope:'balance',query:''},today),{balance:169,currency:'CNY'});
+ const metrics=monthlyMetrics(ledger,'2030-01',today);
+ assert.equal(metrics.dailyLimit,200/22+30);
+ const budget=await readLedger(workspace,{scope:'budget',query:'2030-01'},today);
+ assert.equal(budget.budget,230);
+ assert.equal(budget.remainingBudget,227);
+ assert.equal(budget.dailyLimit,39.09);
+ assert.equal(budget.excludedExpense,4);
+ assert.equal(budget.todayExpense,3);
+ assert.ok(!JSON.stringify(budget).includes('synthetic'));
+ const selection=await readAppData(workspace,null,{
+  dataset:'transactions',id:null,date:'2030-01',query:'',fields:['amount','type']
+ });
+ assert.deepEqual(selection.rows,[{id:'added-income',type:'income',amount:30},
+  {id:'day-expense',type:'expense',amount:3},{id:'outside-budget',type:'expense',amount:4}]);
+});
+
+test('nutrition queries omit inventory and matching saved chat queries omit other conversations',async()=>{
+ const state=newState();
+ addFood(state,{name:'合成餐食',date,kcal:100,protein:15,cost:2});
+ const workspace={readHealth:async()=>state};
+ const summary=await readLedger(workspace,{scope:'nutrition',query:date},addDays(date,1));
+ assert.equal(summary.kcal,100);
+ assert.equal(summary.protein,15);
+ assert.equal(summary.deficit,2100);
+ assert.equal(summary.cost,2);
+ assert.equal(summary.closed,true);
+ assert.ok(!Object.hasOwn(summary,'stock'));
+ const book={list:()=>[{id:'first',title:'测试',messages:[{role:'assistant',text:'合成体重趋势',carry:true},
+  {role:'assistant',text:'另一个主题'}]},{id:'second',title:'无关',messages:[{role:'user',text:'合成体重秘密'}]}]};
+ const chat=await readAppData(workspace,book,{dataset:'conversation_messages',id:'first',date:null,query:'体重',fields:['text']});
+ assert.deepEqual(chat.rows,[{text:'合成体重趋势'}]);
 });

@@ -11,6 +11,8 @@ import {setShoppingItem} from '../health/shopping.mjs';
 import {appDataEditSchema,matches} from '../health/contract.mjs';
 import {HISTORY_OPTIONS,readHistoryOption,saveHistoryOption} from './context.mjs';
 import {readChatModel,saveChatModel} from './models.mjs';
+import {APP_VERSION} from '../shell.mjs';
+import {totalUsage} from './usage.mjs';
 import {dataGuide} from './data-guide.mjs';
 
 const healthSets={
@@ -119,27 +121,62 @@ function dataShape(dataset){
  const options=Object.fromEntries(types.filter(type=>Object.hasOwn(fieldOptions,type)).map(type=>[type,fieldOptions[type]]));
  return {dataset,label,fields,...(Object.keys(options).length?{options}:{})};
 }
-export async function readAppData(workspace,book,{dataset,id,date,query}){
+const readableOnly={
+ conversation_messages:'已保存对话的原文，用会话 ID 查询',
+ local_usage:'本浏览器的美元费用估算',
+ import_info:'已导入健康主账的来源、时间和记录数',
+ app_info:'应用版本'
+};
+export async function readAppData(workspace,book,{dataset,id,date,query,fields=[]}){
  if(dataset==='guide'){
   const section=query.trim();
   if(Object.hasOwn(datasets,section))return dataShape(section);
   if(Object.hasOwn(dataGuide,section))return {section,text:dataGuide[section]};
-  return {sections:Object.keys(dataGuide),datasets:Object.keys(datasets)};
+  return {sections:Object.keys(dataGuide),
+   datasets:{...Object.fromEntries(Object.entries(datasets).map(([key,[title]])=>[key,title])),...readableOnly}};
  }
- if(date!==null&&!dateString(date))throw Error('请选择有效日期');
+ const month=typeof date==='string'&&/^\d{4}-(?:0[1-9]|1[0-2])$/.test(date);
+ if(date!==null&&!month&&!dateString(date))throw Error('请选择有效日期或月份');
+ const term=query.trim().toLowerCase();
+ if(dataset==='conversation_messages'){
+  if(!id)return {dataset,hint:'从 conversations 查会话 ID 后再查原文。可用关键词筛选。'};
+  const thread=book?.list().find(row=>row.id===id);
+  const rows=(thread?.messages??[]).filter(row=>row&&(!term||
+   String(row.text).toLowerCase().includes(term)||String(row.source?.text??'').toLowerCase().includes(term)));
+  return {dataset,id,title:thread?.title??null,rows:projectFields(rows.map(({role,text,source})=>({role,text,...(source?{source}:{})})),fields)};
+ }
+ if(dataset==='local_usage'){
+  const cost=workspace.account?.demo?null:await totalUsage();
+  return {dataset,estimatedUsd:cost===null?null:cost/1e12,currency:'USD',scope:'本机收到用量回执的 Airplane 请求'};
+ }
+ if(dataset==='import_info'){
+  const {importInfo,importedAt}=await workspace.readHealth();
+  return {dataset,importedAt,importInfo};
+ }
+ if(dataset==='app_info')return {dataset,version:APP_VERSION};
+
+ const shape=dataShape(dataset);
+ if(!id&&!date&&!term&&!singletons.has(dataset)&&!['categories','skills','budgets','legacy_rules'].includes(dataset))
+  return {...shape,hint:'请选择 ID、记录日期、月份或关键词后查询。'};
  let found;
  if(Object.hasOwn(healthSets,dataset))found=healthRows(await workspace.readHealth(),dataset);
  else if(Object.hasOwn(financeSets,dataset))found=financeRows(readFinance(workspace.finance).payload??freshData(),dataset);
  else if(dataset==='skills')found=workspace.skills.list();
  else if(dataset==='conversations')found=book.list().map(({id,title,updatedAt})=>({id,title,updatedAt}));
  else found=[currentSettings(workspace.finance)];
- const term=query.trim().toLowerCase();
- if(!id&&!date&&!term&&!singletons.has(dataset)&&!['categories','skills','budgets','legacy_rules'].includes(dataset))
-  return {...dataShape(dataset),hint:'请选择 ID、记录日期或关键词后查询。'};
- const filtered=found.filter(row=>
-  (id===null||row.id===id)&&(!date||(row.date??(row.updatedAt??row.createdAt)?.slice(0,10)??row.id)===date)&&
-  (!term||JSON.stringify(row).toLowerCase().includes(term)));
- return {...dataShape(dataset),rows:filtered};
+ const filtered=found.filter(row=>{
+  const day=row.date??(row.updatedAt??row.createdAt)?.slice(0,10)??row.id;
+  return (id===null||row.id===id)&&(!date||(month?String(day??'').startsWith(date):day===date))&&
+   (!term||JSON.stringify(row).toLowerCase().includes(term));
+ });
+ if(fields.length)return {dataset,label:shape.label,rows:projectFields(filtered,fields)};
+ return {...shape,rows:filtered};
+}
+
+function projectFields(rows,fields){
+ if(!fields.length)return rows;
+ const selected=new Set(['id',...fields]);
+ return rows.map(row=>Object.fromEntries(Object.entries(row).filter(([key])=>selected.has(key))));
 }
 
 function replaceRow(list,id,record){

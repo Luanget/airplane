@@ -105,16 +105,17 @@
           <div class="assistant-panel-body">
             <div data-skill-items></div>
             <button type="button" class="text-button skill-new" data-new-skill>新建 Skill</button>
-            <form class="assistant-fields skill-editor" hidden>
+            <form id="skill-editor" class="assistant-fields skill-editor" hidden>
               <label>名称<input name="name" required></label>
               <label>工作规则<textarea name="text" rows="5" placeholder="例如：优先安排库存里的食材，份量用克。" required></textarea></label>
+              <output role="status" data-skill-error></output>
               <div class="chat-actions">
                 <button type="button" class="text-button" data-close-skill>收起</button>
                 <button type="button" class="text-button" data-restore-skill hidden>恢复原版</button>
                 <button type="submit" class="primary-button">保存 Skill</button>
               </div>
             </form>
-            <output role="status"></output>
+            <output class="skill-status" role="status" data-skill-status></output>
             <details class="assistant-prompt"><summary>查看内置提示词</summary><pre></pre></details>
           </div>
         </details>

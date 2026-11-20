@@ -1,5 +1,5 @@
 import {displayDay,localDate} from '../calendar.mjs';
-import {hydrateShell} from '../shell.mjs';
+import {hydrateShell,shellIcon} from '../shell.mjs';
 import {installUpdates} from '../updates.mjs';
 import {AssistantSyncPending,resumePurchaseUpdate} from '../health/purchase-sync.mjs';
 import {validInput} from '../health/contract.mjs';
@@ -93,6 +93,7 @@ function report(err){tell(err.name==='TypeError'?'无法完成请求，请检查
 async function requestReply(input,options,userText){
  const sent=userText?messageNode('user',userText):null;
  const answer=messageNode('assistant','');
+ const reply=answer.querySelector('.chat-bubble');
  answer.classList.add('streaming-reply');answer.hidden=true;answer.setAttribute('aria-live','off');
  start.hidden=true;
  if(sent)transcript.append(sent);
@@ -100,7 +101,7 @@ async function requestReply(input,options,userText){
  const onReply=text=>{
   const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
   if(answer.hidden)tell(demo?'正在接收演示回复…':'正在接收 OpenAI 回复…');
-  answer.hidden=false;answer.textContent=text;
+  answer.hidden=false;reply.textContent=text;
   if(follow)thread.scrollTop=thread.scrollHeight;
  };
  const onTool=()=>tell('正在准备本机账本查询…');
@@ -216,8 +217,15 @@ historyPanel.addEventListener('keydown',event=>{
  if(event.key==='Escape'){event.stopPropagation();openHistory(false);historyButton.focus();}
 });
 function messageNode(role,text){
- const p=document.createElement('p');p.className='chat-bubble '+role;p.textContent=text;
- return p;
+ const row=document.createElement('div'),mark=document.createElement('span'),body=document.createElement('p');
+ const assistant=role==='assistant';
+ row.className='chat-message '+role;
+ row.setAttribute('role','group');row.setAttribute('aria-label',assistant?'助手':'你');
+ mark.className='chat-avatar';mark.setAttribute('aria-hidden','true');
+ mark.innerHTML=shellIcon(assistant?'sparkles':'person');
+ body.className='chat-bubble '+role;body.textContent=text;
+ row.append(mark,body);
+ return row;
 }
 function bubble(role,text,source){
  transcript.append(messageNode(role,text));
@@ -414,6 +422,16 @@ async function complete(response,flow,source){
 }
 function describeSummary(scope,summary){
  if(scope==='app_data')return JSON.stringify(summary,null,2);
+ if(scope==='balance')return '当前总余额 '+new Intl.NumberFormat('zh-CN',{style:'currency',currency:summary.currency}).format(summary.balance);
+ if(scope==='budget')return [
+  summary.month+' · 月预算 ¥'+summary.budget+' · 剩余 ¥'+summary.remainingBudget,
+  '日常预算支出 ¥'+summary.budgetExpense+' · 预算外 ¥'+summary.excludedExpense,
+  ...(summary.current?['今日限额 ¥'+summary.dailyLimit+' · 今日计入预算 ¥'+summary.todayExpense]:[])
+ ].join('\n');
+ if(scope==='stock_alerts')return [
+  ...summary.low.map(row=>row.name+' · 库存 '+row.qty+' / 提醒线 '+row.minimum+' '+row.unit),
+  ...summary.expiry.map(row=>row.name+' · '+row.qty+' '+row.unit+' · '+displayDay(row.expires)+' 到期')
+ ].join('\n')||'暂无库存提醒';
  if(scope==='expenses')return summary.date+' · 支出 '+summary.expense+' 元 · 收入 '+summary.income+' 元 · '+summary.count+' 笔';
  if(scope==='weight'){
   const kg=value=>value===null?'待补':value+' kg';
@@ -432,7 +450,7 @@ function describeSummary(scope,summary){
    '最近结算 '+(summary.closedThrough?displayDay(summary.closedThrough):'暂无')+' · 待补 '+summary.unreported+' 天',
    '已结算缺口 '+summary.deficit+' / '+summary.goal+' kcal · 进度 '+summary.progress+'% · 剩余 '+summary.remaining+' kcal',
    '理论脂肪当量 '+summary.fatEquivalent+' kg',
-   '今日条件缺口 '+(day.conditionalDeficit??'待补')+' · 摄入 '+(day.intake??'待补')+' · 消耗 '+(day.tdee??'待补')+' kcal'+(day.source?' · '+source[day.source]:'')
+   displayDay(day.date)+(day.closed?'已结算缺口 ':'条件缺口 ')+(day.conditionalDeficit??'待补')+' · 摄入 '+(day.intake??'待补')+' · 消耗 '+(day.tdee??'待补')+' kcal'+(day.source?' · '+source[day.source]:'')
   ].join('\n');
  }
  if(scope==='expense_summary')return [
@@ -445,16 +463,21 @@ function describeSummary(scope,summary){
   if(!rows.length)rows.push('没有匹配的实际饮食记录');
   return [displayDay(summary.date,true),...rows].join('\n');
  }
- const rows=summary.stock.map(row=>row.name+' · '+(row.qty??'数量未知')+' '+row.unit+
+ const rows=(summary.stock??[]).map(row=>row.name+' · '+(row.qty??'数量未知')+' '+row.unit+
   (row.portions?.length?' · 分装 '+row.portions.map(qty=>qty+' '+row.unit).join('、'):''));
- if(!rows.length)rows.push('没有匹配的食品');
- if(summary.today){
-  const day=summary.today;
-  rows.push('今日热量 '+(day.kcal??'未知')+' / '+day.kcalTarget+' kcal',
+ if(summary.stock&&!rows.length)rows.push('没有匹配的食品');
+ if(summary.today||scope==='nutrition'){
+  const day=summary.today??summary;
+  const date=day.date?displayDay(day.date):'今日';
+  rows.push(date+'热量 '+(day.kcal??'未知')+' / '+day.kcalTarget+' kcal',
    '蛋白质 '+(day.protein??'未知')+' g · 参考 '+day.proteinMin+'–'+day.proteinMax+' g',
    '脂肪 '+(day.fat??'未知')+' g · 参考下限 '+day.fatMin+' g',
    '碳水 '+(day.carbs??'未知')+' g'+(day.carbRange?' · 参考 '+day.carbRange.low+'–'+day.carbRange.high+' g':''),
    '钠 '+(day.sodium??'未知')+' mg · 参考 '+day.sodiumTarget+' mg');
+  if(scope==='nutrition'){
+   rows.push('饮食成本 '+(day.cost===null?'未知':(day.costPartial?'已知部分 ':'')+'¥'+day.cost),
+    (day.closed?'已结算缺口 ':'条件缺口 ')+(day.deficit??'待补')+' kcal');
+  }
   if(day.incomplete.length){
    const names={kcal:'热量',protein:'蛋白质',fat:'脂肪',carbs:'碳水',sodium:'钠'};
    rows.push('待补数据：'+day.incomplete.map(key=>names[key]).filter(Boolean).join('、'));

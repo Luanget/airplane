@@ -106,6 +106,12 @@ export function carbReference({calorieTarget,proteinMin,proteinMax,fatMin}){
  if(!Number.isFinite(low)||!Number.isFinite(high)||low<0||low>high)return null;
  return {low:Math.round(low/5)*5,high:Math.round(high/5)*5};
 }
+export function currentCarbReference(state){
+ const diet=importedDietTargets(state.legacy.rules);
+ const fromImport=Object.keys(diet).length>0&&!state.settings.dietCustomized&&
+  ['calorieTarget','proteinMin','proteinMax','fatMin'].every(key=>state.settings[key]===DEFAULT_SETTINGS[key]);
+ return {range:carbReference(fromImport?{...state.settings,...diet}:state.settings),fromImport};
+}
 export function normalizeLedger(raw){
  if (!raw || !raw.tables || !Array.isArray(raw.tables.food_events) || !Array.isArray(raw.tables.weight_events) || !Array.isArray(raw.tables.food_inventory)) throw new Error('不是可识别的 health_tracker 主账 JSON（缺少必要表）');
  const result = newState();const t=raw.tables;

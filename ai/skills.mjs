@@ -88,10 +88,27 @@ export function skillLibrary(storage,legacyKey='airplane-ai-skill-v1'){
 
 export function mountSkillSettings(panel,library,onChange){
  const form=panel.querySelector('form'),items=panel.querySelector('[data-skill-items]');
- const status=panel.querySelector('output'),restore=form.querySelector('[data-restore-skill]');
- let editing=null;
- function displayEditor(item=null){
-  editing=item;form.hidden=false;status.textContent='';
+ const status=panel.querySelector('[data-skill-status]'),error=form.querySelector('[data-skill-error]');
+ const restore=form.querySelector('[data-restore-skill]'),create=panel.querySelector('[data-new-skill]');
+ const buttons=new Map();
+ let editing=null,opener=null;
+ function moveEditor(button){
+  opener?.setAttribute('aria-expanded','false');
+  opener=button;
+  if(opener){
+   (opener.closest('.skill-row')??opener).after(form);
+   opener.setAttribute('aria-expanded','true');
+  }else create.after(form);
+ }
+ function closeEditor(){
+  const button=opener;
+  form.hidden=true;editing=null;error.textContent='';
+  moveEditor(null);
+  button?.focus({preventScroll:true});
+ }
+ function displayEditor(button,item=null){
+  if(opener===button){closeEditor();return;}
+  editing=item;moveEditor(button);form.hidden=false;status.textContent='';error.textContent='';
   form.elements.name.value=item?.name??'';
   form.elements.name.readOnly=!!item?.preset;
   form.elements.text.value=item?.text??'';
@@ -99,10 +116,16 @@ export function mountSkillSettings(panel,library,onChange){
   form.elements.text.maxLength=SKILL_LIMIT;
   restore.hidden=!item?.preset;
   form.querySelector('[type=submit]').textContent=item?'保存 Skill':'保存并启用';
-  (item?form.elements.text:form.elements.name).focus();
  }
- function refresh(message=''){
+ function showStatus(message,button=create){
+  status.textContent=message;
+  const row=button.closest('.skill-row')??button;
+  (button===opener?form:row).after(status);
+ }
+ function refresh(){
   const rows=library.list();
+  create.after(form,status);
+  buttons.clear();
   items.replaceChildren();
   for(const [title,group] of [['L 系列 · 栾云煦创',rows.filter(row=>row.preset)],['我的 Skill',rows.filter(row=>!row.preset)]]){
    if(!group.length)continue;
@@ -114,30 +137,45 @@ export function mountSkillSettings(panel,library,onChange){
     row.className='skill-row';toggle.type='checkbox';toggle.checked=skill.enabled;name.textContent=skill.name;
     toggle.onchange=()=>{
      try{library.enable(skill.id,toggle.checked);onChange();status.textContent='';}
-     catch(err){toggle.checked=!toggle.checked;status.textContent=err.message;}
+     catch(err){toggle.checked=!toggle.checked;showStatus(err.message,edit);}
     };
     edit.type='button';edit.className='text-button';edit.textContent='编辑';
-    edit.setAttribute('aria-label','编辑 '+skill.name);edit.onclick=()=>displayEditor(skill);
+    edit.setAttribute('aria-label','编辑 '+skill.name);
+    edit.setAttribute('aria-controls',form.id);edit.setAttribute('aria-expanded','false');
+    edit.onclick=()=>displayEditor(edit,skill);buttons.set(skill.id,edit);
     label.append(toggle,name);row.append(label,edit);section.append(row);
    }
    items.append(section);
   }
-  status.textContent=message;onChange();
+  if(!form.hidden){
+   const button=editing?buttons.get(editing.id):create;
+   if(button)moveEditor(button);else closeEditor();
+  }
+  status.textContent='';onChange();
  }
- panel.querySelector('[data-new-skill]').onclick=()=>displayEditor();
- form.querySelector('[data-close-skill]').onclick=()=>{form.hidden=true;editing=null;};
+ function finish(message){
+  const id=editing?.id;
+  form.hidden=true;editing=null;error.textContent='';moveEditor(null);
+  refresh();
+  const button=buttons.get(id)??create;
+  showStatus(message,button);button.focus({preventScroll:true});
+ }
+ create.setAttribute('aria-controls',form.id);create.setAttribute('aria-expanded','false');
+ create.onclick=()=>displayEditor(create);
+ form.querySelector('[data-close-skill]').onclick=closeEditor;
  form.onsubmit=event=>{
   event.preventDefault();
   try{
    library.save({id:editing?.id,name:form.elements.name.value,text:form.elements.text.value},editing);
-   form.hidden=true;editing=null;refresh('已保存到本机。');
-  }catch(err){status.textContent=err.message;}
+   finish('已保存到本机。');
+  }catch(err){error.textContent=err.message;}
  };
  restore.onclick=()=>{
   try{
+   if(!editing?.preset)return;
    library.restore(editing.id,editing);
-   form.hidden=true;editing=null;refresh('已恢复原版。');
-  }catch(err){status.textContent=err.message;}
+   finish('已恢复原版。');
+  }catch(err){error.textContent=err.message;}
  };
  refresh();
  return refresh;

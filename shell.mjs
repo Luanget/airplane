@@ -1,4 +1,4 @@
-export const APP_VERSION='0.9.1';
+export const APP_VERSION='0.9.2';
 export const shellGlyphs = {
  close: '<path d="m6 6 12 12M18 6 6 18"/>',
  check: '<path d="m5 12 4 4L19 6"/>',
@@ -14,6 +14,13 @@ export const shellGlyphs = {
  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
  list: '<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
  bag: '<path d="M5 8h14l-1 13H6L5 8Z"/><path d="M9 9V6a3 3 0 0 1 6 0v3"/>',
+ sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>',
+ bowl: '<path d="M3 11h18a9 9 0 0 1-6 8.5V21H9v-1.5A9 9 0 0 1 3 11ZM9 7c0-1.5 1.5-2 1.5-3.5M14 7c0-1.5 1.5-2 1.5-3.5"/>',
+ moon: '<path d="M20.6 15.2A8.8 8.8 0 0 1 8.8 3.4a8.9 8.9 0 1 0 11.8 11.8Z"/><path d="M17 3v6m-3-3h6"/>',
+ apple: '<path d="M12 8.5c-1.6-.2-2.1-1.6-4.5-1.5C4.5 7 3 9.6 3 12.3c0 3.2 2.4 8.7 5.4 8.7 1.4 0 2.4-.8 3.6-.8 1.2 0 2.3.8 3.6.8 3 0 5.4-5.5 5.4-8.7C21 9.6 19.5 7 16.5 7c-2.4-.1-2.9 1.3-4.5 1.5ZM12 8.5C12 5 13.5 3.2 16.5 3"/>',
+ calendar: '<rect x="3.5" y="5.5" width="17" height="15" rx="3"/><path d="M7.5 3.5v4m9-4v4m-13 2h17m-12 4h3m2.5 0h2m-6 3h3"/>',
+ scale: '<rect x="3" y="4" width="18" height="16" rx="4"/><path d="M7 13a5 5 0 0 1 10 0m-5 0 2-2"/>',
+ person: '<circle cx="12" cy="8" r="3.2"/><path d="M5.5 20v-1.3a5 5 0 0 1 5-5h3a5 5 0 0 1 5 5V20"/>',
  sparkles: '<path d="M11 3l1.7 5.3L18 10l-5.3 1.7L11 17l-1.7-5.3L4 10l5.3-1.7L11 3ZM19 13l.9 2.1L22 16l-2.1.9L19 19l-.9-2.1L16 16l2.1-.9L19 13ZM5 15v4m-2-2h4"/>',
 };
 export function shellIcon(name){

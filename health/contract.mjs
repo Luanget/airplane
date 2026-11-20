@@ -79,7 +79,10 @@ const ledgerOperations=[
 const dataset=choice('health_settings','foods','weights','activities','inventory','batches','stock_moves',
   'purchases','shopping','templates','legacy_days','legacy_energy','legacy_rules','transactions',
   'categories','budgets','balances','finance_settings','skills','conversations','assistant_settings');
-export const appDataReadSchema=object({dataset:choice(...dataset.enum,'guide'),id:optional(string(240,1)),date:optional(string(10,10)),query:string()});
+export const appDataReadSchema=object({
+ dataset:choice(...dataset.enum,'guide','conversation_messages','local_usage','import_info','app_info'),
+ id:optional(string(240,1)),date:optional(string(10,7)),query:string(),fields:list(string(60,1))
+});
 export const appDataEditSchema=object({dataset,id:optional(string(240,1)),action:choice('add','update','delete'),changes:string()});
 export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
   {type:'null'},...ledgerOperations,
@@ -89,7 +92,7 @@ export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
   proposal('skill',object({name:optional(string(60,1)),text:string(800,1)})),
   proposal('batch',object({operations:{...list({anyOf:ledgerOperations}),minItems:1},next:choice('done','continue')}))
 ]}});
-export const ledgerReadSchema=object({scope:choice('stock','meal','expenses','weight','cycle'),query:string()});
+export const ledgerReadSchema=object({scope:choice('stock','stock_alerts','meal','nutrition','expenses','balance','budget','weight','cycle'),query:string()});
 export const foodHistoryReadSchema=object({date:string(10,10),query:string()});
 export const expenseSummaryReadSchema=object({start:string(10,10),end:string(10,10),groupBy:choice('category','day','month')});
 const jpegPhoto=photo=>photo?.startsWith('data:image/jpeg;base64,/9j/') &&

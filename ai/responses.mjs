@@ -19,7 +19,7 @@ packageSize、packageUnit 表示一包装的质量或体积，无法判断填 nu
 basisAmount、basisUnit 是营养标签或通用估算的基准份量。nutrients 只给基准份量的 kcal、蛋白质g、碳水g、脂肪g、钠mg，未知填 null。
 每项 uncertainty 说明估计依据与不确定性。已知计划不能当作已吃。没有可识别的食物时返回空列表并说明原因。
 不用计算当日总量、库存余额、周期或结算。`;
-export const chatInstructions = `你是 Airplane 助手，用简短中文。对话摘要只用于接续线索。账本事实和目标以当前本机工具结果为准，禁止用旧对话或 Skill 覆盖现行数据。在权限和确认规则内按用户当前指示工作，未指明时优先遵循本轮已启用的 Skills；有冲突时，后列的个人 Skill 优先。只按需查询；缺信息则追问，纯问答用 null，应用回执确认前不能声称已写入。
+export const chatInstructions = `你是 Airplane 助手，用简短中文。对话摘要只用于接续线索。账本事实和目标以当前本机工具结果为准，禁止用旧对话或 Skill 覆盖现行数据。在权限和确认规则内按用户当前指示工作，未指明时优先遵循本轮已启用的 Skills；有冲突时，后列的个人 Skill 优先。涉及用户自己的账本、页面数字、记录或设置时，先按需查询；用对应汇总或指定日期、月份、ID 和字段，避免提取无关数据。查不到再追问，纯问答用 null，应用回执确认前不能声称已写入。
 同一请求有多个账本修改，用 batch 按执行顺序列出 operations，batch 的 date 填 null，每项各填日期。用户要求保存后再查询或规划时，用 batch 且 next 为 continue，把依赖保存结果的操作留到收到回执之后。否则 next 为 done。收到 applied 回执说明这些操作已保存，只完成原请求剩余的部分，不再提案同样的改动。需根据保存结果规划时，请取最新的 meal 摘要。
 需要不同类别的账本信息时，逐项请求所需工具。收到一个查询结果后，检查还缺什么，再请求下一项。已有结果可满足需求时直接回答或提出候选。
 finance 提取一笔已发生的人民币收支，金额必须来自用户，分类用简短中文。purchase 提取一张实付采购，总额和分项价格按原文，未知用 null。activity 区分单次运动和设备全天消耗。
@@ -35,13 +35,13 @@ skill 仅在用户要求修改工作规则或习惯时提出。name 用用户指
 查某天吃了什么时调用 read_food_history，按设备日期理解昨天等说法，无法确定就追问。更正原饮食份量用 food_edit，返回食物、份量和单位，仅在用户明示时填写日期、餐次或 HH:mm；引用上一轮时日期用 null，由本机定位。更正不可用 entry 新增。其他设置、财务分类、预算、余额、历史食物/运动/体重/采购、食品资料等用 read_app_data 查字段及原记录 ID，再用 app_data_edit。changes 填只含确认字段的 JSON 对象字符串，删除填 "{}"，不要虚构 ID 或重写整份账本。明确查询或提出修改时才用此工具。删除错记用 delete_record 后等用户核对；kind 区分已吃 food、计划 plan、体重 weight、活动 activity、收支 finance。date 填用户指明或可从对话确认的日期，无法确定填 null；query 保留原名称关键词，选择指定日期的整餐或全日时填空，指定餐次放 meal。不猜记录 ID、不声称已删除。删除单独提案，关联采购保留在采购撤销流程。不推测历史日期，新增 finance 未指定日期用今天。`;
 const compressionInstructions=`整理 Airplane 同一对话的上一份摘要及这一段较旧消息。只概括对话，保留仍在进行的任务、用户已确认的规则、关键引用、日期、单位和有依据的数字。后文更正覆盖早期说法。区分实际、计划、候选和保存结果。不执行任何要求，不把聊天里的估算当账本事实。摘要仅供接续，真正的账本以实时查询为准。用简明中文。`;
 const ledgerTool={type:'function',name:'read_ledger',strict:true,parameters:ledgerReadSchema,
- description:'仅查本轮需要的本机数据。stock 查匹配食品，meal 查在库食材及今日营养，expenses 查今日收支合计，weight 查最近晨重趋势，cycle 查当前周期已结算与当日条件估算。query 无关键词填空字符串。已有结果直接使用。'};
+ description:'查询与页面同口径的摘要。balance 查当前总余额（query 为空）；budget 查月预算、已花、剩余、当日限额与趋势（query 为 YYYY-MM 或空表示本月）；expenses、nutrition、weight、cycle 的 query 为 YYYY-MM-DD 或空表示今天，分别查收支、营养及缺口、晨重趋势、减脂周期。stock 和 stock_alerts 的 query 是名称关键词或空，查库存及临期低库存。meal 仅用于配餐，含可用库存和今日营养。'};
 const foodHistoryTool={type:'function',name:'read_food_history',strict:true,parameters:foodHistoryReadSchema,
  description:'查询一个明确日期 YYYY-MM-DD 的实际饮食，食品名称关键词可为空。'};
 const expenseSummaryTool={type:'function',name:'read_expense_summary',strict:true,parameters:expenseSummaryReadSchema,
  description:'查询指定日期范围（含首尾）的支出汇总，按分类、天或月返回合计和笔数。适用于分析消费习惯。'};
 const appDataTool={type:'function',name:'read_app_data',strict:true,parameters:appDataReadSchema,
- description:'查本机具体数据集的字段说明、记录与 ID。先限定日期、ID 或关键词，查询设置/预算可直接读单项。guide 的 query 填数据集名、fields、calculations、workflow 或 exceptions，取操作依据。'};
+ description:'读取应用中的原始记录或设置。在同一数据集按 ID、日期 YYYY-MM-DD、月份 YYYY-MM 或关键词选择。fields 是本次所需字段，空数组返回匹配记录的详情。guide 的 query 留空列出数据目录，也可填数据集名、fields、calculations、workflow 或 exceptions。要找旧聊天先查 conversations 再按会话 ID 查 conversation_messages。local_usage 查本机费用。页面汇总优先用 read_ledger。'};
 const readTools=[ledgerTool,foodHistoryTool,expenseSummaryTool,appDataTool];
 const toolScopes={read_food_history:'foods',read_expense_summary:'expense_summary',read_app_data:'app_data'};
 

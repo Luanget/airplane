@@ -53,14 +53,24 @@ body[data-module="health"] .weight-chart-value { display:flex; align-items:basel
 .meal-group h3 { margin:0 0 5px 3px; font-size:13px; font-weight:700; color:var(--muted) }
 .health-ledger-empty { padding:16px }
 .health-tx-row { width:100%; min-height:48px; padding:9px 12px; text-align:left }
-.health-tx-row .category-symbol { color:var(--green); background:var(--green-soft) }
+.health-tx-row .health-record-symbol {
+  --record-tone:var(--green); width:36px; height:36px; border-radius:12px;
+  color:color-mix(in srgb,var(--record-tone) 72%,var(--text));
+  background:color-mix(in srgb,var(--record-tone) 15%,var(--surface))
+}
+.health-record-symbol[data-tone="sun"] { --record-tone:#c98935 }
+.health-record-symbol[data-tone="moon"] { --record-tone:#7473bd }
+.health-record-symbol[data-tone="apple"] { --record-tone:#bf6780 }
+.health-record-symbol[data-tone="calendar"] { --record-tone:#8895a0 }
+.health-record-symbol[data-tone="scale"] { --record-tone:#4c8aa6 }
+.health-record-symbol[data-tone="activity"] { --record-tone:#4d9b78 }
+.health-record-symbol svg { width:18px; height:18px }
 .health-tx-row :is(.tx-title,.tx-sub,.tx-money,.tx-time) { display:block }
 .health-tx-value { white-space:nowrap }
-.diet-row { display:grid; gap:4px; justify-content:stretch }
+.diet-content { display:grid; gap:3px; min-width:0; flex:1 }
 .diet-main { display:flex; justify-content:space-between; align-items:baseline; gap:8px; min-width:0 }
 .diet-main .tx-title { min-width:0; white-space:normal; overflow-wrap:anywhere }
-.diet-nutrients { display:flex; gap:8px; overflow-x:auto; scrollbar-width:none; font-size:12px; line-height:1.45; color:var(--muted); font-variant-numeric:tabular-nums }
-.diet-nutrients::-webkit-scrollbar { display:none }
+.diet-nutrients { display:flex; flex-wrap:wrap; gap:2px 8px; font-size:12px; line-height:1.45; color:var(--muted); font-variant-numeric:tabular-nums }
 .diet-nutrients span,.diet-status { white-space:nowrap }
 .diet-nutrients span:first-child { color:var(--text); font-weight:650 }
 .diet-status { padding:1px 7px; border-radius:10px; color:var(--muted); background:var(--surface-2); font-size:11px }

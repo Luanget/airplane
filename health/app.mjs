@@ -6,10 +6,10 @@ import {readFinance,validateFinanceBackup} from '../finance-storage.mjs';
 import {addBatch,convertCookingWeight,displayStockQuantity,measuredGrams,portionSources,registerPortions,saveSku,stockAlerts,stockMeasure,storedStockQuantity} from './inventory.mjs';
 import {units} from './contract.mjs';
 import {quantityInUnit,basis,packageInfo} from './candidates.mjs';
-import {APP_VERSION,shellGlyphs} from '../shell.mjs';
+import {APP_VERSION,shellIcon} from '../shell.mjs';
 import {bindUpdateCheck} from '../updates.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
-import {newState,normalizeLedger,recoverLegacyPortions,validateAppState,APP_SCHEMA,DEFAULT_SETTINGS,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,availableBatches,addDays,isOnHand,isStockReference,importedDietTargets,carbReference} from './core.mjs';
+import {newState,normalizeLedger,recoverLegacyPortions,validateAppState,APP_SCHEMA,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,availableBatches,addDays,isOnHand,isStockReference,carbReference,currentCarbReference,importedDietTargets} from './core.mjs';
 import {readState,saveState} from './storage.mjs';
 import {mealOrder,timelineGroup,eatingState,stockName,stockUnit,stockGroups} from './presentation.mjs';
 import {renderWeightChart} from './weight-chart.mjs';
@@ -81,9 +81,8 @@ function openSettings(){
  renderSettings();syncCalendarFields($('health-settings-sheet'));$('health-settings-sheet').showModal();
 }
 function progress(id,val){$(id).style.width=`${Math.max(0,Math.min(100,Number(val)||0))}%`;}
-function carbLabel(settings){
- const target=carbReference(settings);
- return target?(target.low===target.high?target.low:target.low+'–'+target.high)+' g':'';
+function carbLabel(range){
+ return range?(range.low===range.high?range.low:range.low+'–'+range.high)+' g':'';
 }
 function renderOverview(){
  const today=dateNow(),intake=dayIntake(state,selectedDate),cals=intake.totals.kcal,known=intake.reported;
@@ -95,10 +94,8 @@ function renderOverview(){
  text('hero-remaining',cals!==null&&!intake.incomplete.includes('kcal')?(goal-cals>=0?`剩余 ${fmt(goal-cals,1)} kcal`:`超出 ${fmt(cals-goal,1)} kcal`):'摄入数据待补');progress('cal-progress',known?cals/goal*100:0);
  for (const [id,key,unit] of [['protein-stat','protein','g'],['fat-stat','fat','g'],['carbs-stat','carbs','g'],['sodium-stat','sodium','mg']])text(id,intake.totals[key]===null?'—':`${fmt(intake.totals[key],1)} ${unit}`);
  text('protein-goal',`目标 ${state.settings.proteinMin}–${state.settings.proteinMax}g`);text('fat-goal',`目标 ≥${state.settings.fatMin}g`);text('sodium-goal',`参考 ${state.settings.sodiumTarget} mg`);
- const diet=importedDietTargets(state.legacy.rules);
- const fromImport=Object.keys(diet).length&&!state.settings.dietCustomized&&
-  ['calorieTarget','proteinMin','proteinMax','fatMin'].every(key=>state.settings[key]===DEFAULT_SETTINGS[key]);
- const carbs=carbLabel(fromImport?{...state.settings,...diet}:state.settings);
+ const {range,fromImport}=currentCarbReference(state);
+ const carbs=carbLabel(range);
  text('carbs-goal',carbs?(fromImport?'按主账约 ':'普通日约 ')+carbs:'请核对营养目标');
  const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,1)} kg`:'—');text('weight-date',weights.last?displayDay(weights.last.date):'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,1)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>=.05?'+':''}${fmt(weights.delta,1)} kg`:'需至少8次有效晨重');
  renderWeightChart($('weight-chart'),$('weight-chart-value'),weights.points.slice(-14));
@@ -140,6 +137,12 @@ function monthGroups(types,month){
  }
  return groups;
 }
+const mealSymbols={
+ '早餐':'sun','早午餐':'sun','午餐':'bowl','晚餐':'moon','加餐':'apple','未分餐':'bowl'
+};
+function recordSymbol(glyph){
+ return `<span class="category-symbol health-record-symbol" data-tone="${glyph}" aria-hidden="true">${shellIcon(glyph)}</span>`;
+}
 function dietRow(row){
  const status=eatingState(row);
  const badge={plan:'计划',cancelled:'已取消',unknown:'待确认'}[status];
@@ -149,19 +152,23 @@ function dietRow(row){
   const output=amount==null?'—':fmt(amount,1)+' '+unit;
   return `<span>${label?label+' ':''}${output}</span>`;
  }).join(''):'';
+ const glyph=badge?'calendar':mealSymbols[timelineGroup(row)];
  return `<button type="button" class="tx-row tx-row-interactive health-tx-row diet-row" data-edit-id="${E(row.id)}" data-type="food">
-  <span class="diet-main"><span class="tx-title">${E(row.name)}</span>${badge?`<span class="diet-status">${badge}</span>`:''}</span>
-  ${values?`<span class="diet-nutrients">${values}</span>`:''}
+  ${recordSymbol(glyph)}
+  <span class="diet-content">
+   <span class="diet-main"><span class="tx-title">${E(row.name)}</span>${badge?`<span class="diet-status">${badge}</span>`:''}</span>
+   ${values?`<span class="diet-nutrients">${values}</span>`:''}
+  </span>
  </button>`;
 }
 function timelineRow(row){
  const {type}=row,weight=type==='weight';
  const title=weight?(row.isMorning||/^(是|纳入|暂定纳入)/.test(row.trendStatus??'')?'晨重':'称重'):row.name;
- const icon=weight?'chart':'activity';
+ const icon=weight?'scale':'activity';
  const kcal=row.nutrition?.kcal??row.kcal;
  const amount=weight?fmt(row.kg,1)+' kg':kcal==null?'':fmt(kcal,1)+' kcal';
  return `<button type="button" class="tx-row tx-row-interactive health-tx-row" data-edit-id="${E(row.id)}" data-type="${type}">
-  <span class="category-symbol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shellGlyphs[icon]}</svg></span>
+  ${recordSymbol(icon)}
   <span class="tx-main"><span class="tx-title">${E(title)}</span></span>
   <span class="health-tx-value"><span class="tx-money">${E(amount)}</span><span class="tx-time">${normalizeClock(row.time)}</span></span>
  </button>`;
@@ -258,7 +265,7 @@ function renderSettings(){
  const imported=importedDietTargets(state.legacy.rules);
  $('diet-reference').hidden=!Object.entries(imported).some(([key,value])=>s[key]!==value);
  const proposed={...s,...imported};
- text('diet-reference-text',`普通日 ${proposed.calorieTarget} kcal · 蛋白质 ${proposed.proteinMin}–${proposed.proteinMax} g · 脂肪至少 ${proposed.fatMin} g · 碳水约 ${carbLabel(proposed)||'待核对'}`);
+ text('diet-reference-text',`普通日 ${proposed.calorieTarget} kcal · 蛋白质 ${proposed.proteinMin}–${proposed.proteinMax} g · 脂肪至少 ${proposed.fatMin} g · 碳水约 ${carbLabel(carbReference(proposed))||'待核对'}`);
  text('import-status',state.importInfo?'主账 '+state.importInfo.sourceVersion:'本机账本');
 }
 function rebuildFoodSelection(){

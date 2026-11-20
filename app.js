@@ -3,6 +3,7 @@ import {APP_VERSION,bindSheetSwipe,confirmAction,shellGlyphs} from './shell.mjs'
 import {readState as readHealthState} from './health/storage.mjs';
 import {purchaseForTransaction,purchaseTransactionId} from './health/purchases.mjs';
 import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,DEFAULT_CATEGORIES,freshData,replaceFinance,validateFinanceBackup} from './finance-storage.mjs';
+import {currentBalanceFor,daysInMonth,monthlyBudget,monthlyMetrics,transactionsForMonth} from './finance-metrics.mjs';
 import {bindUpdateCheck} from './updates.mjs';
 
 // STORAGE_KEY is intentionally permanent. Never rename it in a normal app update.
@@ -194,7 +195,6 @@ function uid(prefix='id'){ return `${prefix}-${Date.now().toString(36)}-${Math.r
 function pad(n){ return String(n).padStart(2,'0'); }
 function monthKey(d=new Date()){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}`; }
 function parseMonth(m){ const [y,mo]=m.split('-').map(Number); return {y,mo}; }
-function daysInMonth(m){ const {y,mo}=parseMonth(m); return new Date(y,mo,0).getDate(); }
 function monthLabel(m){ const {y,mo}=parseMonth(m); return `${y}年${mo}月`; }
 function isCurrentMonth(m){ return m===monthKey(new Date()); }
 function defaultTransactionDateForSelectedMonth(){
@@ -214,45 +214,15 @@ const balanceCache={revision:-1,day:'',value:0};
 function txForMonth(m){
   const cached=monthTxCache.get(m);
   if(cached&&cached.revision===dataRevision)return cached.value;
-  const value=data.transactions.filter(t=>t && typeof t.date==='string' && t.date.startsWith(m));
+  const value=transactionsForMonth(data,m);
   monthTxCache.set(m,{revision:dataRevision,value});
   return value;
 }
-function countsTowardBudget(t){
-  return t?.type==='expense' && t.budgetExcluded!==true;
-}
-function monthTotals(m){
-  return txForMonth(m).reduce((a,t)=>{
-    const value=Number(t.amount)||0;
-    if(t.type==='income')a.income+=value;
-    else if(t.type==='expense'){
-      a.expense+=value;
-      if(countsTowardBudget(t))a.budgetExpense+=value;
-      else a.excludedExpense+=value;
-    }
-    return a;
-  },{expense:0,budgetExpense:0,excludedExpense:0,income:0});
-}
-function baseBudgetFor(m){ return Number(data.budgets[m]||0); }
-function syncedBudgetForMonth(m){
-  return txForMonth(m).reduce((sum,t)=>sum+(t.type==='income'&&t.budgetSync?Number(t.amount||0):0),0);
-}
-function syncedBudgetForDate(date){
-  const m=String(date||'').slice(0,7);
-  if(!m)return 0;
-  return txForMonth(m).reduce((sum,t)=>sum+(t.type==='income'&&t.budgetSync&&t.date===date?Number(t.amount||0):0),0);
-}
-function budgetFor(m){ return baseBudgetFor(m)+syncedBudgetForMonth(m); }
-function initialBalance(){ return Number(data.prefs?.initialBalance ?? 0); }
-function balanceAdjustmentTotal(){ return (data.balanceAdjustments||[]).reduce((s,a)=>s+Number(a.delta||0),0); }
+function budgetFor(m){ return monthlyBudget(data,m,txForMonth(m)).budget; }
 function currentBalance(){
   const today=localISO();
   if(balanceCache.revision===dataRevision&&balanceCache.day===today)return balanceCache.value;
-  const txNet=data.transactions.reduce((s,t)=>{
-    if(t?.date&&t.date>today)return s;
-    return s+(t.type==='income'?Number(t.amount||0):-Number(t.amount||0));
-  },0);
-  const value=initialBalance()+txNet+balanceAdjustmentTotal();
+  const value=currentBalanceFor(data,today);
   balanceCache.revision=dataRevision;balanceCache.day=today;balanceCache.value=value;
   return value;
 }
@@ -279,46 +249,7 @@ function txRow(t, swipe=false){
   return `<div class="tx-swipe" data-swipe-tx="${escapeHTML(t.id||'')}"><button class="tx-delete-action" data-delete-tx="${escapeHTML(t.id||'')}" type="button">删除</button>${row}</div>`;
 }
 
-function budgetMetrics(m){
-  const baseBudget=baseBudgetFor(m), syncBudget=syncedBudgetForMonth(m), budget=baseBudget+syncBudget;
-  const totals=monthTotals(m), dim=daysInMonth(m), now=new Date();
-  const currentMonth=monthKey(now);
-  const current=m===currentMonth;
-  const future=m>currentMonth;
-  const past=m<currentMonth;
-  const elapsed = future ? 0 : (current ? now.getDate() : dim);
-  // The manually set budget is the steady daily plan. Income explicitly marked
-  // “同步增加预算” is a dated boost: it joins the monthly budget, but on the
-  // income date it is added to that day's allowance in full instead of being
-  // divided across the remaining days. Expenses marked “预算外” still reduce
-  // the real balance and total spending, but are excluded from every budget metric.
-  const baseDaily = baseBudget>0 ? baseBudget/dim : 0;
-  const averageDaily = budget>0 ? budget/dim : 0;
-  const today = localISO(now);
-  const todayBoost = current ? syncedBudgetForDate(today) : 0;
-  const boostToDate = future ? 0 : txForMonth(m).reduce((sum,t)=>{
-    if(t.type!=='income'||!t.budgetSync)return sum;
-    if(current&&t.date>today)return sum;
-    return sum+Number(t.amount||0);
-  },0);
-  const plannedToDate = baseDaily*elapsed+boostToDate;
-  const delta = future ? 0 : totals.budgetExpense-plannedToDate;
-  const remainingBudget = budget-totals.budgetExpense;
-  const todayRows=current ? txForMonth(m).filter(t=>t.type==='expense'&&t.date===today) : [];
-  const todayTotalExpense=todayRows.reduce((sum,t)=>sum+Number(t.amount||0),0);
-  const todayExpense=todayRows.filter(countsTowardBudget).reduce((sum,t)=>sum+Number(t.amount||0),0);
-  const todayExcludedExpense=Math.max(todayTotalExpense-todayExpense,0);
-  const expenseBeforeToday = current ? Math.max(totals.budgetExpense-todayExpense,0) : totals.budgetExpense;
-  const remainingDays = current ? Math.max(dim-now.getDate()+1,1) : dim;
-  const distributableBeforeToday=Math.max(budget-todayBoost-expenseBeforeToday,0);
-  const dailyLimit = current ? (distributableBeforeToday/remainingDays+todayBoost) : averageDaily;
-  const todayDelta = todayExpense-dailyLimit;
-  const timeProgress = future ? 0 : elapsed/dim;
-  const budgetProgress = budget>0 ? totals.budgetExpense/budget : 0;
-  const projection = (!future&&elapsed>0) ? totals.budgetExpense/elapsed*dim : 0;
-  return {budget,baseBudget,syncBudget,todayBoost,...totals,dim,elapsed,baseDaily,averageDaily,dailyLimit,plannedToDate,delta,remainingBudget,remainingDays,todayExpense,todayTotalExpense,todayExcludedExpense,todayDelta,timeProgress,budgetProgress,projection,current,future,past};
-}
-
+function budgetMetrics(m){ return monthlyMetrics(data,m,localISO(),txForMonth(m)); }
 function refreshStorageProtectionUI(){
   const el=document.querySelector('[data-action="storage-persist"] .setting-sub');
   if(!el)return;
@@ -665,8 +596,7 @@ function bindMonthSwipe(){
 }
 
 function openBudgetModal(){
-  const syncBudget=syncedBudgetForMonth(ui.selectedMonth);
-  const existing=budgetFor(ui.selectedMonth);
+  const {syncBudget,budget:existing}=monthlyBudget(data,ui.selectedMonth,txForMonth(ui.selectedMonth));
   openModal(`${modalHead('月预算')}<section class="card input-card"><label>${monthLabel(ui.selectedMonth)}总支出预算</label>${moneyInputMarkup('budgetInput',existing||'','例如 2000','budget-op')}<div class="helper">支持 + − × ÷。${syncBudget>0?`当前总预算中有 ${amount(syncBudget)} 来自“收入同步增加预算”；这里编辑的是总预算，保存时会自动保留这部分收入加成。`:'每个月可以单独设置和修改。收入默认开启“同步增加预算”，单笔不需要同步时可以关闭。'} 当前月的普通预算会按剩余天数动态分配；当天同步增加的收入会完整加到当天额度，不在当天摊给后续日期。</div></section>`);
   const readValue=bindMoneyExpressionInput('budgetInput','budget-op');
   document.getElementById('modalSave').onclick=()=>{const parsed=readValue(),v=parsed.value;if(!parsed.ok||v<=0){toast('预算需要大于 0');return;}if(v+0.005<syncBudget){toast(`总预算不能低于已同步增加的 ${amount(syncBudget)}`);return;}data.budgets[ui.selectedMonth]=Math.max(0,Math.round((v-syncBudget)*100)/100);if(!saveData())return;closeModal({runDismiss:false});render();toast('月预算已保存');};

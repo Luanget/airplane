@@ -51,6 +51,10 @@ export async function demoWorkspace(today){
    return propose('演示候选为'+name+'。','entry',{note:'',items:[item]});
   }
   const call=(scope,query='')=>({call:{args:{scope,query},item:{call_id:'demo-'+scope}}});
+  if(/余额/.test(text)&&!/预算/.test(text)){
+   if(allowRead&&!latest)return call('balance');
+   return {reply:latest?.summary?.currency==='CNY'?'当前示例账本余额是 '+latest.summary.balance+' 元。':'打开本轮账本查询后可查看余额。',proposal:null};
+  }
   if(text.includes('消费习惯')){
    if(allowRead&&!latest)return {call:{args:{scope:'expense_summary',start:input.date.slice(0,7)+'-01',end:input.date,groupBy:'category'},item:{call_id:'demo-expense-summary'}}};
    const data=latest?.summary;

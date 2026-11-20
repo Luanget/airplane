@@ -178,6 +178,9 @@ try {
   const mealOrder=await page.locator('#local-events .day-group').filter({hasText:'合成同日晚餐'}).locator('.meal-group h3').allTextContents();
   assert.deepEqual(mealOrder,['晚餐','午餐','早餐']);
   const dietRow=page.getByRole('button',{name:/合成同日晚餐/});
+  assert.equal(await dietRow.locator('.health-record-symbol[data-tone=moon] svg').count(),1);
+  assert.equal(await page.getByRole('region',{name:'早餐',exact:true}).locator('.health-record-symbol[data-tone=calendar] svg').count(),1);
+  assert.equal(await page.locator('#local-events .health-record-symbol[data-tone=calendar] svg').count(),3);
   assert.equal(await dietRow.locator('.diet-nutrients span').count(),5);
   assert.doesNotMatch(await dietRow.innerText(),/1234|19:58/);
   await page.getByRole('link',{name:'体重趋势',exact:true}).click();
@@ -403,10 +406,19 @@ try {
       assert.ok(input.history.some(row=>row.text.startsWith('合成历史49')));
       return mockResult({reply:'压缩后的对话已接续。',proposal:null});
     }
+    if(input.text==='我的余额是多少'){
+      if(body.input.length===1)return route.fulfill({headers,json:{status:'completed',output:[
+        {type:'function_call',name:'read_ledger',call_id:'fixture-balance',arguments:'{"scope":"balance","query":""}'}
+      ]}});
+      const balance=JSON.parse(body.input.at(-1).output);
+      assert.deepEqual(Object.keys(balance).sort(),['balance','currency']);
+      assert.equal(balance.currency,'CNY');
+      return mockResult({reply:'当前总余额 '+balance.balance+' 元。',proposal:null});
+    }
     if(input.text==='把周期改为六天'){
       if(body.input.length===1)return route.fulfill({headers,json:{status:'completed',output:[
         {type:'function_call',name:'read_app_data',call_id:'fixture-settings',
-         arguments:JSON.stringify({dataset:'health_settings',id:null,date:null,query:''})}
+         arguments:JSON.stringify({dataset:'health_settings',id:null,date:null,query:'',fields:[]})}
       ]}});
       const info=JSON.parse(body.input.at(-1).output);
       assert.equal(info.fields.cycleDays,'cycleDays');
@@ -536,6 +548,19 @@ try {
   assert.ok(await skillSettings.getByRole('checkbox',{name:'原有个人偏好',exact:true}).isChecked());
   assert.equal(await skillSettings.getByRole('checkbox',{name:'L · 餐食偏好',exact:true}).isChecked(),false);
   await skillSettings.getByRole('checkbox',{name:'L · 运动与周期',exact:true}).uncheck();
+  const skillEditor=skillSettings.locator('#skill-editor');
+  const firstEdit=skillSettings.getByRole('button',{name:'编辑 L · 数据与纠错规范',exact:true});
+  const secondEdit=skillSettings.getByRole('button',{name:'编辑 L · 配餐与营养',exact:true});
+  for(const trigger of [firstEdit,secondEdit]){
+    await trigger.click();
+    assert.equal(await trigger.getAttribute('aria-expanded'),'true');
+    assert.ok(await trigger.evaluate(button=>button.parentElement.nextElementSibling?.id==='skill-editor'));
+    assert.ok(await skillEditor.isVisible());
+  }
+  assert.equal(await firstEdit.getAttribute('aria-expanded'),'false');
+  await skillEditor.getByRole('button',{name:'收起'}).click();
+  assert.equal(await secondEdit.getAttribute('aria-expanded'),'false');
+  assert.equal(await skillEditor.isVisible(),false);
   await skillSettings.getByRole('button',{name:'新建 Skill',exact:true}).click();
   await skillSettings.getByLabel('名称',{exact:true}).fill('测试个人 Skill');
   await skillSettings.getByLabel('工作规则',{exact:true}).fill('合成个人规则，验证启用情况。');
@@ -687,6 +712,8 @@ try {
   await say('模拟流式回复');
   const partial=chat.locator('.streaming-reply');
   await partial.getByText('先显示',{exact:true}).waitFor();
+  assert.equal(await partial.locator('.chat-avatar svg').count(),1);
+  assert.equal(await chat.locator('.chat-message.user').last().locator('.chat-avatar svg').count(),1);
   assert.equal(await review.isVisible(),false);
   await page.evaluate(()=>window.finishFixtureStream());
   await chat.getByText('先显示，再完成。',{exact:true}).waitFor();
@@ -816,6 +843,12 @@ try {
   await page.locator('.topbar h1').click();
   await chat.getByRole('region',{name:'对话记录',exact:true}).waitFor({state:'hidden'});
   console.log('PASS app data candidate confirmation, automatic compaction, reload reuse and outside history dismissal');
+  await say('我的余额是多少');
+  const balanceReply=chat.locator('.chat-bubble.assistant').filter({hasText:/^当前总余额 -?\d+(?:\.\d+)? 元。$/});
+  await balanceReply.waitFor();
+  const assistantBalance=Number((await balanceReply.textContent()).match(/-?\d+(?:\.\d+)?/)[0]);
+  await chat.getByText('查看本次查询数据',{exact:true}).last().click();
+  assert.match(await chat.locator('.chat-source pre').last().textContent(),/^当前总余额/);
   const callsBeforeKeyRemoval=calls.length;
   await openAssistantSettings();
   await assistantSettings.getByText('API Key',{exact:true}).click();
@@ -828,6 +861,8 @@ try {
   await closeAssistantSettings();
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();
+  assert.equal(Number((await page.locator('.balance-value').textContent()).replace(/[^0-9.\-]/g,'')),assistantBalance);
+  console.log('PASS assistant balance lookup matches the finance card and sends only the total');
   console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');
 
   // Start in finance, reuse the saved expense, then start a separate purchase in inventory.
