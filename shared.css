@@ -71,17 +71,23 @@ dialog.bottom-sheet .modal-head .cancel, dialog.bottom-sheet .modal-head .save {
 dialog.bottom-sheet .modal-head h2 { margin:0; text-align:center }
 dialog.ai-dialog.bottom-sheet { padding:12px 16px calc(24px + var(--safe-bottom)); font:inherit }
 
-.choice-trigger {
+.calendar-trigger,.choice-trigger {
  display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; min-height:44px;
- margin:5px 0 12px; padding:8px 10px; border:1px solid var(--line); border-radius:10px;
- background:var(--surface-2); color:var(--text); font-size:16px; text-align:left
+ padding:5px 8px; border-radius:12px; text-align:start
 }
-.choice-trigger .choice-value { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
-.choice-trigger .chevron,.choice-check { display:grid; place-items:center; flex:none }
-.choice-trigger svg,.choice-check svg { width:17px; height:17px }
-.choice-trigger:focus-visible,.choice-option:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
-.choice-trigger:disabled { opacity:.6 }
+.choice-trigger,.calendar-field > label:not(.day-picker-value) > .calendar-trigger {
+ margin-top:6px; padding:8px 10px; border:1px solid var(--line);
+ background:var(--surface-2); color:var(--text); font-size:16px; line-height:1.35
+}
+.calendar-field > label:not(.day-picker-value) > .calendar-trigger { font-size:15px }
+:is(.choice-value,.calendar-value) { min-width:0; overflow-wrap:anywhere }
+.calendar-value > span { display:inline-block; white-space:nowrap }
+:is(.choice-trigger,.calendar-trigger) .chevron,.choice-check { display:grid; place-items:center; flex:none }
+:is(.choice-trigger,.calendar-trigger) svg,.choice-check svg { width:16px; height:16px }
+:is(.choice-trigger,.calendar-trigger,.choice-option,.calendar-menu button):focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+:is(.choice-trigger,.calendar-trigger):disabled { opacity:.6 }
 .inline-field { display:block; position:relative; min-width:0 }
+.inline-field:has(> label:not(.day-picker-value)) { margin-bottom:12px }
 .inline-field.is-open { z-index:5 }
 .inline-picker-panel {
  position:absolute; top:calc(100% + 3px); left:var(--picker-shift,0px); display:block;
@@ -105,18 +111,9 @@ dialog.ai-dialog.bottom-sheet { padding:12px 16px calc(24px + var(--safe-bottom)
 .choice-empty { padding:14px; color:var(--muted); text-align:center; font-size:13px }
 .confirmation-sheet p { margin:0 0 12px; color:var(--muted); line-height:1.6; white-space:pre-line }
 
-.calendar-field {
- display:inline-grid; position:relative; align-items:center; min-width:0; min-height:38px;
- border-radius:10px; font-variant-numeric:tabular-nums; color:var(--text)
-}
-.calendar-trigger {
- display:flex; align-items:center; justify-content:space-between; gap:5px; width:100%; min-height:inherit;
- padding:5px 8px; border-radius:inherit; text-align:start; white-space:nowrap
-}
-.calendar-trigger .chevron { display:grid; place-items:center }
-.calendar-trigger svg { width:14px; height:14px }
-.calendar-trigger:focus-visible,.calendar-menu button:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+.calendar-field { font-variant-numeric:tabular-nums; color:var(--text) }
 .form-row .calendar-trigger { justify-content:end }
+.form-row .calendar-value { text-align:end }
 .calendar-menu { min-width:min(270px,calc(100vw - 24px)); padding:8px }
 .calendar-date-menu {
  width:min(284px,calc(100vw - 24px)); min-width:0; max-height:none; overflow:visible;
@@ -160,6 +157,9 @@ dialog.ai-dialog.bottom-sheet { padding:12px 16px calc(24px + var(--safe-bottom)
 [data-action=choose-month] { display:inline-flex; align-items:center; gap:3px }
 [data-action=choose-month] svg { width:14px; height:14px }
 .form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:12px }
+.form-grid:has(> .calendar-field + .calendar-field) { grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr) }
+.form-grid > .inline-field { align-self:start }
+.form-grid label,.inline-field > label:not(.day-picker-value) { min-width:0; line-height:1.45; overflow-wrap:anywhere }
 
 .setting-row > .chevron { display:grid; place-items:center; flex:none }
 .setting-row > .chevron svg { width:16px; height:16px }
@@ -183,9 +183,9 @@ details > summary.setting-row:focus-visible { outline:2px solid var(--green); ou
 .chat-review label.checkbox { display:flex; align-items:center; gap:8px; min-height:44px }
 .assistant-workspace :is(.chat-review, .chat-composer) :is(input,select,textarea):not([type=checkbox],[type=file]) {
   display:block; width:100%; min-width:0; min-height:44px; margin:4px 0 9px;
-  border:1px solid var(--line); border-radius:12px; padding:8px; font-size:16px; background:var(--surface-2); color:var(--text);
+  border:1px solid var(--line); border-radius:12px; padding:8px 10px; font-size:16px; background:var(--surface-2); color:var(--text);
 }
-.assistant-workspace .chat-review .calendar-field { display:grid; min-height:44px; margin:4px 0 9px; border:1px solid var(--line); background:var(--surface-2) }
+.assistant-workspace .chat-review label > :is(input,textarea):not([type=checkbox],[type=file]) { margin:6px 0 12px }
 .chat-composer textarea { resize:none }
 .assistant-workspace .chat-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap }
 .chat-actions :is(.primary-button,.secondary-button) { width:auto; padding:8px 12px }

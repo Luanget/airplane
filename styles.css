@@ -177,9 +177,9 @@ main { padding: 6px 16px 28px; }
 .category-choice .category-symbol { margin:0 auto 6px; }
 .category-choice small { display:block; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:11px; }
 .form-card { margin-top:14px; padding:0 14px; background:var(--surface); border-radius:20px; border:1px solid var(--line); }
-.form-row { display:grid; grid-template-columns:64px 1fr; gap:12px; align-items:center; padding:13px 0; border-bottom:1px solid var(--line); }
+.form-row { display:grid; grid-template-columns:64px minmax(0,1fr); gap:12px; align-items:center; padding:13px 0; border-bottom:1px solid var(--line); }
 .form-row:last-child { border-bottom:0; }
-.form-row label { color:var(--muted); font-size:13px; }
+.form-row label { color:var(--muted); font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
 .form-row input, .form-row textarea { width:100%; border:0; outline:0; background:transparent; text-align:right; resize:none; }
 .form-row textarea { min-height:42px; padding-top:12px; }
 

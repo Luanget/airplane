@@ -138,8 +138,17 @@ export function syncCalendarFields(root=document){
  }
 }
 function syncValue(input,control){
- const label=input.type==='date'?displayDay(input.value,!input.hasAttribute('data-short-date')):normalizeClock(input.value)||'选择时间';
- control.value.textContent=label;control.value.classList.toggle('muted',!input.value);
+ const showYear=input.type==='date'&&!input.hasAttribute('data-short-date')&&!!input.value;
+ const label=input.type==='date'?displayDay(input.value,showYear):normalizeClock(input.value)||'选择时间';
+ if(control.value.textContent!==label){
+  if(showYear){
+   const yearEnd=label.indexOf('年')+1;
+   const year=document.createElement('span'),day=document.createElement('span');
+   year.textContent=label.slice(0,yearEnd);day.textContent=label.slice(yearEnd);
+   control.value.replaceChildren(year,document.createElement('wbr'),day);
+  }else control.value.textContent=label;
+ }
+ control.value.classList.toggle('muted',!input.value);
  control.trigger.setAttribute('aria-label',control.title+'，'+label);
  control.trigger.disabled=input.matches(':disabled');
 }

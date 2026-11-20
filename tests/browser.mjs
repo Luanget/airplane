@@ -32,6 +32,26 @@ try {
   await ctx.addInitScript(()=>{delete AbortSignal.timeout;});
   const page=await ctx.newPage();
   page.setDefaultTimeout(10000);
+  async function checkPickerSpacing(trigger){
+    const layout=await trigger.evaluate(button=>{
+      const label=button.parentElement;
+      const text=document.createRange();
+      text.selectNode(label.firstChild);
+      const labelBox=text.getBoundingClientRect(),control=button.getBoundingClientRect();
+      const value=button.firstElementChild.getBoundingClientRect();
+      const arrow=button.lastElementChild.getBoundingClientRect();
+      return {
+        labelGap:control.top-labelBox.bottom,arrowGap:arrow.left-value.right,
+        border:getComputedStyle(button).borderTopWidth,wrapperBorder:getComputedStyle(label.parentElement).borderTopWidth,
+        width:control.width,height:control.height,overflow:button.scrollWidth>button.clientWidth+2
+      };
+    });
+    assert.ok(layout.labelGap>=4,JSON.stringify(layout));
+    assert.ok(layout.arrowGap>=6,JSON.stringify(layout));
+    assert.equal(layout.border,'1px');
+    assert.equal(layout.wrapperBorder,'0px');
+    assert.ok(layout.height>=44&&layout.width>0&&!layout.overflow,JSON.stringify(layout));
+  }
   const errors=[]; page.on('pageerror',err=>errors.push(String(err)));
   page.on('dialog',dialog=>dialog.accept());
   await page.goto(base);
@@ -176,6 +196,7 @@ try {
   assert.equal(await manual.locator('[name=kcal]').inputValue(),'120');
   await choose(manual,'foodId',/^合成库存/,'合成库存');
   const dateField=manual.locator('.calendar-field:has(input[name=date])');
+  await checkPickerSpacing(dateField.locator('.calendar-trigger'));
   await dateField.locator('.calendar-trigger').click();
   const dateMenu=dateField.locator('.calendar-menu');
   await dateMenu.getByRole('button',{name:'上个月'}).click();
@@ -420,6 +441,7 @@ try {
   await say('合成餐点');
   await chat.getByRole('button',{name:'确认发送'}).click();
   await review.waitFor();
+  await checkPickerSpacing(review.locator('.calendar-trigger'));
   assert.equal(calls.length,1);
   assert.deepEqual(calls[0].history,[]);
   assert.equal(await review.locator('label').filter({hasText:'匹配食品'}).locator('select').inputValue(),'');
@@ -609,6 +631,7 @@ try {
   await page.locator('#addButton').click();await page.locator('#txAmount').fill('18');
   await page.locator('#txNote').fill('试验采购');
   const clock=page.locator('.calendar-field').filter({has:page.locator('#txTime')});
+  assert.equal(await clock.locator('.calendar-trigger').evaluate(button=>getComputedStyle(button).borderTopWidth),'0px');
   await clock.locator('.calendar-trigger').click();
   const clockMenu=clock.locator('.calendar-menu');
   await clockMenu.getByRole('button',{name:'小时 18',exact:true}).click();
@@ -622,10 +645,23 @@ try {
   const purchaseField=buy.locator('.inline-field:has(select[name=foodId])');
   const purchasePicker=purchaseField.locator('.inline-picker-panel');
   const purchaseTrigger=purchaseField.locator('.choice-trigger');
+  for(const width of [320,390]){
+    await page.setViewportSize({width,height:844});
+    for(const name of ['date','time','expires']){
+      await checkPickerSpacing(buy.locator('.calendar-field:has([name="'+name+'"]) .calendar-trigger'));
+    }
+    await checkPickerSpacing(purchaseTrigger);
+  }
+  assert.ok(await buy.locator('.calendar-field:has([name=date]) .calendar-value').evaluate(value=>{
+    const [year,day]=value.querySelectorAll('span');
+    return year.getBoundingClientRect().top===day.getBoundingClientRect().top;
+  }));
   await purchaseTrigger.click();
   await purchasePicker.waitFor();
   assert.equal(await page.getByRole('dialog',{name:'选择食品'}).count(),0);
-  assert.ok((await purchasePicker.boundingBox()).y>=(await purchaseTrigger.boundingBox()).y);
+  const triggerBox=await purchaseTrigger.boundingBox();
+  const pickerGap=(await purchasePicker.boundingBox()).y-triggerBox.y-triggerBox.height;
+  assert.ok(pickerGap>=0&&pickerGap<8);
   await purchasePicker.getByRole('searchbox').fill('不存在的合成食品');
   await purchasePicker.getByText('没有匹配的选项').waitFor();
   await purchasePicker.getByRole('searchbox').fill('合成库存');

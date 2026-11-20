@@ -1,4 +1,4 @@
-const SW_VERSION = '61';
+const SW_VERSION = '62';
 const scope = self.registration.scope;
 const prefix = 'airplane-shell:' + new URL(scope).pathname + ':';
 const CACHE = prefix + SW_VERSION;
