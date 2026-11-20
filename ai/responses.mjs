@@ -61,7 +61,8 @@ export function pendingLedgerRead(response){
  const args=JSON.parse(call.arguments);
  if(!matches(tool.parameters,args))throw Error();
  return {args:call.name===foodHistoryTool.name?{...args,scope:'foods'}:args,
-  item:{type:'function_call',call_id:call.call_id,name:call.name,arguments:call.arguments}};
+  item:{type:'function_call',call_id:call.call_id,name:call.name,arguments:call.arguments,
+   ...(typeof call.id==='string'?{id:call.id}:{}),...(call.status==='completed'?{status:call.status}:{})}};
 }
 
 export function parseResult(response, input) {

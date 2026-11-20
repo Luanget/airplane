@@ -4,8 +4,7 @@ import {installUpdates} from '../updates.mjs';
 import {resumePurchaseUpdate} from '../health/purchase-sync.mjs';
 import {validInput} from '../health/contract.mjs';
 import {healthReview,jpeg} from '../health/assistant.mjs';
-import {recognize,mountKeyForm} from './client.mjs';
-import {readKey} from './keys.mjs';
+import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
 import {financeReview} from './finance.mjs';
 import {chatInstructions} from './responses.mjs';
 import {cleanSkill,localWorkspace,shortHistory,readLedger,readLabels} from './workspace.mjs';
@@ -20,7 +19,7 @@ const respond=demo?workspace.respond:recognize;
 const $=selector=>document.querySelector(selector);
 const transcript=$('.chat-transcript'),thread=$('.chat-thread'),review=$('.chat-review'),start=$('.assistant-start');
 const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
-const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]');
+const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]'),stop=$('[data-stop-request]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
 const historySearch=historyPanel.querySelector('input');
 const readPanel=$('[data-read-preview]').closest('section'),share=$('[data-share-read]'),skip=$('[data-skip-read]');
@@ -28,7 +27,7 @@ const consentPanel=$('#assistant-consent'),approve=$('[data-approve-send]'),canc
 const consentKey='airplane-ai-send-consent-v1';
 const skillForm=$('#assistant-skill form'),skillOutput=skillForm.querySelector('output');
 const keyPanel=$('#assistant-key-panel');
-let busy=false,saving=false,prepared=null,pending=null;
+let busy=false,saving=false,prepared=null,pending=null,activeRequest=null;
 let firstSend=!demo&&localStorage.getItem(consentKey)!=='yes';
 
 hydrateShell();
@@ -39,13 +38,14 @@ if(demo){
 }else{
  window.airplaneAccount={finance:workspace.finance};
  installUpdates();
- try{await resumePurchaseUpdate(window.airplaneAccount);}
- catch{status.textContent='库存中有未完成的采购同步，请先在库存页处理。';}
+ void resumePurchaseUpdate(window.airplaneAccount).catch(()=>{
+  if(!status.textContent)status.textContent='库存中有未完成的采购同步，请先在库存页处理。';
+ });
  keyPanel.hidden=false;
  const keyStatus=mountKeyForm($('#assistant-key'));
- try{
-  if(!await readKey())keyStatus.textContent='请导入 OpenAI API Key';
- }catch{keyStatus.textContent='请重新导入 API Key';}
+ void readDeviceKey().then(key=>{
+  if(!key&&!keyStatus.textContent)keyStatus.textContent='请导入 OpenAI API Key';
+ }).catch(err=>{if(!keyStatus.textContent)keyStatus.textContent=err.message;});
  const openKeySettings=()=>{if(location.hash==='#api-key')revealKeySettings();};
  window.addEventListener('hashchange',openKeySettings);
  openKeySettings();
@@ -56,6 +56,14 @@ function revealKeySettings(){
 }
 function tell(text){status.textContent=text;}
 function report(err){tell(err.name==='TypeError'?'无法完成请求，请检查网络或本机存储':err.message);}
+async function requestReply(input,options){
+ if(demo)return respond(input,options);
+ const controller=new AbortController();
+ activeRequest=controller;stop.hidden=false;stop.disabled=false;
+ try{return await respond(input,{...options,signal:controller.signal});}
+ finally{activeRequest=null;stop.hidden=true;}
+}
+stop.onclick=()=>{stop.disabled=true;activeRequest?.abort();};
 function updateContext(){
  const turns=shortHistory((book.current?.messages??[]).filter(m=>m?.carry&&['user','assistant'].includes(m.role)&&typeof m.text==='string'));
  const chars=turns.reduce((n,row)=>n+row.text.length,0);
@@ -249,8 +257,8 @@ function describeSummary(scope,summary){
  return rows.join('\n');
 }
 async function sendMessage(input,{skill,allowRead}){
-  tell('正在回复…');
-  const response=await respond(input,{skill,allowRead});
+  tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
+  const response=await requestReply(input,{skill,allowRead});
   append('user',[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' '));
   composer.elements.text.value='';resetPhoto();
   clearReview();
@@ -270,14 +278,19 @@ composer.onsubmit=async e=>{
  if(!text&&!file){tell('请输入消息或添加照片');return;}
  busy=true;lock();tell('');
  try{
-  if(!demo&&!await readKey()){revealKeySettings();tell('请先导入 API Key');return;}
+  if(!demo){
+   tell('正在读取本机 API Key…');
+   if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
+  }
   const photo=file?await jpeg(file):null,{turns,skill}=updateContext();
   const input={mode:'chat',text,photo,date:localDate(),history:turns};
   const options={skill,allowRead:composer.elements.allowRead.checked&&!photo};
   if(!validInput(input))throw Error('请检查消息或照片');
   if(firstSend){
    prepared={input,options};
-   consentPanel.hidden=false;thread.scrollTop=thread.scrollHeight;
+   consentPanel.hidden=false;
+   tell('还没发送。请在下方确认首次发送。');
+   consentPanel.scrollIntoView({block:'nearest'});
    return;
   }
   await sendMessage(input,options);
@@ -294,13 +307,13 @@ approve.onclick=async()=>{
  catch(err){report(err);}
  finally{busy=false;lock();}
 };
-cancelSend.onclick=()=>{clearConsent();lock();composer.elements.text.focus();};
+cancelSend.onclick=()=>{clearConsent();tell('');lock();composer.elements.text.focus();};
 share.onclick=async()=>{
  if(!pending||busy)return;
  const {input,skill,item,summary,scope}=pending;
- busy=true;lock();tell('正在生成回复…');
+ busy=true;lock();tell(demo?'正在生成演示回复…':'账本摘要已发送，正在等待 OpenAI 回复…');
  try{
-  const response=await respond(input,{skill,continuation:{item,summary}});
+  const response=await requestReply(input,{skill,continuation:{item,summary}});
   if(scope==='foods'){
    try{book.setFoodDate(summary.date);}catch{}
   }

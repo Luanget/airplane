@@ -28,6 +28,7 @@ let browser;
 try {
   browser=await chromium.launch({executablePath:process.env.CHROME_PATH || ['/usr/bin/google-chrome','/usr/bin/chromium'].find(existsSync),headless:true});
   const ctx=await browser.newContext({viewport:{width:390,height:844}});
+  await ctx.addInitScript(()=>{delete AbortSignal.timeout;});
   const page=await ctx.newPage();
   page.setDefaultTimeout(10000);
   const errors=[]; page.on('pageerror',err=>errors.push(String(err)));
@@ -172,6 +173,8 @@ try {
   const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
 
   const calls=[],testKey='sk-fixture-browser-only';
+  let releaseDelayed,markDelayed;
+  const delayedStarted=new Promise(resolve=>{markDelayed=resolve;});
   const aiIcon=await page.locator('.topbar-actions [data-open-ai] svg').innerHTML();
   assert.equal(await page.locator('.tabbar [data-open-ai]').count(),0);
   await ctx.route('https://api.openai.com/v1/responses',async route=>{
@@ -185,14 +188,27 @@ try {
     assert.ok(!content[0].text.includes('synthetic legacy entry'));
     assert.ok(!content[0].text.includes('private synthetic'));
     calls.push({...input,photo:content[1]?.image_url});
+    if(input.text==='模拟额度不足'){
+      return route.fulfill({status:429,headers:{...headers,'Access-Control-Expose-Headers':'X-Request-ID','X-Request-ID':'req_fixture'},
+        json:{error:{code:'insufficient_quota'}}});
+    }
+    const fixtureReply={status:'completed',output:[{type:'message',content:[{type:'output_text',
+      text:'{"reply":"连接正常。","proposal":null}'}]}]};
+    if(input.text.startsWith('这是连接测试'))return route.fulfill({headers,json:fixtureReply});
+    if(input.text==='模拟等待'){
+      await new Promise(resolve=>{releaseDelayed=resolve;markDelayed();});
+      await route.fulfill({headers,json:fixtureReply}).catch(()=>{});
+      return;
+    }
     if(input.text==='查一下合成库存'){
       assert.equal(body.tools[0].name,'read_ledger');
       const result=body.input.at(-1);
       if(result.type!=='function_call_output'){
-        return route.fulfill({headers,json:{status:'completed',output:[{type:'function_call',name:'read_ledger',call_id:'read-1',
+        return route.fulfill({headers,json:{status:'completed',output:[{type:'function_call',name:'read_ledger',call_id:'read-1',id:'fc_fixture',status:'completed',
           arguments:'{"scope":"stock","query":"合成库存"}'}]}});
       }
       assert.equal(body.tool_choice,'none');
+      assert.equal(body.input.at(-2).id,'fc_fixture');
       assert.deepEqual(JSON.parse(result.output),{stock:[{name:'合成库存',qty:4,unit:'包'}]});
       return route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',
         text:'{"reply":"合成库存还有 4 包。","proposal":null}'}]}]}});
@@ -221,6 +237,7 @@ try {
   await access.locator('[type=submit]').click();
   await access.getByText('已保存 Key',{exact:true}).waitFor();
   await say('合成餐点');
+  await form.getByText('还没发送。请在下方确认首次发送。',{exact:true}).waitFor();
   await chat.getByRole('button',{name:'返回编辑'}).click();
   assert.equal(calls.length,0);
   await say('合成餐点');
@@ -289,10 +306,21 @@ try {
   await history.waitFor({state:'hidden'});
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
   await chat.getByText('API Key',{exact:true}).click();
+  await access.getByRole('button',{name:'发送连接测试'}).click();
+  await access.getByText('已收到 OpenAI 回复：连接正常。',{exact:true}).waitFor();
+  await say('模拟额度不足');
+  await form.getByText(/额度或余额不足.*429.*req_fixture/).waitFor();
+  assert.equal(await form.getByRole('textbox',{name:'消息'}).inputValue(),'模拟额度不足');
+  await say('模拟等待');
+  await delayedStarted;
+  await form.getByRole('button',{name:'停止等待'}).click();
+  await form.getByText('已停止等待 OpenAI 回复。',{exact:true}).waitFor();
+  assert.equal(await form.getByRole('textbox',{name:'消息'}).inputValue(),'模拟等待');
+  releaseDelayed();
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
-  assert.equal(calls.length,8);
+  assert.equal(calls.length,11);
   await page.getByRole('link',{name:'财务',exact:true}).click();
   console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');
 
@@ -339,6 +367,9 @@ try {
   await page.locator('#health-settings-sheet [data-sheet-close]').click();
   await page.locator('[data-tab="inventory"]').click();
   const purchaseRow=amount=>page.locator('#purchases-list p').filter({hasText:'¥'+amount});
+  assert.equal(await page.locator('#purchases-list').isVisible(),false);
+  assert.equal(await page.locator('#sku-form').isVisible(),false);
+  await page.locator('#purchase-panel > summary').click();
   await purchaseRow('6.00').getByRole('button',{name:'编辑采购'}).click();
   await buy.locator('[name=total]').fill('9');
   await buy.locator('[name=quantity]').fill('3');
@@ -370,6 +401,7 @@ try {
     throw Error('unrelated writes are not blocked during recovery');
   });
   await page.reload();await page.locator('[data-tab="inventory"]').click();
+  await page.locator('#purchase-panel > summary').click();
   await purchaseRow('11.00').filter({hasText:'已关联支出'}).waitFor();
   assert.equal(JSON.parse(await ledger()).transactions.find(t=>t.id.startsWith('expense-purchase-')).amount,11);
   await purchaseRow('11.00').getByRole('button',{name:'撤销采购'}).click();
@@ -379,6 +411,7 @@ try {
 
   // The list can feed a purchase draft without touching inventory until confirmation.
   await page.locator('#inventory-list').getByRole('button',{name:'合成库存'}).click();
+  await page.locator('#sku-form').waitFor();
   await page.locator('#sku-form [name=minimum]').fill('7');
   await page.locator('#sku-form [type=submit]').click();
   await page.getByText('合成库存 库存偏低',{exact:true}).waitFor();

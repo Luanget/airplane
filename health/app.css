@@ -91,3 +91,13 @@ body[data-module="health"] [data-shell] .calendar-field input:is([type=date],[ty
 .shopping-row .checkbox { flex:1; min-width:0; min-height:44px; overflow-wrap:anywhere; cursor:pointer }
 .shopping-row input[type=checkbox] { flex:none; width:18px; height:18px; margin:0; accent-color:var(--green) }
 body[data-module="health"] [data-shell] .shopping-row input[type=number] { width:78px; margin:0 }
+
+.inventory-heading { margin:0 0 6px }
+.inventory-food { min-height:48px; width:100%; text-align:left; font-size:14px }
+.inventory-food strong { min-width:0; overflow-wrap:anywhere; font-weight:650 }
+.inventory-food .stock-qty { color:var(--muted) }
+.inventory-food .stock-qty.low { color:var(--red) }
+.inventory-food:active { background:var(--surface-2) }
+.inventory-food:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+.inventory-tool { margin-top:10px; padding-top:10px; border-top:1px solid var(--line) }
+.inventory-purchase-log { margin-top:14px; padding-top:10px; border-top:1px solid var(--line) }
