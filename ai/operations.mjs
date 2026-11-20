@@ -14,18 +14,20 @@ function heading(parent,text){
  const title=document.createElement('h3');title.textContent=text;parent.append(title);
 }
 export function skillReview(container,items,suggested){
- heading(container,'核对 Skill 修改');
- const target=field(container,'保存到',document.createElement('select'));
+ const card=document.createElement('section');
+ card.className='skill-edit-review';container.append(card);
+ heading(card,'核对 Skill 修改');
+ const target=field(card,'保存到',document.createElement('select'));
  target.dataset.pickerVerbatim='';
  target.add(new Option('新建并启用个人 Skill',''));
  for(const item of items)target.add(new Option(item.name,item.id));
  const match=items.filter(item=>item.name===suggested.name);
  if(match.length===1)target.value=match[0].id;
- const name=field(container,'名称',document.createElement('input'));
+ const name=field(card,'名称',document.createElement('input'));
  name.maxLength=SKILL_NAME_LIMIT;name.value=suggested.name??'我的偏好';
  const before=document.createElement('details'),summary=document.createElement('summary'),previous=document.createElement('p');
- summary.textContent='查看原规则';before.append(summary,previous);container.append(before);
- const edit=field(container,'新规则',document.createElement('textarea'));
+ summary.textContent='查看原规则';before.append(summary,previous);card.append(before);
+ const edit=field(card,'新规则',document.createElement('textarea'));
  edit.maxLength=SKILL_LIMIT;edit.rows=4;edit.value=suggested.text;edit.required=true;
  const selected=()=>items.find(item=>item.id===target.value);
  function update(){

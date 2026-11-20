@@ -966,6 +966,13 @@ try {
   console.log('PASS invalid batch leaves both ledgers intact, interrupted local commit settles once and dinner uses fresh inventory');
   await say('帮我修改 Skill');
   await review.getByRole('button',{name:'确认更新 Skill'}).waitFor();
+  assert.ok(await chat.evaluate(page=>page.scrollWidth===page.clientWidth));
+  assert.ok(await review.locator('button[type=submit]').evaluate(button=>
+    button.getBoundingClientRect().bottom<=button.closest('.chat-thread').getBoundingClientRect().bottom));
+  const skillText=review.getByLabel('新规则',{exact:true});
+  assert.equal(await skillText.evaluate(field=>getComputedStyle(field).fontSize),'14px');
+  await skillText.focus();
+  assert.equal(await skillText.evaluate(field=>getComputedStyle(field).fontSize),'16px');
   await review.getByRole('button',{name:/^保存到/}).click();
   await review.locator('.inline-picker-panel').getByRole('button',{name:'L · 餐食偏好',exact:true}).click();
   await review.getByRole('button',{name:'确认更新 Skill'}).click();

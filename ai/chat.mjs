@@ -349,7 +349,7 @@ async function makeReview(proposal,flow,photoJob){
  for(const select of review.querySelectorAll('select'))select.dataset.picker='';
  syncChoiceFields(review);
  review.hidden=false;
- const contextAbove=mode==='plan'?10:88;
+ const contextAbove=mode==='plan'||mode==='skill'?10:88;
  thread.scrollTop=Math.max(0,thread.scrollTop+review.getBoundingClientRect().top-thread.getBoundingClientRect().top-contextAbove);
 }
 

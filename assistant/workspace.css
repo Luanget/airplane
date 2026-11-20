@@ -21,6 +21,15 @@
 .skill-new { padding:0 4px }
 .skill-editor { padding:4px 10px 8px; border:1px solid var(--line); border-radius:12px }
 .skill-status:not(:empty) { display:block; margin-top:6px; font-size:13px; color:var(--muted) }
+.skill-edit-review h3 { font-size:14px; margin-bottom:8px }
+.skill-edit-review :is(label,summary,p) { font-size:12px; line-height:1.5 }
+.skill-edit-review details { margin:0 0 8px }
+.skill-edit-review summary { padding-block:6px; color:var(--muted); cursor:pointer }
+.skill-edit-review p { margin:4px 0 8px; color:var(--muted); white-space:pre-wrap }
+.skill-edit-review .choice-trigger { font-size:14px }
+.assistant-workspace .skill-edit-review :is(input,textarea) { line-height:1.5 }
+.assistant-workspace .skill-edit-review :is(input,textarea):not(:focus) { font-size:14px }
+.chat-review:has(> .skill-edit-review) > .chat-actions button { font-size:13px }
 .chat-source { justify-self:start; max-width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface) }
 .chat-source summary { cursor:pointer; color:var(--muted); font-size:13px }
 .chat-source pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; font:inherit; font-size:13px; line-height:1.55 }
@@ -35,7 +44,7 @@
 .assistant-fields .chat-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px }
 .assistant-fields .chat-actions button { margin:0 }
 .assistant-conversation {
- display:grid; grid-template-rows:auto minmax(120px,1fr) auto;
+ display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(120px,1fr) auto;
  min-height:480px; height:calc(100dvh - 94px - env(safe-area-inset-top, 0px) - var(--safe-bottom));
  padding:14px; min-width:0
 }
