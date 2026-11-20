@@ -58,6 +58,8 @@
 .assistant-delete-confirmation p { margin:0 0 6px; color:var(--text); overflow-wrap:anywhere }
 .assistant-delete-confirmation .danger-button { width:auto; padding:8px 12px }
 .assistant-conversation .streaming-reply::after { content:''; display:inline-block; width:6px; height:6px; margin-inline-start:5px; border-radius:50%; background:var(--green) }
+.assistant-batch-step { margin:10px 0; padding:12px; border:1px solid var(--line); border-radius:12px; min-width:0 }
+.assistant-batch-preview { white-space:pre-wrap; padding:10px; background:var(--surface-2); border-radius:12px }
 .assistant-history strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600 }
 .assistant-history time { white-space:nowrap; margin-inline-start:auto; color:var(--muted); font-size:12px }
 .assistant-history p { margin:8px 10px; color:var(--muted); font-size:13px }

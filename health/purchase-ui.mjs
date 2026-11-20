@@ -146,13 +146,13 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   finally{saving=false;button.disabled=false;await showPending();}
  };
  pendingPanel.querySelector('[data-resume]').onclick=async()=>{
-  try {const saved=await resumePurchaseUpdate(account);setState(saved);notify('采购更正与财务已同步');}
+  try {const saved=await resumePurchaseUpdate(account);setState(saved);notify('财务与健康账本已同步');}
   catch(err){notify(err.message);}
   finally{await showPending();}
  };
  pendingPanel.querySelector('[data-abandon]').onclick=async()=>{
-  if(!confirm('放弃待处理的采购更正？'))return;
-  try {const saved=await abandonPurchaseUpdate(account);setState(saved);notify('已放弃本次更正');}
+  if(!confirm('放弃待同步的账本更新？'))return;
+  try {const saved=await abandonPurchaseUpdate(account);setState(saved);notify('已放弃本次更新');}
   catch(err){notify(err.message);}
   finally{await showPending();}
  };

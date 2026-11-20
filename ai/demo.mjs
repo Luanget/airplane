@@ -35,7 +35,7 @@ export async function demoWorkspace(today){
  }
  const workspace={account,finance,readHealth:()=>readState(account),saveHealth:(next,expected)=>saveState(next,expected,account),
   readSkill:()=>finance.getItem('skill')??'',saveSkill:value=>finance.setItem('skill',value)};
- async function respond(input,{allowRead,continuation=[]}={}){
+ async function respond(input,{allowRead,continuation=[],applied=[]}={}){
   const latest=continuation.at(-1);
   const text=input.text;
   const focus=inventoryWithMoves(await workspace.readHealth()).find(s=>text.includes(s.name)),name=focus?.name??'燕麦';
@@ -55,6 +55,26 @@ export async function demoWorkspace(today){
    input.date.slice(0,4)+'-'+chineseDate[1].padStart(2,'0')+'-'+chineseDate[2].padStart(2,'0'):
    text.includes('前天')?addDays(input.date,-2):
    text.includes('昨天')?addDays(input.date,-1):text.includes('今天')?input.date:null);
+  const dinnerItem=(row,amount)=>({name:row.name,sku:null,action:'plan',amount,unit:'g',
+   packageSize:null,packageUnit:null,basisAmount:100,basisUnit:'g',
+   nutrients:{kcal:null,protein:null,carbs:null,fat:null,sodium:null},
+   uncertainty:'演示搭配，使用本地食品营养基础计算。',weighing:null});
+  const expense=Number(text.match(/(\d+(?:\.\d+)?)\s*元/)?.[1]);
+  if(text.includes('牛奶')&&date&&Number.isFinite(expense)&&/安排晚餐/.test(text)){
+   if(!applied.length)return propose('请一起核对牛奶更正和午餐支出，保存后我会用更新后的库存安排晚餐。','batch',{
+    next:'continue',operations:[
+     {mode:'food_edit',date,result:{name:'牛奶',amount:quantity,unit:'g',meal:null,time:null}},
+     {mode:'finance',date:null,result:{note:'',entry:{type:'expense',amount:expense,date:input.date,note:'演示午餐',categoryId:'餐饮'}}}
+    ]
+   });
+   if(!latest)return call('meal');
+   const {stock}=latest.summary,milk=stock.find(row=>row.name==='牛奶');
+   const items=stock.filter(row=>row.name!=='牛奶'&&row.unit==='g'&&row.qty>0)
+    .map(row=>dinnerItem(row,Math.min(row.qty,row.name==='鸡胸肉'?180:60)));
+   return propose((milk?'更新后的牛奶库存是 '+milk.qty+' '+milk.unit+'。':'')+'这里是基于最新库存的晚餐计划。','plan',{
+    note:'计划可稍后转为实际摄入。',items
+   });
+  }
   if(focus&&/改成|改为|更正/.test(text)&&/\d\s*(?:g|克)\b/i.test(text.replace('克','g'))){
    return {reply:'我会按你选中的原记录更正份量，请核对下面的变化。',proposal:{mode:'food_edit',date,
     result:{name,amount:quantity,unit:'g',meal:null,time:null}}};
@@ -77,9 +97,7 @@ export async function demoWorkspace(today){
   if(/晚餐|搭配|规划/.test(text)){
    if(allowRead&&!latest)return call('meal');
    const candidates=(latest?.summary.stock??[{name:'鸡胸肉'},{name:'燕麦'}]).filter(row=>row.name!=='牛奶');
-   const items=candidates.map((s,i)=>({name:s.name,sku:null,action:'plan',amount:i===0?60:180,unit:'g',
-    packageSize:null,packageUnit:null,basisAmount:100,basisUnit:'g',nutrients:{kcal:null,protein:null,carbs:null,fat:null,sodium:null},
-    uncertainty:'演示搭配，使用本地食品营养基础计算。',weighing:null}));
+   const items=candidates.map((row,i)=>dinnerItem(row,i===0?60:180));
    return propose('这里是一份可以调整的晚餐计划。','plan',{note:'计划可稍后转为实际摄入。',items});
   }
   if(/查.*库存/.test(text)){

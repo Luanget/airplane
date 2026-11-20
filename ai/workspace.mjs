@@ -13,10 +13,10 @@ export function cleanSkill(value) {
  return text;
 }
 export function localWorkspace(){
+ const account={finance:localStorage};
  return {
-  readHealth:()=>readState(),
-  saveHealth:(next,expected)=>saveState(next,expected),
-  finance:localStorage,
+  account,finance:account.finance,readHealth:()=>readState(account),
+  saveHealth:(next,expected)=>saveState(next,expected,account),
   readSkill:()=>localStorage.getItem(SKILL_KEY)??'',
   saveSkill:text=>localStorage.setItem(SKILL_KEY,cleanSkill(text))
  };

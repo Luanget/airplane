@@ -173,6 +173,8 @@ try {
   const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
 
   const calls=[],testKey='sk-fixture-browser-only';
+  const batchText='盘点合成新食品为 90g，补记 43 元午餐，再查更新后的库存';
+  let resumeAttempts=0;
   let releaseDelayed,markDelayed;
   const delayedStarted=new Promise(resolve=>{markDelayed=resolve;});
   const aiIcon=await page.locator('.topbar-actions [data-open-ai] svg').innerHTML();
@@ -184,7 +186,7 @@ try {
     const body=route.request().postDataJSON(),content=body.input[0].content;
     assert.equal(body.store,false);assert.equal(body.stream,true);assert.equal(body.text.format.strict,true);
     const input=JSON.parse(content[0].text);
-    assert.deepEqual(Object.keys(input).sort(),['date','history','text']);
+    assert.deepEqual(Object.keys(input).sort(),input.applied?['applied','date','history','text']:['date','history','text']);
     assert.ok(!content[0].text.includes('synthetic legacy entry'));
     assert.ok(!content[0].text.includes('private synthetic'));
     calls.push({...input,photo:content[1]?.image_url});
@@ -194,6 +196,26 @@ try {
     }
     const fixtureReply={status:'completed',output:[{type:'message',content:[{type:'output_text',
       text:'{"reply":"连接正常。","proposal":null}'}]}]};
+    if(input.text===batchText){
+      const reply=(reply,proposal=null)=>route.fulfill({headers,json:{status:'completed',output:[{type:'message',
+        content:[{type:'output_text',text:JSON.stringify({reply,proposal})}]}]}});
+      if(!input.applied)return reply('请核对盘点和支出。',{mode:'batch',date:null,result:{next:'continue',operations:[
+        {mode:'inventory',date:null,result:{operation:'count',name:'合成新食品',quantity:90,unit:'g'}},
+        {mode:'finance',date:null,result:{note:'',entry:{type:'expense',amount:43,date:input.date,note:'合成批量支出',categoryId:'餐饮'}}}
+      ]}});
+      assert.deepEqual(input.applied,['inventory','finance']);
+      assert.deepEqual(input.history,[]);
+      assert.equal(content.length,1);
+      const last=body.input.at(-1);
+      if(last.type==='function_call_output'){
+        assert.deepEqual(JSON.parse(last.output),{stock:[{name:'合成新食品',qty:90,unit:'g'}]});
+        return reply('保存后还剩 90 g。');
+      }
+      if(++resumeAttempts===1)return route.fulfill({status:503,headers,json:{error:{code:'fixture'}}});
+      assert.equal(body.input.length,1);
+      return route.fulfill({headers,json:{status:'completed',output:[{type:'function_call',name:'read_ledger',
+        call_id:'batch-stock',arguments:'{"scope":"stock","query":"合成新食品"}'}]}});
+    }
     if(input.text.startsWith('这是连接测试'))return route.fulfill({headers,json:fixtureReply});
     if(input.text==='模拟等待'){
       await new Promise(resolve=>{releaseDelayed=resolve;markDelayed();});
@@ -350,10 +372,27 @@ try {
   assert.equal(await partial.count(),0);
   assert.equal(JSON.parse(await ledger()).transactions.at(-1).amount,28);
   await review.getByRole('button',{name:'放弃'}).click();
+  const financeBeforeBatch=await ledger();
+  await say(batchText);
+  await review.getByText('合成新食品 120 → 90 g',{exact:false}).waitFor();
+  assert.equal(await ledger(),financeBeforeBatch);
+  await review.getByRole('button',{name:'确认全部并继续'}).click();
+  const retry=chat.getByRole('button',{name:'重试后续请求'});
+  await retry.waitFor();
+  const savedBatch=await ledger();
+  assert.equal(JSON.parse(savedBatch).transactions.at(-1).amount,43);
+  await retry.click();
+  const batchSummary=chat.getByRole('region',{name:'账本摘要'});
+  await batchSummary.getByText(/合成新食品 · 90 g/).waitFor();
+  assert.equal(calls.at(-1).applied.length,2);
+  await batchSummary.getByRole('button',{name:'发送摘要'}).click();
+  await chat.getByText('保存后还剩 90 g。',{exact:true}).waitFor();
+  assert.equal(await ledger(),savedBatch);
+  console.log('PASS batch save before fresh read, minimal follow-up context and no duplicate writes on retry');
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
-  assert.equal(calls.length,11);
+  assert.equal(calls.length,15);
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();
   console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');
@@ -431,7 +470,7 @@ try {
     if(!(await readPurchaseUpdate(account)))throw Error('recovery journal missing');
     if((await readState()).local.purchases.find(x=>x.id===order.id).totalCents!==900)throw Error('pending edit appeared as committed');
     try{await saveState(state,state.revision,account);}
-    catch(err){if(err.message.includes('待完成'))return;}
+    catch(err){if(err.message.includes('待同步'))return;}
     throw Error('unrelated writes are not blocked during recovery');
   });
   await page.reload();await page.locator('[data-tab="inventory"]').click();
@@ -529,6 +568,44 @@ try {
   await page.waitForFunction(()=>document.querySelector('#hero-goal').textContent.includes('kcal'));
   await page.getByRole('button',{name:'前一天'}).click();
   await page.locator('#local-events').getByRole('button',{name:/牛奶.*300 g.*186 kcal/}).waitFor();
+  await page.getByRole('link',{name:'AI 助手'}).click();
+  const demoLedger=()=>page.evaluate(async()=>{
+    const {demoWorkspace}=await import('../ai/demo.mjs'),{localDate}=await import('../calendar.mjs');
+    return JSON.parse((await demoWorkspace(localDate())).finance.getItem('airplane-pwa-v1'));
+  });
+  const originalDemoLedger=await demoLedger();
+  await chat.getByRole('button',{name:'更正饮食、记账并安排晚餐'}).click();
+  await form.getByRole('button',{name:'发送',exact:true}).click();
+  await review.getByText('核对 2 项账本变更',{exact:true}).waitFor();
+  await review.getByRole('button',{name:'确认全部并继续'}).click();
+  await review.locator('output').getByText(/没有变化/).waitFor();
+  assert.deepEqual(await demoLedger(),originalDemoLedger);
+  await review.getByLabel('新份量（g）').fill('320');
+  await page.evaluate(()=>{
+    const put=IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put=function(value,key){
+      if(key?.startsWith('member:demo-')&&value?.appType==='airplane-health-v1'){
+        IDBObjectStore.prototype.put=put;
+        throw Error('synthetic assistant finalization failure');
+      }
+      return put.call(this,value,key);
+    };
+  });
+  await review.getByRole('button',{name:'确认全部并继续'}).click();
+  await review.locator('output').getByText(/财务已保存，健康账本待同步/).waitFor();
+  assert.equal((await demoMilk())[0].portion,'300 g');
+  const stagedLedger=await demoLedger();
+  assert.equal(stagedLedger.transactions.length,originalDemoLedger.transactions.length+1);
+  await review.getByRole('button',{name:'继续同步',exact:true}).click();
+  await summary.getByText(/牛奶 · 430 g/).waitFor();
+  assert.deepEqual(await demoLedger(),stagedLedger);
+  assert.deepEqual((await demoMilk()).map(row=>[row.id,row.portion,row.nutrition.kcal]),[[original.id,'320 g',198.4]]);
+  await summary.getByRole('button',{name:'发送摘要'}).click();
+  await chat.getByText(/更新后的牛奶库存是 430 g/).waitFor();
+  await review.getByRole('button',{name:'保存为饮食计划'}).click();
+  await chat.getByText('已保存饮食计划。',{exact:true}).waitFor();
+  assert.deepEqual(await demoLedger(),stagedLedger);
+  console.log('PASS invalid batch leaves both ledgers intact, interrupted local commit settles once and dinner uses fresh inventory');
   assert.deepEqual(errors,[]);
   console.log('PASS dated food lookup, thread reload, confirmed in-place correction and health timeline');
   console.log('PASS damaged finance recovery and synthetic-only fixtures');

@@ -45,7 +45,7 @@ export async function saveState(state, expected, account = globalThis.airplaneAc
       let failure;
       pending.onsuccess = () => {
         try {
-          if(pending.result)throw Error('有待完成的采购更正，请先处理采购');
+          if(pending.result)throw Error('有待同步的账本更新，请先在库存页处理');
           if ((unpack(account, req.result)?.revision ?? 0) !== expected)
             throw Error('其他页面已修改账本，请刷新后重试');
           if(snapshot)store.put(account?.id ? account.seal('health', snapshot) : snapshot,key+':before-restore');
@@ -97,7 +97,7 @@ export function stagePurchaseUpdate(account,state,expected,change){
 export function finishPurchaseUpdate(account,jobId,apply){
  return purchaseWrite(account,(store,current,job)=>{
   if(!job)return current??newState();
-  if(job.id!==jobId||(current?.revision??0)!==job.expected)throw Error('待处理采购已变更，请刷新');
+  if(job.id!==jobId||(current?.revision??0)!==job.expected)throw Error('待同步的账本更新已变更，请刷新');
   if(apply)store.put(pack(account,job.state),slot(account));
   store.delete(purchaseSlot(account));
   return apply?job.state:current??newState();

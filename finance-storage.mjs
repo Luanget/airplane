@@ -45,6 +45,17 @@ export function replaceFinance(store,payload,expected) {
  }
 }
 
+export function addConfirmedTransactions(payload,entries) {
+ const used=new Set(payload.transactions.map(tx=>tx.id));
+ payload.prefs??={};
+ for(const entry of entries){
+  if(used.has(entry.id))throw Error('这条候选已保存');
+  used.add(entry.id);
+  payload.transactions.push(entry);
+  payload.prefs[entry.type==='income'?'lastIncomeCategoryId':'lastExpenseCategoryId']=entry.categoryId;
+ }
+}
+
 export const DEFAULT_CATEGORIES = [
   ['餐饮','expense','food','#F29B69'],['交通','expense','car','#6FA8DC'],['购物','expense','bag','#AA82E3'],['娱乐','expense','game','#E77BA6'],
   ['日用','expense','house','#E8B45F'],['学习','expense','book','#5F9FE5'],['医疗','expense','health','#65BFA3'],['旅行','expense','travel','#6EAED7'],

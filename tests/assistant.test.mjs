@@ -1,4 +1,4 @@
-import {modelRequest,pendingLedgerRead} from '../ai/responses.mjs';
+import {modelRequest,parseResult,pendingLedgerRead} from '../ai/responses.mjs';
 import {readResponseStream,ResponseStreamError} from '../ai/stream.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -90,6 +90,22 @@ test('a second ledger read keeps both approved results in call order',()=>{
  assert.equal(request.parallel_tool_calls,false);
  assert.deepEqual(request.input.slice(1),steps.flatMap(({item,summary})=>
   [item,{type:'function_call_output',call_id:item.call_id,output:JSON.stringify(summary)}]));
+});
+test('batch candidates share the individual schemas and validate each entry',()=>{
+ const input={mode:'chat',text:'补记午餐和盘点',date,photo:null,history:[]};
+ const finance={mode:'finance',date:null,result:{note:'',entry:{type:'expense',amount:28,date,note:'午餐',categoryId:'餐饮'}}};
+ const inventory={mode:'inventory',date:null,result:{operation:'count',name:'牛奶',quantity:450,unit:'g'}};
+ const operations=[finance,inventory];
+ const response=value=>({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]});
+ const batch={reply:'请核对。',proposal:{mode:'batch',date:null,result:{operations,next:'continue'}}};
+ assert.deepEqual(parseResult(response(batch),input),batch);
+ assert.deepEqual(JSON.parse(modelRequest(input,{allowRead:true,applied:['finance','inventory']}).input[0].content[0].text),
+  {text:input.text,date,history:[],applied:['finance','inventory']});
+ batch.proposal.result.operations=[];
+ assert.throws(()=>parseResult(response(batch),input));
+ batch.proposal.result.operations=operations;
+ finance.result.entry.date='2030-01-02';
+ assert.throws(()=>parseResult(response(batch),input));
 });
 test('stream decodes split UTF-8 and JSON escapes and reveals only reply text before completion',async()=>{
  const encoder=new TextEncoder(),preview=[];

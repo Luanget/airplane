@@ -48,10 +48,10 @@ export function inventoryReview(container,proposal,current,today){
  item.onchange=()=>{qty.value=selection()?.unit===unit?String(quantity):'';update();};
  qty.oninput=update;if(date)date.onchange=update;
  update();syncCalendarFields(container);
- return ()=>{
+ return (state=current)=>{
   const row=selection(),value=qty.valueAsNumber;
   if(!row||!Number.isFinite(value)||value<0||value>100000)throw Error('请核对食品和数量');
-  const next=structuredClone(current);
+  const next=structuredClone(state);
   if(shopping)setShoppingItem(next,row.id,value);
   else {
    if(!validDate(date.value)||date.value>today)throw Error('请核对盘点日期');
@@ -79,8 +79,8 @@ export function foodEditReview(container,proposal,current,today,lastFoodDate){
  const preview=document.createElement('div');
  preview.className='food-edit-diff';preview.setAttribute('aria-live','polite');
  container.append(preview);
- function calculate(){
-  return reviseFoodPortion(current,{id:selection.value,date,amount:quantity.valueAsNumber,unit});
+ function calculate(state=current){
+  return reviseFoodPortion(state,{id:selection.value,date,amount:quantity.valueAsNumber,unit});
  }
  function update(){
   preview.replaceChildren();
@@ -106,7 +106,7 @@ export function foodEditReview(container,proposal,current,today,lastFoodDate){
  }
  selection.onchange=update;quantity.oninput=update;update();
  return {
-  apply:()=>calculate().next,
+  apply:state=>calculate(state).next,
   label:'确认更正',
   saved:'已更正原饮食记录，并重新计算当日营养和关联库存。'
  };

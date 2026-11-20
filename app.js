@@ -1236,7 +1236,7 @@ function refreshFinanceLedger(){
 }
 window.addEventListener('storage',refreshFinanceLedger);
 window.addEventListener('airplane:finance-saved',refreshFinanceLedger);
-if(window.airplanePendingPurchase)toast('有待处理的采购更正，请在健康库存页完成同步',{duration:5500});
+if(window.airplanePendingPurchase)toast('有待同步的账本更新，请在健康库存页处理',{duration:5500});
 const purchaseQuery=new URL(location.href).searchParams.get('purchase');
 if(purchaseQuery&&!recoveryRequired)readHealthState().then(health=>{
   const order=(health.local.purchases??[]).find(p=>p.id===purchaseQuery);
