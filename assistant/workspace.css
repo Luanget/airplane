@@ -84,3 +84,9 @@
  .assistant-panel { padding:6px 10px }
  .assistant-conversation { height:min(770px, calc(100dvh - 145px)); min-height:475px; padding:12px }
 }
+
+.assistant-request-status { display:flex; align-items:center; gap:8px; justify-content:space-between }
+.assistant-request-status button { flex:none }
+.assistant-send-confirmation { margin-top:8px; padding:10px; background:var(--surface-2); border-radius:12px }
+.assistant-send-confirmation h3 { margin:0; font-size:14px }
+.assistant-send-confirmation p { margin:5px 0 8px; color:var(--muted); font-size:13px; line-height:1.45 }

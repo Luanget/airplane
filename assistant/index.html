@@ -77,11 +77,6 @@
             </div>
           </section>
           <div class="chat-transcript" role="log" aria-label="对话" aria-live="polite"></div>
-          <section class="card assistant-read" id="assistant-consent" aria-labelledby="assistant-consent-title" hidden>
-            <h3 id="assistant-consent-title">首次发送给 OpenAI</h3>
-            <p>会发送本轮消息、所选照片、设备日期、个人 Skill 和近期对话。账本摘要仍需单独确认。</p>
-            <div class="chat-actions"><button type="button" class="secondary-button" data-cancel-send>返回编辑</button><button type="button" class="primary-button" data-approve-send>确认发送</button></div>
-          </section>
           <section class="card assistant-read" aria-label="账本摘要" hidden>
             <h3>发送账本摘要</h3><p data-read-label></p><pre data-read-preview></pre>
             <div class="chat-actions"><button type="button" class="secondary-button" data-skip-read>取消本轮</button><button type="button" class="primary-button" data-share-read>发送摘要</button></div>
@@ -96,7 +91,12 @@
             <button type="submit" class="primary-button">发送</button>
           </div>
           <label class="assistant-query"><input type="checkbox" name="allowRead"> 允许本轮查询账本<span>最多一次，确认摘要后才发送</span></label>
-          <output data-status aria-live="polite"></output>
+          <div class="assistant-request-status"><output data-status aria-live="polite"></output><button type="button" class="text-button" data-stop-request hidden>停止等待</button></div>
+          <section class="assistant-send-confirmation" id="assistant-consent" aria-labelledby="assistant-consent-title" hidden>
+            <h3 id="assistant-consent-title">首次发送给 OpenAI</h3>
+            <p>会发送本轮消息、所选照片、设备日期、个人 Skill 和近期对话。账本摘要仍需单独确认。</p>
+            <div class="chat-actions"><button type="button" class="secondary-button" data-cancel-send>返回编辑</button><button type="button" class="primary-button" data-approve-send>确认发送</button></div>
+          </section>
         </form>
       </section>
     </main>

@@ -175,10 +175,13 @@ function renderTrends(){
 function renderInventory(){
  const filter=$('inventory-search').value.trim().toLowerCase();const list=inventoryWithMoves(state).filter(i=>i.active && (i.name.toLowerCase().includes(filter)||i.id.toLowerCase().includes(filter)));
  list.sort((a,b)=>(Number(b.qty>0)-Number(a.qty>0))||a.name.localeCompare(b.name,'zh-CN'));
- $('inventory-list').innerHTML=list.slice(0,180).map(i=>`<div class="inv-row"><div class="event-main"><button class="btn btn-text" data-sku-edit="${E(i.id)}">${E(i.name)}</button><small>${E(i.standard)} · ${i.pricePerUnit===null?'单价未知':`原账价格字段 ¥${fmt(i.pricePerUnit,3)}（单位须核实）`}</small></div><div class="stock-qty ${i.qty!==null&&i.qty<=0?'low':''}">${i.qty===null?'待盘点':fmt(i.qty,2)}<small style="display:block;color:#8697a9;font-weight:400">${E(i.unit)}</small></div></div>`).join('')||'<div class="event-empty">没有匹配的库存食物</div>';
+ $('inventory-list').innerHTML=list.map(i=>`<button type="button" class="inv-row inventory-food" data-sku-edit="${E(i.id)}" aria-label="${E(i.name)}">
+  <strong>${E(i.name)}</strong><span class="stock-qty ${i.qty!==null&&i.qty<=0?'low':''}">${i.qty===null?'待盘点':E(i.qty)+' '+E(i.unit)}</span>
+ </button>`).join('')||'<div class="event-empty">没有匹配的库存食物</div>';
  const batches=batchBalances(state), byId=new Map(inventoryWithMoves(state).map(s=>[s.id,s]));
  const alerts=stockAlerts(state,dateNow());
- $('stock-alerts').textContent=[...alerts.low.map(s=>s.name+' 库存偏低'),...alerts.expiry.map(b=>byId.get(b.foodId)?.name+' 到期 '+b.expires)].join(' · ');
+ const alertText=[...alerts.low.map(s=>s.name+' 库存偏低'),...alerts.expiry.map(b=>byId.get(b.foodId)?.name+' 到期 '+displayDay(b.expires))].join(' · ');
+ $('stock-alerts').textContent=alertText;$('stock-alerts').hidden=!alertText;
  $('batch-list').innerHTML=batches.filter(b=>b.remaining>0).map(b=>`<p>${E(byId.get(b.foodId)?.name)} · ${E(displayDay(b.date))} · ${fmt(b.remaining,3)} ${E(byId.get(b.foodId)?.unit)} · ${b.costCents===null?'成本未知':('批次成本 ¥'+fmt(b.costCents/100,2))}${b.parent?' · 分装':''}</p>`).join('');
  $('stock-history').innerHTML=state.local.stockMoves.slice(-40).reverse().map(m=>`<div class="event-row"><span>${E(displayDay(m.date))}${normalizeClock(m.time)?' '+normalizeClock(m.time):''} · ${E(byId.get(m.foodId)?.name)} · ${E(m.reason)}</span><strong>${m.delta>0?'+':''}${fmt(m.delta,3)}</strong></div>`).join('');
 
@@ -408,14 +411,19 @@ function attach(){
   costCents:numeric(d.cost)===null?null:Math.round(+d.cost*100)}),'批次已入库');
  bindForm('split',(next,d)=>splitBatch(next,d),'分装已完成');
  $('new-sku').onclick=()=>$('sku-form').reset();
+ function revealSku(){
+  $('inventory-tools').open=true;$('sku-panel').open=true;
+  $('sku-panel').scrollIntoView({block:'start'});
+ }
+ $('add-stock-food').onclick=()=>{$('sku-form').reset();revealSku();};
  $('inventory-list').onclick=e=>{
-  const row=inventoryWithMoves(state).find(s=>s.id===e.target.dataset.skuEdit);
+  const row=inventoryWithMoves(state).find(s=>s.id===e.target.closest('[data-sku-edit]')?.dataset.skuEdit);
   if(!row)return;
   const [basisAmount,basisUnit]=basis(row);
   const form=$('sku-form');
   form.reset();
   fillForm(form,{...row,...row.nutrition,price:row.priceBasis===row.unit?row.pricePerUnit:null,basisAmount,basisUnit});
-  form.closest('details').open=true;form.scrollIntoView({block:'start'});
+  revealSku();
  };
  $('settings-form').onsubmit=async e=>{
   e.preventDefault();const fields=Object.fromEntries(new FormData(e.target)),next=structuredClone(state);

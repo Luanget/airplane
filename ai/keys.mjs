@@ -2,8 +2,11 @@ const slot='airplane-openai-credential-v1';
 async function deviceRecord(operation, value) {
   const db=await new Promise((resolve,reject)=>{
     const req=indexedDB.open(slot,1);
+    let blocked=false;
     req.onupgradeneeded=()=>req.result.createObjectStore('credentials');
-    req.onsuccess=()=>resolve(req.result); req.onerror=()=>reject(req.error);
+    req.onblocked=()=>{blocked=true;reject(Error('本机密钥存储暂不可用'));};
+    req.onsuccess=()=>{if(blocked)req.result.close();else resolve(req.result);};
+    req.onerror=()=>reject(req.error);
   });
   try {
     return await new Promise((resolve,reject)=>{
