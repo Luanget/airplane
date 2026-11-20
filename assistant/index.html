@@ -88,6 +88,21 @@
           <form id="assistant-key" class="assistant-fields"></form>
           <div class="assistant-panel-body" data-demo-key hidden><p>演示使用预设回复，无需导入 Key。</p></div>
         </details>
+        <details class="card assistant-panel" id="assistant-model-panel">
+          <summary class="setting-row">
+            <span class="mini-icon" data-shell-icon="chart"></span>
+            <span class="setting-copy"><span class="setting-title">模型与用量</span><span class="setting-sub" data-current-model></span></span>
+            <span class="chevron" data-shell-icon="chevron"></span>
+          </summary>
+          <div class="assistant-panel-body">
+            <div class="segmented assistant-model-options" role="group" aria-label="选择模型" data-model-options></div>
+            <output role="status"></output>
+            <div class="assistant-billing-links">
+              <a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">API 余额</a>
+              <a href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer">用量明细</a>
+            </div>
+          </div>
+        </details>
         <details class="card assistant-panel" id="assistant-skill">
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">Skill</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
@@ -102,7 +117,7 @@
                 <button type="submit" class="primary-button">保存 Skill</button>
               </div>
             </form>
-            <output class="skill-status" role="status"></output>
+            <output role="status"></output>
             <details class="assistant-prompt"><summary>查看内置提示词</summary><pre></pre></details>
           </div>
         </details>

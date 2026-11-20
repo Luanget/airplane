@@ -10,6 +10,7 @@ import {chatInstructions} from './responses.mjs';
 import {localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
 import {foodEditReview,inventoryReview,portionReview,skillReview} from './operations.mjs';
 import {mountSkillSettings} from './skills.mjs';
+import {mountModelSettings,readChatModel} from './models.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 import {batchReview} from './batch.mjs';
@@ -32,7 +33,8 @@ const keyPanel=$('#assistant-key-panel'),settings=$('#assistant-settings-sheet')
 let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null,photoRun=null;
 
 hydrateShell();
-$('#assistant-settings').onclick=()=>{settings.showModal();refreshSkills();};
+const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
+$('#assistant-settings').onclick=()=>{settings.showModal();refreshModels();refreshSkills();};
 function onSettingsBackdrop(event){
  if(event.target!==settings)return false;
  const {left,top,right,bottom}=settings.getBoundingClientRect();
@@ -331,7 +333,7 @@ async function makeReview(proposal,flow,photoJob){
    if(continuationApproved){
     followUp={
      input:{...flow.input,date:localDate(),text:flow.input.text||'继续完成刚才照片中的请求。',history:[],photo:null},
-     options:{skills:flow.options.skills,allowRead:flow.options.allowRead,applied:result.operations.map(operation=>operation.mode)},
+     options:{...flow.options,applied:result.operations.map(operation=>operation.mode)},
      steps:[]
     };
     resume=true;
@@ -540,7 +542,7 @@ composer.onsubmit=async e=>{
   }
   const photo=files.length===1?await jpeg(files[0]):null,{turns,skills}=updateContext();
   const input={mode:'chat',text,photo,date:localDate(),history:turns};
-  const options={skills,allowRead:composer.elements.allowRead.checked};
+  const options={model:readChatModel(workspace.finance).id,skills,allowRead:composer.elements.allowRead.checked};
   if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
  }catch(err){report(err);}

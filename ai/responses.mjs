@@ -1,6 +1,11 @@
 import {resultSchema,activitySchema,purchaseSchema,financeSchema,chatSchema,ledgerReadSchema,foodHistoryReadSchema,expenseSummaryReadSchema,validFinanceEntry,validInput,matches} from '../health/contract.mjs';
 
-export const MODEL = 'gpt-6-luna';
+export const CHAT_MODELS=[
+ {id:'gpt-6-luna',name:'Luna',title:'GPT-6 Luna',effort:'none'},
+ {id:'gpt-6.1-terra',name:'Terra',title:'GPT-6.1 Terra',effort:'none'},
+ {id:'gpt-6.2-sol',name:'Sol',title:'GPT-6.2 Sol',effort:'low'}
+];
+export const MODEL = CHAT_MODELS[0].id;
 export const OPENAI_URL = 'https://api.openai.com/v1/responses';
 const financeInstructions = `收支记账：输出一笔人民币收支供用户核对。
 只提取用户明确已经发生的收支与金额，金额必须来源于原文。按提供的今天日期理解昨天等相对日期，未给日期按今天。
@@ -37,7 +42,7 @@ const expenseSummaryTool={type:'function',name:'read_expense_summary',strict:tru
 const readTools=[ledgerTool,foodHistoryTool,expenseSummaryTool];
 const toolScopes={read_food_history:'foods',read_expense_summary:'expense_summary'};
 
-export function modelRequest(data,{model=MODEL,maxOutput,effort='none',skills=[],allowRead=false,continuation=[],applied=[],photoPosition}={}) {
+export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find(choice=>choice.id===model)?.effort??'none',skills=[],allowRead=false,continuation=[],applied=[],photoPosition}={}) {
   if (!validInput(data)) throw Error('请检查文字、照片和所选字段');
   const finance=data.mode==='finance';
   const task={

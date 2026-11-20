@@ -354,6 +354,7 @@ try {
   const batchText='盘点合成新食品为 90g，补记 43 元午餐，再查更新后的库存';
   let resumeAttempts=0;
   let firstPhotoAttempts=0;
+  let expectedModel='gpt-6-luna';
   let releaseDelayed,markDelayed;
   const delayedStarted=new Promise(resolve=>{markDelayed=resolve;});
   const aiIcon=await page.locator('.topbar-actions [data-open-ai] svg').innerHTML();
@@ -363,6 +364,8 @@ try {
     if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
     assert.equal(route.request().headers().authorization,'Bearer '+testKey);
     const body=route.request().postDataJSON(),content=body.input[0].content;
+    assert.equal(body.model,expectedModel);
+    assert.equal(body.reasoning.effort,expectedModel==='gpt-6.2-sol'?'low':'none');
     assert.equal(body.store,false);assert.equal(body.stream,true);assert.equal(body.text.format.strict,true);
     const input=JSON.parse(content[0].text);
     const connectionTest=input.text.startsWith('这是连接测试');
@@ -400,7 +403,7 @@ try {
     if(input.text==='模拟额度不足'){
       assert.equal(body.tools,undefined);
       return route.fulfill({status:429,headers:{...headers,'Access-Control-Expose-Headers':'X-Request-ID','X-Request-ID':'req_fixture'},
-        json:{error:{code:'insufficient_quota'}}});
+        json:{error:{code:'credit_balance_exhausted'}}});
     }
     const fixtureReply={status:'completed',output:[{type:'message',content:[{type:'output_text',
       text:'{"reply":"连接正常。","proposal":null}'}]}]};
@@ -583,13 +586,28 @@ try {
   await history.waitFor({state:'hidden'});
   await chat.getByText('财务记录已保存。',{exact:true}).waitFor();
   await openAssistantSettings();
+  const modelPanel=assistantSettings.locator('#assistant-model-panel');
+  await modelPanel.getByText('模型与用量',{exact:true}).click();
+  assert.equal(await modelPanel.getByRole('button',{name:'Luna',exact:true}).getAttribute('aria-pressed'),'true');
+  assert.equal(await modelPanel.getByRole('link',{name:'API 余额'}).getAttribute('href'),
+    'https://platform.openai.com/settings/organization/billing/overview');
+  assert.equal(await modelPanel.getByRole('link',{name:'用量明细'}).getAttribute('href'),'https://platform.openai.com/usage');
+  await modelPanel.getByRole('button',{name:'Terra',exact:true}).click();
+  expectedModel='gpt-6.1-terra';
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByRole('button',{name:'发送连接测试'}).click();
-  await access.getByText('已收到 OpenAI 回复：连接正常。',{exact:true}).waitFor();
+  await access.getByText('GPT-6.1 Terra · 连接正常。',{exact:true}).waitFor();
+  await modelPanel.getByRole('button',{name:'Sol',exact:true}).click();
+  expectedModel='gpt-6.2-sol';
+  await closeAssistantSettings();
+  await page.reload();
+  await openAssistantSettings();
+  await modelPanel.getByText('模型与用量',{exact:true}).click();
+  assert.equal(await modelPanel.getByRole('button',{name:'Sol',exact:true}).getAttribute('aria-pressed'),'true');
   await closeAssistantSettings();
   await form.locator('[name=allowRead]').uncheck();
   await say('模拟额度不足');
-  await form.getByText(/额度或余额不足.*429.*req_fixture/).waitFor();
+  await form.getByText(/预付余额已用完.*429.*req_fixture/).waitFor();
   assert.equal(await form.getByRole('textbox',{name:'消息'}).inputValue(),'模拟额度不足');
   await say('模拟等待');
   await delayedStarted;
@@ -601,8 +619,9 @@ try {
     const fetchRequest=window.fetch.bind(window);
     window.fetch=(url,options)=>{
       if(url!=='https://api.openai.com/v1/responses')return fetchRequest(url,options);
-      const input=JSON.parse(JSON.parse(options.body).input[0].content[0].text);
+      const payload=JSON.parse(options.body),input=JSON.parse(payload.input[0].content[0].text);
       if(input.text!=='模拟流式回复')return fetchRequest(url,options);
+      if(payload.model!=='gpt-6.2-sol'||payload.reasoning.effort!=='low')throw Error('Sol model settings not applied');
       const encoder=new TextEncoder();
       return Promise.resolve(new Response(new ReadableStream({start(controller){
         const emit=event=>controller.enqueue(encoder.encode('data: '+JSON.stringify(event)+'\n\n'));
@@ -696,6 +715,7 @@ try {
   assert.deepEqual(await photographedPortions(),{qty:2,portions:[0.3,0.7]});
   console.log('PASS separate photos, individual retry, candidate confirmation and same-name one-off intake');
   await openAssistantSettings();
+  await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await closeAssistantSettings();
   await say('未授权的请求');
