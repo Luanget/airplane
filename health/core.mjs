@@ -7,7 +7,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 export const NUTRIENTS = ['kcal', 'protein', 'carbs', 'fat', 'sodium'];
 const NUTRIENT_KEYS = {kcal:'kcal', protein:'蛋白质(g)', carbs:'碳水(g)', fat:'脂肪(g)', sodium:'钠(mg)'};
-const val = x => (x === null || x === undefined || x === '' ? null : Number(x));
+const val = x => (typeof x === 'number' || typeof x === 'string' && x.trim() ? Number(x) : null);
 export const numeric = x => { const n = val(x); return n !== null && Number.isFinite(n) ? n : null; };
 export const zero = x => numeric(x) ?? 0;
 export const round = (v, digits=1) => Number((v || 0).toFixed(digits));
@@ -48,24 +48,39 @@ export function normalizeInventory(row,index){
 export function normalizeLedger(raw){
  if (!raw || !raw.tables || !Array.isArray(raw.tables.food_events) || !Array.isArray(raw.tables.weight_events) || !Array.isArray(raw.tables.food_inventory)) throw new Error('不是可识别的 health_tracker 主账 JSON（缺少必要表）');
  const result = newState();const t=raw.tables;
+ for (const key of ['food_events','weight_events','food_inventory','daily_summaries','energy_balance','activity_events','rules']) {
+  if (t[key] != null && (!Array.isArray(t[key]) || t[key].some(row=>!row || typeof row!=='object' || Array.isArray(row)))) throw Error('主账表格格式无效');
+ }
  // Preserve the original source in the local/private backup for lossless archival.
  // Historical medical/audit/purchase details are not used by live UI calculations.
  result.legacy.sourceSnapshot = raw;
  result.importedAt=new Date().toISOString();
  result.importInfo={sourceVersion:String(raw.handoff_version||raw.schema_version||'unknown'),canonicalSource:String(raw.canonical_source||''),originalCounts:Object.fromEntries(['food_events','weight_events','activity_events','daily_summaries','energy_balance','food_inventory'].map(k=>[k, t[k]?.length || 0]))};
- result.legacy.foods=(t.food_events || []).map((r,i)=>({ id:`legacy-food-${i}`,date:String(r['日期']||''),time:String(r['时间']||''),meal:String(r['餐次']||''),name:String(r['食物/饮品']||''),foodId:String(r['食品ID']||''),portion:String(r['份量/重量']||''),status:String(r['状态']||''),actual:isActualStatus(r['状态'])&&validDate(String(r['日期']||'')),nutrition:Object.fromEntries(Object.entries(NUTRIENT_KEYS).map(([k,v])=>[k,zero(r[v])])),cost:null,source:'legacy',qualityFlag:validDate(String(r['日期']||''))?null:'missing_date' }));
+ result.legacy.foods=(t.food_events || []).map((r,i)=>({ id:`legacy-food-${i}`,date:String(r['日期']||''),time:String(r['时间']||''),meal:String(r['餐次']||''),name:String(r['食物/饮品']||''),foodId:String(r['食品ID']||''),portion:String(r['份量/重量']||''),status:String(r['状态']||''),actual:isActualStatus(r['状态'])&&validDate(String(r['日期']||'')),nutrition:Object.fromEntries(Object.entries(NUTRIENT_KEYS).map(([k,v])=>[k,numeric(r[v])])),cost:null,source:'legacy',qualityFlag:validDate(String(r['日期']||''))?null:'missing_date' }));
  result.legacy.weights=(t.weight_events||[]).map((r,i)=>({id:`legacy-weight-${i}`,date:String(r['日期']||''),kg:numeric(r['数值']),time:String(r['时间']||''),trendStatus:String(r['纳入趋势']||''),source:'legacy'})).filter(r=>validDate(r.date));
  result.legacy.activities=(t.activity_events||[]).map((r,i)=>({id:`legacy-activity-${i}`,date:String(r['日期']||''),name:String(r['项目']||r['类别']||''),km:numeric(r['距离(km)']),minutes:numeric(r['时长(min)']),kcal:numeric(r['活动消耗估计(kcal)']),status:String(r['状态']||''),source:'legacy',includedInBase:!/^(?:户外单车|夜骑|长骑)/.test(String(r['类别']||''))})).filter(r=>validDate(r.date));
- result.legacy.inventory=(t.food_inventory||[]).map(normalizeInventory);
+ result.legacy.inventory=(t.food_inventory||[]).map(normalizeInventory).filter((item,index,items)=>items.findIndex(x=>x.id===item.id)===index);
  for (const r of t.daily_summaries||[]){const d=String(r['日期']||'');if (!validDate(d)) continue;result.legacy.daily[d]={
   date:d, nutrition:{kcal:numeric(r.kcal),protein:numeric(r['蛋白质(g)']),carbs:numeric(r['碳水(g)']),fat:numeric(r['脂肪(g)']),sodium:numeric(r['钠(mg)'])}, note:String(r['记录完整性']||'')
  }; }
  for (const r of t.energy_balance||[]){const d=String(r['饮食日期']||'');if (!validDate(d))continue;result.legacy.energy[d]={date:d,intake:numeric(r['摄入(kcal)']),tdee:numeric(r['估计总消耗(kcal)']),deficit:numeric(r['当日缺口(kcal)']),status:String(r['结算状态']||'')};}
  result.legacy.rules=(t.rules||[]).filter(r=>r['状态']==='active').map(r=>({key:r.Key,desc:r['说明'],value:r['当前值']}));
- if (numeric(t.cycle_parameters?.['无运动基线TDEE']))result.settings.baselineTdee=Number(t.cycle_parameters['无运动基线TDEE']);
- if (numeric(t.cycle_parameters?.['6天目标缺口']))result.settings.cycleTarget=Number(t.cycle_parameters['6天目标缺口']);
- if (Number.isInteger(numeric(t.cycle_parameters?.['周期天数'])) && +t.cycle_parameters['周期天数']>=1 && +t.cycle_parameters['周期天数']<=31)result.settings.cycleDays=Number(t.cycle_parameters['周期天数']);
- const anchor=String(t.cycle_parameters?.['周期日期']||'').slice(0,10);if(validDate(anchor))result.settings.cycleAnchor=anchor;
+ const params=t.cycle_parameters ?? {};
+ const findSetting=(...keys)=> {
+  for (const key of keys) {
+   const value=numeric(params[key] ?? result.legacy.rules.find(r=>r.key===key)?.value);
+   if (value!==null && value>0) return value;
+  }
+  return null;
+ };
+ for (const [name,keys] of Object.entries({
+   baselineTdee:['无运动基线TDEE','baselineTdee'],
+   calorieTarget:['日摄入参考','日摄入参考(kcal)','每日摄入参考','每日摄入参考(kcal)','每日热量参考','热量目标','calorieTarget'],
+   cycleTarget:['周期目标缺口','目标缺口(kcal)','cycleTarget', ...Object.keys(params).filter(k=>/^\d+天目标缺口/.test(k))]
+ })) result.settings[name]=findSetting(...keys) ?? result.settings[name];
+ const days=findSetting('周期天数','cycleDays');
+ if (Number.isInteger(days) && days<=31) result.settings.cycleDays=days;
+ const anchor=String(params['周期日期']||params['起始日期']||params.cycleAnchor||'').slice(0,10);if(validDate(anchor))result.settings.cycleAnchor=anchor;
  return result;
 }
 export function validateAppState(state){
@@ -85,24 +100,53 @@ export function validateAppState(state){
    && rows(l.foods, food) && rows(m.foods, x => food(x) && dated(x))
    && rows(l.weights, dated) && rows(m.weights, dated) && rows(l.activities, dated) && rows(m.activities, dated)
    && rows(l.inventory, sku) && rows(m.inventory ?? [], sku) && rows(m.stockMoves, x => dated(x) && Number.isFinite(x.delta))
+   && rows(m.batches ?? [], x=>typeof x.id==='string' && typeof x.foodId==='string' && dated(x) && Number.isFinite(x.quantity) && x.quantity>0 && (x.costCents==null || Number.isSafeInteger(x.costCents) && x.costCents>=0))
+   && rows(m.templates ?? [], x=>typeof x.name==='string' && Array.isArray(x.items) && x.items.every(food))
+   && rows(m.purchases ?? [], x=>typeof x.id==='string' && dated(x) && Array.isArray(x.items) && Number.isSafeInteger(x.totalCents) && x.totalCents>=0)
+   && (m.edits==null || object(m.edits) && ['foods','weights','activities'].every(k=>m.edits[k]==null || object(m.edits[k]) && Object.values(m.edits[k]).every(x=>x===null || object(x) && (k!=='foods' || food(x)) && dated(x))))
    && object(l.daily) && Object.values(l.daily).every(x => object(x?.nutrition))
    && object(l.energy) && Object.values(l.energy).every(object)
    && (state.revision === undefined || (Number.isSafeInteger(state.revision) && state.revision >= 0));
 }
-export function sampleNutrientSum(items){return Object.fromEntries(NUTRIENTS.map(k=>[k,round(items.reduce((s,e)=>s+zero(e?.nutrition?.[k]),0),2)]));}
-export function foodsForDay(state,date){return [...state.legacy.foods.filter(e=>e.actual && e.date===date),...state.local.foods.filter(e=>e.status==='actual'&&e.date===date)];}
-export function dayIntake(state,date){
- const manual=state.local.foods.filter(e=>e.status==='actual'&&e.date===date);
- const legacy=state.legacy.daily[date]?.nutrition;
- const legacyFoods=state.legacy.foods.filter(e=>e.actual&&e.date===date);
- const historical = state.legacy.energy[date];
- const legacyTotals=legacy && numeric(legacy.kcal)!==null ? legacy : legacyFoods.length || numeric(historical?.intake)===null ? sampleNutrientSum(legacyFoods) : {kcal:historical.intake};
- const totals=sampleNutrientSum(manual);
- const result=Object.fromEntries(NUTRIENTS.map(k=>[k,(numeric(legacyTotals[k])===null && !manual.length) ? null : round(zero(legacyTotals[k])+zero(totals[k]),2)]));
- const reported = numeric(legacy?.kcal)!==null || legacyFoods.length>0 || manual.length>0 || numeric(historical?.intake)!==null;
- return {reported,totals:result,legacySource:numeric(legacy?.kcal)!==null?'daily_summary':'item_sum',manualCount:manual.length};
+export function sampleNutrientSum(items){
+ return Object.fromEntries(NUTRIENTS.map(k=>{
+  const known=items.map(e=>numeric(e.nutrition?.[k])).filter(v=>v!==null);
+  return [k,known.length?round(known.reduce((sum,v)=>sum+v,0),2):null];
+ }));
 }
-export function mergedWeights(state){return [...state.legacy.weights,...state.local.weights];}
+export function events(state,key){
+ const edits=state.local.edits?.[key] ?? {};
+ return [...state.legacy[key].map(e=>Object.hasOwn(edits,e.id)?edits[e.id]:e).filter(Boolean),...state.local[key]];
+}
+const actualFood=e=>e.status==='actual' || (e.source==='legacy' && e.actual);
+export function foodsForDay(state,date){return events(state,'foods').filter(e=>e.date===date&&actualFood(e));}
+export function dayIntake(state,date){
+ const legacy=state.legacy.foods.filter(e=>e.date===date&&e.actual);
+ const summary={...state.legacy.daily[date]?.nutrition};
+ summary.kcal??=state.legacy.energy[date]?.intake;
+ const effective=foodsForDay(state,date);
+ const originalIds=new Set(legacy.map(e=>e.id));
+ const changes=effective.filter(e=>!originalIds.has(e.id) || Object.hasOwn(state.local.edits?.foods ?? {},e.id));
+ const edits=state.local.edits?.foods ?? {};
+ const removed=legacy.filter(e=>Object.hasOwn(edits,e.id));
+ const summed=sampleNutrientSum(effective);
+ const delta=sampleNutrientSum(changes);
+ const subtract=sampleNutrientSum(removed);
+ const incomplete=[];
+ const totals=Object.fromEntries(NUTRIENTS.map(k=>{
+  const base=numeric(summary[k]);
+  if ((base===null ? effective : changes).some(e=>numeric(e.nutrition?.[k])===null) ||
+      (base!==null && removed.some(e=>numeric(e.nutrition?.[k])===null))) incomplete.push(k);
+  const adjusted=base===null?summed[k]:round(base+zero(delta[k])-zero(subtract[k]),2);
+  if(adjusted!==null && adjusted<0){if(!incomplete.includes(k))incomplete.push(k);return [k,summed[k]];}
+  return [k,adjusted];
+ }));
+ const costs=effective.map(e=>numeric(e.cost));
+ return {reported:effective.length>0 || numeric(summary.kcal)!==null,totals,incomplete,
+  cost:costs.some(x=>x!==null)?round(costs.reduce((a,b)=>a+zero(b),0),2):null,
+  costPartial:costs.some(x=>x===null)};
+}
+export function mergedWeights(state){return events(state,'weights');}
 export function latestWeights(state){
  const lastByDate=new Map();
  for (const w of mergedWeights(state)){
@@ -117,14 +161,21 @@ export function weightTrend(state){
  return {last:all[n-1]||null,points:all,last7:avg(last),previous7:previous.length===7?avg(previous):null,delta:previous.length===7?round(avg(last)-avg(previous),3):null};
 }
 export function energyForDay(state,date,today){
- const hasManual=state.local.foods.some(e=>e.date===date&&e.status==='actual') || state.local.activities.some(e=>e.date===date);
- const legacy=state.legacy.energy[date];const hasLegacy=!!legacy&&numeric(legacy.intake)!==null;
+ const legacy=state.legacy.energy[date];
  const food=dayIntake(state,date);
- if(!food.reported && !hasLegacy)return {date,reported:false,closed:false,deficit:null,intake:null,tdee:null,source:'missing'};
- const manualAdditional=state.local.activities.filter(e=>e.date===date&&!e.includedInBase).reduce((s,e)=>s+zero(e.kcal),0);
- const intake=food.reported?zero(food.totals.kcal):zero(legacy?.intake);
- const tdee=(numeric(legacy?.tdee) ?? (state.settings.baselineTdee + state.legacy.activities.filter(e=>e.date===date && !e.includedInBase && !/计划|取消|作废/.test(e.status)).reduce((sum,e)=>sum+zero(e.kcal),0))) + manualAdditional;
- return {date,reported:true,closed:date<today,intake,tdee,deficit:round(tdee-intake,2),source:hasLegacy?'imported_energy_model':'base_tdee_estimate',hasManual};
+ const activities=events(state,'activities').filter(e=>e.date===date&&!/计划|取消|作废/.test(e.status ?? ''));
+ const totals=activities.filter(e=>e.energyKind==='total' && numeric(e.kcal)!==null);
+ const deviceTotal=numeric(totals.at(-1)?.kcal);
+ const extra=e=>!e.includedInBase && e.energyKind!=='total' && !/计划|取消|作废/.test(e.status ?? '')?zero(e.kcal):0;
+ const importedTotal=numeric(legacy?.tdee);
+ const previouslyIncluded=state.legacy.activities.filter(e=>e.date===date).reduce((sum,e)=>sum+extra(e),0);
+ const currentExtra=activities.reduce((sum,e)=>sum+extra(e),0);
+ const tdee=deviceTotal ?? (importedTotal===null? state.settings.baselineTdee+currentExtra : importedTotal+currentExtra-previouslyIncluded);
+ const reported=food.totals.kcal!==null && !food.incomplete.includes('kcal') && !activities.some(e=>deviceTotal===null&&!e.includedInBase&&numeric(e.kcal)===null);
+ const intake=food.totals.kcal;
+ return {date,reported,closed:date<today&&reported,deficit:reported?round(tdee-intake,2):null,intake,tdee,
+  source:deviceTotal!==null?'device_total':importedTotal!==null?'imported_energy_model':'base_tdee_estimate'};
+
 }
 export function cycleForDate(state,date,today){
  const settings=state.settings;const anchor=validDate(settings.cycleAnchor)?settings.cycleAnchor:'2026-01-01';const days=Math.max(1,Number(settings.cycleDays)||6);
@@ -135,32 +186,125 @@ export function cycleForDate(state,date,today){
   deficit:sum,goal,progress:round(sum/goal*100,1),fatEquivalent:round(sum/7700,3),remaining:round(goal-sum,2)};
 }
 export function inventoryWithMoves(state){
- const adjusted=new Map();for(const m of state.local.stockMoves){if(!adjusted.has(m.foodId)) adjusted.set(m.foodId,0);adjusted.set(m.foodId,adjusted.get(m.foodId)+zero(m.delta));}
- return [...state.legacy.inventory, ...(state.local.inventory || [])].map(i=>({...i,qty:i.qty===null?null:round(i.qty+(adjusted.get(i.id)||0),3)}));
-}
-export function makeId(prefix='local'){return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;}
-export function addFood(state,{date,meal,name,portion,kcal,protein,carbs,fat,sodium,cost,foodId,stockQty,status='actual'}){
- if(!validDate(date)||!name?.trim()) throw new Error('请输入有效日期和食物名称');
- for(const x of [kcal,protein,carbs,fat,sodium]) if(numeric(x)===null||Number(x)<0) throw new Error('热量与营养数值必须是非负数字');
- const entry={id:makeId('food'),source:'manual',date,meal, name:name.trim(),portion:portion||'',status,
- nutrition:{kcal:+kcal,protein:+protein,carbs:+carbs,fat:+fat,sodium:+sodium},cost:numeric(cost),foodId:foodId||null,createdAt:new Date().toISOString()};
- const qty=numeric(stockQty);
- if(status==='actual'&&foodId&&qty!==null&&qty>0){
-   const item=inventoryWithMoves(state).find(x=>x.id===foodId);
-   if(!item)throw new Error('找不到库存商品');
-   if(item.qty!==null && item.qty + 1e-5 < qty)throw new Error(`库存不足：仅剩${item.qty} ${item.unit}`);
-   state.local.stockMoves.push({id:makeId('stock'),foodId,delta:-qty,reason:`进食：${name}`,date,linkedFoodId:entry.id,createdAt:new Date().toISOString()});
+ const adjusted=new Map();
+ const opened=new Set();
+ for(const move of state.local.stockMoves){
+  if(move.opening)opened.add(move.foodId);
+  adjusted.set(move.foodId,(adjusted.get(move.foodId)??0)+move.delta);
  }
- state.local.foods.push(entry);
+ return [...state.legacy.inventory,...(state.local.inventory??[])].map(item=>({
+  ...item,qty:item.qty===null&&!opened.has(item.id)?null:round(zero(item.qty)+(adjusted.get(item.id)??0),6)
+ }));
+}
+export function batchBalances(state,foodId){
+ const balances=new Map();
+ for (const m of state.local.stockMoves) if (m.batchId) balances.set(m.batchId,(balances.get(m.batchId)??0)+m.delta);
+ return (state.local.batches??[]).filter(b=>!foodId||b.foodId===foodId)
+   .map(b=>({...b,remaining:round(balances.get(b.id)??0,6)}))
+   .sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
+}
+export function makeId(prefix='local'){return prefix+'-'+crypto.randomUUID();}
+
+function assertBalances(state,foodId) {
+ const sku=inventoryWithMoves(state).find(x=>x.id===foodId);
+ const batches=batchBalances(state,foodId);
+ if (batches.some(b=>b.remaining<0) || sku?.qty!==null && sku?.qty < round(batches.reduce((n,b)=>n+b.remaining,0),6))
+  throw Error('库存不足，或该批次已有消耗记录');
+}
+export function allocateStock(state,foodId,qty,batchId) {
+ const sku=inventoryWithMoves(state).find(x=>x.id===foodId);
+ if(!sku||sku.qty===null)throw Error('请先确认食品和库存实盘数量');
+ if(qty>sku.qty+1e-6)throw Error('库存不足，当前剩余 '+sku.qty+' '+sku.unit);
+ const allocations=[];
+ let remaining=qty;
+ const batches=batchBalances(state,foodId);
+ // Previously imported stock has no batch date. Take it before dated lots.
+ const loose=round(sku.qty-batches.reduce((n,b)=>n+b.remaining,0),6);
+ if(!batchId && loose>0){
+  const part=Math.min(remaining,loose);
+  const unitPrice=numeric(sku.pricePerUnit);
+  allocations.push({qty:part,costCents:unitPrice!==null&&sku.priceBasis===sku.unit?Math.round(part*unitPrice*100):null});
+  remaining=round(remaining-part,6);
+ }
+ for(const b of batches){
+  if(remaining<=0)break;
+  if(b.remaining<=0 || batchId && b.id!==batchId)continue;
+  const part=Math.min(remaining,b.remaining);
+  // Allocate the remaining cost. Reversals return exactly the original cents.
+  const allocated=state.local.stockMoves.filter(m=>m.batchId===b.id&&m.delta<0).reduce((n,m)=>n+(m.costCents??0),0);
+  const cents=b.costCents==null?null:Math.round(part/b.remaining*(b.costCents-allocated));
+  allocations.push({batchId:b.id,qty:part,costCents:cents});
+  remaining=round(remaining-part,6);
+ }
+ if(remaining>1e-6)throw Error('选择的批次余量不足');
+ return allocations;
+}
+
+export function addFood(state,fields,id) {
+ const {date,meal,name,portion,cost,foodId,stockQty,batchId,status='actual',quality='label',uncertainty='',amount}=fields;
+ if(!validDate(date)||!name?.trim()||!['actual','plan','cancelled'].includes(status))throw Error('请检查日期、食物名称和状态');
+ const nutrition=Object.fromEntries(NUTRIENTS.map(k=>[k,numeric(fields[k])]));
+ if(Object.values(nutrition).some(x=>x!==null&&x<0))throw Error('营养数值不能为负');
+ const explicitCost=numeric(cost),qty=numeric(stockQty);
+ if (explicitCost<0 || qty<0)throw Error('成本和份量不能为负');
+ const previous=events(state,'foods').find(e=>e.id===id);
+ if(id && !previous)throw Error('记录已更新，请刷新');
+ const createdAt=previous?.createdAt ?? new Date().toISOString();
+ const entry={id:id??makeId('food'),source:'manual',date,meal,name:name.trim(),portion:portion||'',status,nutrition,
+  foodId:foodId||null,stockQty:qty,amount:numeric(amount),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost};
+ const oldMoves=state.local.stockMoves;
+ state.local.stockMoves=oldMoves.filter(m=>m.linkedFoodId!==entry.id);
+ try{
+  const affected=new Set(oldMoves.filter(m=>m.linkedFoodId===entry.id).map(m=>m.foodId));
+  if(status==='actual'&&foodId&&qty>0){
+   const parts=allocateStock(state,foodId,qty,batchId);
+   const cents=parts.some(p=>p.costCents===null)?null:parts.reduce((sum,p)=>sum+p.costCents,0);
+   entry.cost=explicitCost??(cents===null?null:cents/100);
+   for(const part of parts)state.local.stockMoves.push({id:makeId('stock'),foodId,delta:-part.qty,batchId:part.batchId,
+     date,linkedFoodId:entry.id,reason:'实际摄入',costCents:part.costCents,createdAt});
+   affected.add(foodId);
+  }
+  for(const affectedId of affected)assertBalances(state,affectedId);
+ }catch(err){state.local.stockMoves=oldMoves;throw err;}
+ if(previous?.id.startsWith('legacy-food-'))saveLegacyEdit(state,'foods',previous.id,entry);
+ else state.local.foods=[...state.local.foods.filter(e=>e.id!==entry.id),entry];
  return entry;
 }
-export function localStockChange(state,{foodId,delta,date,reason}){
- const item=inventoryWithMoves(state).find(x=>x.id===foodId);if(!item)throw new Error('未知食品');
- if(!validDate(date))throw Error('库存日期无效');
- if(numeric(delta)===null||Number(delta)===0)throw new Error('请输入非零库存变化');
- if(item.qty!==null && item.qty+Number(delta)<-1e-6)throw new Error('不能扣减超过现有库存');
- const e={id:makeId('stock'),foodId,delta:+delta,date,reason:reason||'手动盘点修正',createdAt:new Date().toISOString()};
- state.local.stockMoves.push(e);return e;
+function saveLegacyEdit(state,key,id,entry) {
+ ((state.local.edits??={})[key]??={})[id]=entry;
+}
+export function recordEvent(state,key,item,id) {
+ if(id && !events(state,key).some(e=>e.id===id))throw Error('记录已更新，请刷新');
+ const entry={...item,id:id??makeId(key),createdAt:new Date().toISOString(),source:'manual'};
+ if(id && state.legacy[key].some(e=>e.id===id))saveLegacyEdit(state,key,id,entry);
+ else state.local[key]=[...state.local[key].filter(e=>e.id!==entry.id),entry];
+ return entry;
+}
+export function deleteEvent(state,key,id) {
+ const moves=state.local.stockMoves.filter(m=>m.linkedFoodId===id);
+ if(key==='foods'){
+  const previous=state.local.stockMoves;
+  state.local.stockMoves=previous.filter(m=>m.linkedFoodId!==id);
+  try {for(const m of moves)assertBalances(state,m.foodId);}catch(err){state.local.stockMoves=previous;throw err;}
+ }
+ if(state.legacy[key].some(e=>e.id===id))saveLegacyEdit(state,key,id,null);
+ else state.local[key]=state.local[key].filter(e=>e.id!==id);
+}
+export function localStockChange(state,{foodId,delta,date,reason,batchId,count=false}){
+ const item=inventoryWithMoves(state).find(x=>x.id===foodId);
+ const value=numeric(delta);
+ if(!item||!validDate(date)||value===null || count&&value<0)throw Error('请检查库存变更字段');
+ if(item.qty===null && !count)throw Error('请先登记实盘库存');
+ const opening=item.qty===null;
+ const knownMoves=opening?state.local.stockMoves.filter(m=>m.foodId===foodId).reduce((n,m)=>n+m.delta,0):0;
+ const change=count?round(value-(item.qty??knownMoves),6):value;
+ if(change===0&&!opening)throw Error('库存数量没有变化');
+ const parts=change<0?allocateStock(state,foodId,-change,batchId).map(p=>({delta:-p.qty,batchId:p.batchId,costCents:p.costCents})): [{delta:change}];
+ const actionId=makeId('movement');
+ const moves=parts.map(p=>({...p,id:makeId('stock'),actionId,foodId,date,opening,reason:reason||(count?'盘点':'库存调整'),createdAt:new Date().toISOString()}));
+ state.local.stockMoves.push(...moves);
+ try {assertBalances(state,foodId);}catch(err){state.local.stockMoves.splice(-moves.length);throw err;}
+ return moves[0];
 }
 export function suggestNutritionByInventory(item,amount){
  const a=numeric(amount);if(a===null||a<=0)return null;

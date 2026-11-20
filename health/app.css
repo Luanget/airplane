@@ -34,3 +34,9 @@ textarea { display:block; width:100%; padding:10px; margin-top:6px; border:1px s
   .notice-light,.notice-info { background:var(--blue-light) }
   .btn-danger,code,.tag,.cycle-track { background:var(--surface); color:var(--ink) }
 }
+
+.tabs { grid-template-columns:repeat(6,minmax(0,1fr)); gap:2px }
+.tabs .tab { min-width:0; min-height:44px }
+#inventory-list button { text-align:left }
+#batch-list p,#stock-alerts { padding:.4rem 0 }
+#use-template,#save-template { align-self:center; min-height:42px }

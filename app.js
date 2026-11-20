@@ -1,13 +1,10 @@
+import {RECOVERY_KEY,STORAGE_KEY,DRAFT_KEY,PRE_RESTORE_KEY,validateFinanceBackup} from './finance-storage.mjs';
 import {attachFinanceAssistant} from './ai/finance.mjs';
 import {checkForAppUpdate} from './updates.mjs';
 
 // STORAGE_KEY is intentionally permanent. Never rename it in a normal app update.
 // Keeping one stable key lets new program versions reuse the user's existing ledger.
 const financeStore = window.airplaneAccount.finance;
-const STORAGE_KEY = 'airplane-pwa-v1';
-const RECOVERY_KEY = 'airplane-pwa-recovery-v1';
-const DRAFT_KEY = 'airplane-transaction-draft-v1';
-const PRE_RESTORE_KEY = 'airplane-pre-restore-v1';
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const SCHEMA_VERSION = 4;
 const APP_VERSION = '0.8.1';
@@ -1202,21 +1199,7 @@ function removeCategory(id,type,onDone){
 function downloadBlob(filename,content,type){ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
 function makeBackup(payload=data,extra={}){return {app:'Airplane',format:'airplane-backup',schemaVersion:SCHEMA_VERSION,exportedAt:new Date().toISOString(),...extra,data:payload};}
 function exportJSON(){ downloadBlob(`Airplane-backup-${localISO()}.json`,JSON.stringify(makeBackup(),null,2),'application/json');toast('完整备份已导出'); }
-function validatedBackupData(parsed){
-  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('not an object');
-  let payload=null;
-  // Current backups carry an explicit Airplane marker. A recognizable legacy
-  // raw ledger is also accepted, but arbitrary JSON such as {} is rejected.
-  if(parsed.app==='Airplane'&&parsed.data&&typeof parsed.data==='object'&&!Array.isArray(parsed.data))payload=parsed.data;
-  else if(Array.isArray(parsed.transactions)&&Array.isArray(parsed.categories)&&parsed.budgets&&typeof parsed.budgets==='object'&&!Array.isArray(parsed.budgets))payload=parsed;
-  else throw new Error('not an Airplane backup');
-  if(!Array.isArray(payload.transactions)||!Array.isArray(payload.categories)||payload.categories.length<1)throw new Error('missing ledger arrays');
-  if(!payload.budgets||typeof payload.budgets!=='object'||Array.isArray(payload.budgets))throw new Error('invalid budgets');
-  if(!payload.categories.every(c=>c&&typeof c==='object'&&typeof c.id==='string'&&c.id&&typeof c.name==='string'&&c.name&&['income','expense'].includes(c.type)))throw new Error('invalid categories');
-  if(!payload.transactions.every(t=>t&&typeof t==='object'&&['income','expense'].includes(t.type)&&Number.isFinite(Number(t.amount))&&Number(t.amount)>0&&typeof t.date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(t.date)))throw new Error('invalid transactions');
-  if(!Object.values(payload.budgets).every(v=>Number.isFinite(Number(v))&&Number(v)>=0))throw new Error('invalid budget values');
-  return normalizeData(structuredClone(payload));
-}
+function validatedBackupData(parsed){return normalizeData(validateFinanceBackup(parsed));}
 function savePreRestoreSnapshot(){
   financeStore.setItem(PRE_RESTORE_KEY,JSON.stringify(makeBackup(structuredClone(data),{snapshotType:'pre-restore',savedAt:new Date().toISOString()})));
 }

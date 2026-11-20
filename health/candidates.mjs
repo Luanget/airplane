@@ -102,9 +102,8 @@ export function confirmItems(current, candidates, date, meal) {
       localStockChange(next,{date,foodId:id,delta:(stockQty ?? c.amount)*(c.action==='add'?1:-1),reason:'确认智能候选'});
     } else {
       if (c.action === 'eat' && sku && stockQty === null) throw Error('无法换算扣库数量，请调整单位或选择自定义食物');
-      if (Object.values(nutrition).some(v => v === null)) throw Error('营养参数或换算规格不全，请补全候选后确认');
       const entry = addFood(next,{date,meal,name:sku?.name ?? c.name,portion:`${c.amount} ${c.unit}`,
-        ...nutrition,foodId:sku?.id,stockQty,status:c.action==='plan'?'plan':'actual'});
+        ...nutrition,foodId:sku?.id,stockQty,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
       entry.source = 'confirmed-assistant';
       entry.uncertainty = c.uncertainty;
     }

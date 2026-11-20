@@ -1,4 +1,4 @@
-const SW_VERSION = '34';
+const SW_VERSION = '35';
 const scope = self.registration.scope;
 const prefix = 'airplane-shell:' + new URL(scope).pathname + ':';
 const CACHE = prefix + SW_VERSION;
@@ -6,7 +6,7 @@ const SHELL = [
   './index.html','./styles.css','./app.js','./shared.css','./updates.mjs',
   './boot.mjs','./account.mjs','./vendor/nacl-fast.min.js','./manifest.webmanifest',
   './health/index.html','./health/app.css','./health/app.mjs','./health/core.mjs',
-  './health/storage.mjs','./health/assistant.mjs','./health/candidates.mjs',
+  './finance-storage.mjs','./health/backup.mjs','./health/inventory.mjs','./health/storage.mjs','./health/assistant.mjs','./health/candidates.mjs',
   './health/contract.mjs','./ai/responses.mjs','./ai/keys.mjs','./ai/client.mjs','./ai/finance.mjs','./ai/example.mjs',
   './icons/icon-192.png','./icons/icon-512.png','./icons/icon-512-maskable.png','./icons/apple-touch-icon.png'
 ];
