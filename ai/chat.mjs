@@ -101,14 +101,20 @@ historySearch.oninput=syncThreads;
 historyPanel.addEventListener('keydown',event=>{
  if(event.key==='Escape'){event.stopPropagation();openHistory(false);historyButton.focus();}
 });
-function bubble(role,text){
+function bubble(role,text,source){
  const p=document.createElement('p');p.className='chat-bubble '+role;p.textContent=text;
- transcript.append(p);thread.scrollTop=thread.scrollHeight;
+ transcript.append(p);
+ if(typeof source?.label==='string'&&typeof source.text==='string'){
+  const details=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');
+  details.className='chat-source';title.textContent=source.label;body.textContent=source.text;
+  details.append(title,body);transcript.append(details);
+ }
+ thread.scrollTop=thread.scrollHeight;
 }
-function append(role,text,carry=true){
- try{book.append(role,text,carry);}
+function append(role,text,carry=true,source){
+ try{book.append(role,text,carry,source);}
  catch{tell('浏览器空间不足，对话暂存于当前页面。');}
- start.hidden=true;bubble(role,text);syncThreads();updateContext();
+ start.hidden=true;bubble(role,text,source);syncThreads();updateContext();
 }
 function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;}
 function clearRead(){pending=null;readPanel.hidden=true;$('[data-read-preview]').textContent='';}
@@ -133,7 +139,7 @@ function renderThread(){
  const messages=book.current?.messages??[];
  transcript.replaceChildren();
  start.hidden=messages.length>0;
- for(const m of messages)if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text);
+ for(const m of messages)if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source);
  clearConsent();clearRead();clearReview();composer.elements.text.value='';resetPhoto();syncThreads();updateContext();lock();
 }
 function refreshSkill(){skillForm.elements.skill.value=workspace.readSkill().slice(0,320);updateContext();}
@@ -218,10 +224,10 @@ async function makeReview(proposal,today){
  thread.scrollTop=Math.max(0,thread.scrollTop+review.getBoundingClientRect().top-thread.getBoundingClientRect().top-88);
 }
 
-async function complete(response,today,usedLedger=false){
+async function complete(response,today,source){
  clearRead();clearReview();
- append('assistant',response.reply,!usedLedger);
  tell('');
+ append('assistant',response.reply,!source,source);
  try{await makeReview(response.proposal,today);}
  catch(err){clearReview();report(err);}
 }
@@ -230,12 +236,10 @@ function describeSummary(scope,summary){
  if(scope==='foods'){
   const rows=summary.foods.map(row=>[row.time,row.meal,row.name,row.portion].filter(Boolean).join(' · '));
   if(!rows.length)rows.push('没有匹配的实际饮食记录');
-  if(summary.more)rows.push('只发送前十条，可按食品名称进一步查询');
   return [displayDay(summary.date,true),...rows].join('\n');
  }
  const rows=summary.stock.map(row=>row.name+' · '+(row.qty??'数量未知')+' '+row.unit);
  if(!rows.length)rows.push('没有匹配的食品');
- if(summary.more)rows.push('只发送前四项');
  if(summary.today){
   const day=summary.today;
   rows.push('今日热量 '+(day.kcal??'未知')+' / '+day.kcalTarget+' kcal',
@@ -300,7 +304,8 @@ share.onclick=async()=>{
   if(scope==='foods'){
    try{book.setFoodDate(summary.date);}catch{}
   }
-  await complete(response,input.date,true);
+  const label=scope==='foods'?'查看本次饮食记录 · '+summary.foods.length+' 条':'查看本次查询数据';
+  await complete(response,input.date,{label,text:describeSummary(scope,summary)});
  }
  catch(err){report(err);}
  finally{busy=false;lock();}

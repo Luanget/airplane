@@ -193,7 +193,7 @@ try {
           arguments:'{"scope":"stock","query":"合成库存"}'}]}});
       }
       assert.equal(body.tool_choice,'none');
-      assert.deepEqual(JSON.parse(result.output),{stock:[{name:'合成库存',qty:4,unit:'包'}],more:false});
+      assert.deepEqual(JSON.parse(result.output),{stock:[{name:'合成库存',qty:4,unit:'包'}]});
       return route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',
         text:'{"reply":"合成库存还有 4 包。","proposal":null}'}]}]}});
     }
@@ -413,6 +413,8 @@ try {
   await chat.getByRole('button',{name:'发送摘要'}).click();
   await chat.getByText('记录里有燕麦 60 g、牛奶 250 g。',{exact:true}).waitFor();
   await page.reload();
+  await chat.getByText('查看本次饮食记录 · 2 条',{exact:true}).click();
+  await chat.locator('.chat-source').getByText(/牛奶 · 250 g/).waitFor();
   await say('牛奶那条改成 300g');
   await review.getByText('250 g → 300 g',{exact:true}).waitFor();
   assert.equal(await review.getByText('牛奶 500 → 450 g',{exact:true}).count(),1);

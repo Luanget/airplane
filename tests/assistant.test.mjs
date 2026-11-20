@@ -51,21 +51,48 @@ test('explicit gram and mL units require a defensible conversion',()=>{
   assert.throws(()=>confirmItems(state,[{...part,sku:'milk',amount:533,unit:'g'}],date,'早餐'));
   assert.equal(confirmItems(state,[{...part,sku:'milk',amount:533,unit:'mL'}],date,'早餐').local.foods[0].nutrition.kcal,533);
 });
-test('one-day food lookup sends a bounded summary with no IDs or other dates',async()=>{
+test('one-day food lookup sends every matching record and its full selected fields',async()=>{
  const state=newState(),previous=addDays(date,-1);
  for(let i=0;i<12;i++)addFood(state,{date,meal:'早餐',name:'牛奶 '+i,time:'08:10',portion:'250 g',kcal:155});
+ const last=state.local.foods.at(-1);
+ last.name+='（'+'原名称'.repeat(30)+'）';
+ last.portion+=' · '+'原份量描述'.repeat(10);
+ last.time='上午 8:10:15';
  addFood(state,{date:previous,name:'无关日期',portion:'250 g'});
  addFood(state,{date,name:'计划餐',portion:'100 g',status:'plan'});
  const summary=await readLedger({readHealth:async()=>state},{scope:'foods',date,query:''},date);
  assert.deepEqual(summary.foods[0],{name:'牛奶 0',portion:'250 g',meal:'早餐',time:'08:10'});
- assert.equal(summary.foods.length,10);assert.equal(summary.more,true);
+ assert.equal(summary.foods.length,12);
+ assert.deepEqual(summary.foods.at(-1),{name:last.name,portion:last.portion,meal:last.meal,time:last.time});
  assert.ok(!JSON.stringify(summary).includes('无关日期'));
  assert.ok(!JSON.stringify(summary).includes('计划餐'));
  assert.equal(summarizeFoodHistory(state,date,'牛奶 11').foods.length,1);
  const call={type:'function_call',name:'read_food_history',call_id:'fixture',arguments:JSON.stringify({date,query:'牛奶'})};
  const parsed=pendingLedgerRead({status:'completed',output:[call]});
  assert.deepEqual(parsed.args,{scope:'foods',date,query:'牛奶'});
+ const input={mode:'chat',text:'查饮食',date,photo:null,history:[]};
+ const request=modelRequest(input,{continuation:{item:parsed.item,summary}});
+ assert.deepEqual(JSON.parse(request.input.at(-1).output),summary);
+ assert.ok(!Object.hasOwn(request,'max_output_tokens'));
  await assert.rejects(readLedger({readHealth:async()=>state},{...parsed.args,date:addDays(date,1)},date));
+});
+test('inventory lookup preserves all matches and full names',async()=>{
+ const state=newState(),description='原标签'.repeat(20);
+ for(let n=0;n<7;n++){
+  const sku=saveSku(state,{name:'牛奶 '+n+description,unit:'g',basisUnit:'g',basisAmount:100});
+  sku.qty=n+1;
+ }
+ const {stock}=await readLedger({readHealth:async()=>state},{scope:'stock',query:'牛奶'},date);
+ assert.equal(stock.length,7);
+ assert.deepEqual(stock.at(-1),{name:'牛奶 6'+description,qty:7,unit:'g'});
+});
+test('food and purchase response schemas preserve all recognized items',()=>{
+ const items=Array.from({length:11},(_,i)=>({...part,name:'样品 '+i,weighing:null}));
+ const input={mode:'chat',text:'识别清单',date,photo:null,history:[]};
+ const schema=modelRequest(input).text.format.schema;
+ assert.ok(matches(schema,{reply:'已识别，等待核对',proposal:{mode:'entry',date,result:{note:'',items}}}));
+ assert.ok(matches(schema,{reply:'已识别，等待核对',proposal:{mode:'purchase',date,result:{note:'',total:null,
+  items:items.map(row=>({...row,action:'add',itemCost:null}))}}}));
 });
 test('food correction preserves the original entry and replaces its inventory allocation',()=>{
  const state=newState();

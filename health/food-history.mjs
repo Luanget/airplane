@@ -1,7 +1,6 @@
 import {normalizeClock} from '../calendar.mjs';
 import {NUTRIENTS,addFood,foodsForDay,inventoryWithMoves,numeric,round,validDate} from './core.mjs';
 
-export const FOOD_HISTORY_LIMIT=10;
 const normalize=s=>String(s??'').trim().toLowerCase();
 export function matchFoodRecords(state,date,query=''){
  const term=normalize(query);
@@ -11,10 +10,9 @@ export function matchFoodRecords(state,date,query=''){
 
 export function summarizeFoodHistory(state,date,query){
  const rows=matchFoodRecords(state,date,query);
- return {date,foods:rows.slice(0,FOOD_HISTORY_LIMIT).map(row=>({
-  name:row.name.slice(0,48),portion:String(row.portion??'').slice(0,40),
-  meal:String(row.meal??'').slice(0,12),time:normalizeClock(row.time)
- })),more:rows.length>FOOD_HISTORY_LIMIT};
+ return {date,foods:rows.map(row=>({
+  name:row.name,portion:String(row.portion??''),meal:String(row.meal??''),time:String(row.time??'')
+ }))};
 }
 
 const unitOf=unit=>({克:'g',毫升:'mL',ml:'mL',g:'g',袋:'包'})[normalize(unit)]??unit;

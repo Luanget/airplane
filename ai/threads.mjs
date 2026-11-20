@@ -13,12 +13,12 @@ export function threadBook(store){
   start(){active=null;save();},
   select(id){active=threads.find(thread=>thread.id===id)??null;save();},
   setFoodDate(date){if(active){active.foodDate=date;save();}},
-  append(role,text,carry=true){
+  append(role,text,carry=true,source){
    if(!active){
     active={id:crypto.randomUUID(),title:role==='user'?text.slice(0,24):'新对话',messages:[]};
     threads.unshift(active);
    }
-   active.messages.push({role,text,carry});
+   active.messages.push({role,text,carry,...(source?{source}:{})});
    active.updatedAt=new Date().toISOString();save();
   }
  };

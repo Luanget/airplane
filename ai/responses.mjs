@@ -45,8 +45,9 @@ export function modelRequest(data,{model=MODEL,maxOutput,effort='none',skill='',
   const tools=chat&&(allowRead||continuation)?{
     tools:[ledgerTool,foodHistoryTool],parallel_tool_calls:false,tool_choice:continuation?'none':'auto'
   }:{};
+  const outputLimit=maxOutput??(chat?null:4096);
   return {model, instructions:prompt, input, ...tools,store:false,
-    service_tier:'default',reasoning:{effort}, max_output_tokens:maxOutput??(chat?1800:4096),
+    service_tier:'default',reasoning:{effort},...(outputLimit===null?{}:{max_output_tokens:outputLimit}),
     text:{format:{type:'json_schema',name:task?.[0]??(finance?'transaction_candidate':'food_candidates'),strict:true,schema:task?.[1]??(finance?financeSchema:resultSchema)}}};
 }
 
@@ -56,7 +57,7 @@ export function pendingLedgerRead(response){
  const call=calls[0];
  const tool=[ledgerTool,foodHistoryTool].find(t=>t.name===call.name);
  if(response.status!=='completed'||calls.length!==1||!tool||
-    typeof call.call_id!=='string'||!call.call_id||typeof call.arguments!=='string'||call.arguments.length>1000)throw Error();
+    typeof call.call_id!=='string'||!call.call_id||typeof call.arguments!=='string')throw Error();
  const args=JSON.parse(call.arguments);
  if(!matches(tool.parameters,args))throw Error();
  return {args:call.name===foodHistoryTool.name?{...args,scope:'foods'}:args,

@@ -47,8 +47,7 @@ export async function readLedger(workspace,args,today){
  const state=await workspace.readHealth(),query=args.query.trim().toLowerCase();
  const inventory=inventoryWithMoves(state).filter(s=>s.active&&(query?s.name?.toLowerCase().includes(query):args.scope==='stock'||s.qty>0))
   .sort((a,b)=>Number(b.name?.toLowerCase()===query)-Number(a.name?.toLowerCase()===query));
- const result={stock:inventory.slice(0,4).map(s=>({name:s.name.slice(0,48),qty:s.qty??null,unit:s.unit.slice(0,12)})),
-  more:inventory.length>4};
+ const result={stock:inventory.map(s=>({name:s.name,qty:s.qty??null,unit:s.unit}))};
  if(args.scope==='stock')return result;
  const intake=dayIntake(state,today);
  return {...result,today:{kcal:intake.totals.kcal,protein:intake.totals.protein,
