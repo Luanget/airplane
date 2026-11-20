@@ -15,6 +15,29 @@ export function convertCookingWeight(value,from,to,raw,cooked) {
   return round(value*(to==='raw'?raw/cooked:cooked/raw),6);
 }
 
+// The stored unit keeps historical movements and prices meaningful.
+export function stockMeasure(sku) {
+  const unit=sku?.unit??'';
+  if(!['包','盒','袋','瓶'].includes(unit))return {unit,factor:1};
+  const specs=[sku.standard,sku.unitDescription].join(' ').normalize('NFKC');
+  const counts=new Set();
+  for(const match of specs.matchAll(/(\d+)\s*个\s*\/\s*([包盒袋瓶])|每\s*([包盒袋瓶])\s*(\d+)\s*个/g)){
+    if((match[2]??match[3])===unit)counts.add(Number(match[1]??match[4]));
+  }
+  const factor=sku.piecesPerPack===undefined?(counts.size===1?[...counts][0]:null):sku.piecesPerPack;
+  return Number.isSafeInteger(factor)&&factor>0?{unit:'个',factor}:{unit,factor:1};
+}
+
+export function displayStockQuantity(sku,quantity) {
+  const {factor}=stockMeasure(sku);
+  return quantity==null?null:factor===1?quantity:round(quantity*factor,4);
+}
+
+export function storedStockQuantity(sku,quantity) {
+  const value=numeric(quantity);
+  return value===null?null:value/stockMeasure(sku).factor;
+}
+
 export function saveSku(state,fields) {
   const {id,name,unit,basisUnit,source='',quality='label',stage='raw',stockStage='raw'}=fields;
   const quantity=numeric(fields.basisAmount), price=numeric(fields.price), minimum=numeric(fields.minimum), packageSize=numeric(fields.packageSize);
@@ -23,11 +46,14 @@ export function saveSku(state,fields) {
   const legacy=state.legacy.inventory, local=state.local.inventory??=[];
   const previous=[...legacy,...local].find(s=>s.id===id);
   if (previous && previous.unit!==unit)throw Error('请用原库存单位。不同单位可新增食品');
+  const pieces=Object.hasOwn(fields,'piecesPerPack')?numeric(fields.piecesPerPack):
+    (previous?.piecesPerPack??(previous&&stockMeasure(previous).unit!==unit?stockMeasure(previous).factor:null));
+  if(pieces!==null&&(!Number.isSafeInteger(pieces)||pieces<1||!['包','盒','袋','瓶'].includes(unit)))throw Error('请核对每包装的件数');
   const nutrition=Object.fromEntries(NUTRIENTS.map(k=>[k,numeric(fields[k])]));
   if(Object.values(nutrition).some(v=>v!==null&&v<0))throw Error('营养数值不能为负');
   const preservePrice=price===null&&previous?.priceBasis&&previous.priceBasis!==unit;
   const row={...previous,id:id||makeId('sku'),name:name.trim(),unit,basisUnit,basisAmount:quantity,stage,stockStage,
-    packageSize,packageUnit:packageSize?fields.packageUnit:null,pack:packageSize?unit:null,
+    packageSize,packageUnit:packageSize?fields.packageUnit:null,pack:packageSize?unit:null,piecesPerPack:pieces,
     nutritionBasis:'custom',standard:quantity+' '+basisUnit,qty:previous?previous.qty:0,
     pricePerUnit:preservePrice?previous.pricePerUnit:price,priceBasis:preservePrice?previous.priceBasis:unit,minimum,source,quality,nutrition,active:true};
   if(previous)Object.assign(previous,row);else local.push(row);

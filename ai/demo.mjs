@@ -42,6 +42,12 @@ export async function demoWorkspace(today){
   const quantity=Number(text.match(/(\d+(?:\.\d+)?)\s*(?:g|克)/i)?.[1]??300);
   const propose=(reply,mode,result)=>({reply,proposal:{mode,result,date:null}});
   const call=(scope,query='')=>({call:{args:{scope,query},item:{call_id:'demo-'+scope}}});
+  if(text.includes('消费习惯')){
+   if(allowRead&&!latest)return {call:{args:{scope:'expense_summary',start:input.date.slice(0,7)+'-01',end:input.date,groupBy:'category'},item:{call_id:'demo-expense-summary'}}};
+   const data=latest?.summary;
+   return {reply:data?'本月示例账本记录了 '+data.count+' 笔，总支出 '+data.expense+' 元。'+
+    (data.rows[0]?'支出最多的是「'+data.rows[0].label+'」。':''):'可开启本轮账本查询，按实际汇总分析。',proposal:null};
+  }
   if(text.includes('查库存和今日支出')){
    if(allowRead&&!latest)return call('stock');
    if(latest?.scope==='stock')return call('expenses');

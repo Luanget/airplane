@@ -1,6 +1,6 @@
 import {localClock,syncCalendarFields} from '../calendar.mjs';
 import {cents,newPurchaseId,recordPurchase} from './purchases.mjs';
-import {saveSku} from './inventory.mjs';
+import {displayStockQuantity,saveSku,stockMeasure} from './inventory.mjs';
 import {inventoryWithMoves,isStockReference,recordEvent,numeric,validDate} from './core.mjs';
 import {confirmItems, resolveItem} from './candidates.mjs';
 import {matches, resultSchema, activitySchema, purchaseSchema, units, nutrientKeys} from './contract.mjs';
@@ -60,7 +60,7 @@ function editRow(container, original, state, mode) {
   function update() {
     try {
       const {sku,stockQty,nutrition,amount,unit} = resolveItem(state,c);
-      const delta = c.action==='plan' ? '计划不扣库' : sku ? `库存变化 ${stockQty==null?'待核对':(c.action==='add'?'+':'−')+Number(stockQty.toFixed(3))+' '+sku.unit}` : c.action==='add' ? '创建库存食品' : '未关联库存';
+      const delta = c.action==='plan' ? '计划不扣库' : sku ? `库存变化 ${stockQty==null?'待核对':(c.action==='add'?'+':'−')+Number(displayStockQuantity(sku,stockQty).toFixed(3))+' '+stockMeasure(sku).unit}` : c.action==='add' ? '创建库存食品' : '未关联库存';
       output.textContent = amount+' '+unit+' ｜ '+Object.entries(nutrition).map(([k,v])=>labels[k]+' '+(v??'待补')).join(' · ') + ' ｜ '+delta;
     } catch (err) { output.textContent=err.message; }
   }

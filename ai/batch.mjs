@@ -1,6 +1,7 @@
 import {addConfirmedTransactions,freshData,readFinance,replaceFinance} from '../finance-storage.mjs';
 import {healthReview} from '../health/assistant.mjs';
 import {inventoryWithMoves,validateAppState} from '../health/core.mjs';
+import {displayStockQuantity,stockMeasure} from '../health/inventory.mjs';
 import {updateAssistantLedgers} from '../health/purchase-sync.mjs';
 import {financeFields} from './finance.mjs';
 import {foodEditReview,inventoryReview} from './operations.mjs';
@@ -55,7 +56,7 @@ export async function batchReview(container,{operations,next},workspace,today,fo
   try{
    const {health}=project();
    const changes=health?inventoryWithMoves(health).filter(row=>row.qty!==(before.get(row.id)??null)).map(row=>
-    row.name+' '+(before.get(row.id)??'未知')+' → '+(row.qty??'未知')+' '+row.unit):[];
+    row.name+' '+(displayStockQuantity(row,before.get(row.id))??'未知')+' → '+(displayStockQuantity(row,row.qty)??'未知')+' '+stockMeasure(row).unit):[];
    preview.textContent=changes.length?'合计库存变化\n'+changes.join('\n'):'已核对各项内容，可以保存。';
   }catch(err){preview.textContent=err.message;}
  }

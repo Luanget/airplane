@@ -27,7 +27,7 @@ export function renderWeightChart(svg,output,points){
   marker.setAttribute('cx',x);marker.setAttribute('cy',y(kg));
   crosshair.setAttribute('x1',x);crosshair.setAttribute('x2',x);
   svg.setAttribute('aria-valuenow',index+1);
-  const value=displayDay(date,true)+' · '+kg.toFixed(2)+' kg';
+  const value=displayDay(date,true)+' · '+kg.toFixed(1)+' kg';
   svg.setAttribute('aria-valuetext',value);output.textContent=value;
  }
  function pointAt(event){

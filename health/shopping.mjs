@@ -1,5 +1,6 @@
 import {inventoryWithMoves,numeric,round} from './core.mjs';
-import {stockAlerts} from './inventory.mjs';
+import {displayStockQuantity,stockAlerts,stockMeasure,storedStockQuantity} from './inventory.mjs';
+import {stockUnit} from './presentation.mjs';
 
 export function addLowStock(state,today){
  const list=state.local.shoppingList??=[];
@@ -29,6 +30,7 @@ export function settleShopping(state,items,selected){
 
 export function attachShopping({getState,commit,notify,today,openOrder}){
  const form=document.querySelector('#shopping-form'),list=document.querySelector('#shopping-list');
+ const qtyLabel=form.querySelector('[data-shopping-quantity]');
  const panel=form.closest('details'),draft=panel.querySelector('[data-to-purchase]');
  let saving=false;
  const action=async change=>{
@@ -43,8 +45,15 @@ export function attachShopping({getState,commit,notify,today,openOrder}){
  };
  form.onsubmit=e=>{
   e.preventDefault();
-  action(next=>setShoppingItem(next,form.elements.foodId.value,form.elements.quantity.value));
+  const foodId=form.elements.foodId.value,sku=inventoryWithMoves(getState()).find(row=>row.id===foodId);
+  action(next=>setShoppingItem(next,foodId,storedStockQuantity(sku,form.elements.quantity.value)));
  };
+ function labelQuantity(){
+  const sku=inventoryWithMoves(getState()).find(row=>row.id===form.elements.foodId.value);
+  const unit=stockUnit(stockMeasure(sku).unit);
+  qtyLabel.textContent=unit?'补货数量（'+unit+'）':'补货数量';
+ }
+ form.elements.foodId.addEventListener('change',labelQuantity);
  panel.querySelector('[data-low-stock]').onclick=()=>action(next=>addLowStock(next,today()));
  draft.onclick=()=>{
   const items=(getState().local.shoppingList??[]).filter(x=>x.selected);
@@ -52,6 +61,7 @@ export function attachShopping({getState,commit,notify,today,openOrder}){
   openOrder(items);
  };
  return ()=>{
+  labelQuantity();
   const state=getState(),items=inventoryWithMoves(state);
   const rows=(state.local.shoppingList??[]).map(row=>{
    const item=items.find(i=>i.id===row.foodId);
@@ -61,10 +71,11 @@ export function attachShopping({getState,commit,notify,today,openOrder}){
    const check=document.createElement('input');check.type='checkbox';check.checked=row.selected;
    check.onchange=()=>action(next=>{next.local.shoppingList.find(x=>x.foodId===row.foodId).selected=check.checked;});
    label.append(check,item.name);
-   const qty=document.createElement('input');Object.assign(qty,{type:'number',min:'0.000001',step:'any',value:row.quantity});
-   qty.setAttribute('aria-label',item.name+' 补货数量（'+item.unit+'）');
-   qty.onchange=()=>action(next=>setShoppingItem(next,row.foodId,qty.value,row.selected));
-   line.append(label,qty,document.createTextNode(item.unit),button('移除',()=>action(next=>{
+   const unit=stockUnit(stockMeasure(item).unit);
+   const qty=document.createElement('input');Object.assign(qty,{type:'number',min:'0.000001',step:'any',value:displayStockQuantity(item,row.quantity)});
+   qty.setAttribute('aria-label',item.name+' 补货数量（'+unit+'）');
+   qty.onchange=()=>action(next=>setShoppingItem(next,row.foodId,storedStockQuantity(item,qty.value),row.selected));
+   line.append(label,qty,document.createTextNode(unit),button('移除',()=>action(next=>{
     next.local.shoppingList=next.local.shoppingList.filter(x=>x.foodId!==row.foodId);
    })));
    return line;

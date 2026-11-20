@@ -74,7 +74,8 @@ try {
   const fixtureDay=await page.locator('#report-date').inputValue();
   const synthetic={tables:{
     food_events:['早餐','午餐（外食）','晚餐（计划）'].map((meal,i)=>({
-      日期:fixtureDay,餐次:meal,'食物/饮品':'合成菜单'+i,'份量/重量':'1 份',状态:'计划'
+      日期:i===2?fixtureDay.slice(0,8)+(fixtureDay.endsWith('-01')?'02':'01'):fixtureDay,
+      餐次:meal,'食物/饮品':'合成菜单'+i,'份量/重量':'1 份',状态:'计划'
     })),
     weight_events:[
       {日期:'2020-01-01',数值:80,纳入趋势:'是'},
@@ -82,6 +83,7 @@ try {
     ],
     food_inventory:[
       {'食品ID':'fixture','名称':'合成库存','库存值':5,'库存单位':'包','标准份量':'每包',kcal:100},
+      {'食品ID':'fixture-pieces','名称':'合成计数食品','库存值':2,'库存单位':'盒','标准份量':'200g/盒；10个/盒；按100g标签',kcal:100},
       {'食品ID':'empty','名称':'空库存样品','库存值':0,'库存单位':'个'},
       {'食品ID':'unknown','名称':'未知数量样品','库存值':null,'库存单位':'个'},
       {'食品ID':'mirror','名称':'合计样品（仅总量核对）','库存值':5,'库存单位':'包（仅镜像）'},
@@ -106,26 +108,34 @@ try {
   assert.equal(await page.locator('.tabbar button').count(),3);
   const weightChart=page.getByRole('slider',{name:'查看近期晨重'});
   await weightChart.waitFor();
-  assert.match(await weightChart.getAttribute('aria-valuetext'),/1月4日.*79\.70 kg/);
+  assert.match(await weightChart.getAttribute('aria-valuetext'),/1月4日.*79\.7 kg/);
   const plot=await weightChart.boundingBox();
   await page.mouse.move(plot.x+plot.width*.92,plot.y+plot.height*.5);
   await page.mouse.down();
   await page.mouse.move(plot.x+plot.width*.12,plot.y+plot.height*.5,{steps:5});
   await page.mouse.up();
-  assert.match(await weightChart.getAttribute('aria-valuetext'),/1月1日.*80\.00 kg/);
+  assert.match(await weightChart.getAttribute('aria-valuetext'),/1月1日.*80\.0 kg/);
   assert.match(page.url(),/health\/\?test=offline$/);
   await page.getByRole('region',{name:'早餐',exact:true}).getByText('合成菜单0').waitFor();
   await page.getByRole('region',{name:'午餐',exact:true}).getByText('合成菜单1').waitFor();
   await page.getByRole('region',{name:'晚餐',exact:true}).getByText('合成菜单2').waitFor();
+  await page.getByRole('heading',{name:'饮食',exact:true}).waitFor();
+  assert.equal(await page.locator('#local-events .diet-status').count(),3);
+  assert.equal(await page.locator('#local-events .diet-nutrients').count(),0);
   await page.getByRole('link',{name:'体重趋势',exact:true}).click();
   await page.getByRole('heading',{name:'体重趋势',exact:true}).waitFor();
   const detailChart=page.getByRole('slider',{name:'查看历史晨重'});
   await detailChart.press('Home');
-  assert.match(await detailChart.getAttribute('aria-valuetext'),/1月1日.*80\.00 kg/);
+  assert.match(await detailChart.getAttribute('aria-valuetext'),/1月1日.*80\.0 kg/);
   await page.getByRole('link',{name:'返回首页',exact:true}).click();
   await page.locator('#local-events').waitFor();
   await page.locator('#add-health').click();
   const manual=page.locator('#food-form');
+  await manual.locator('[name=foodId]').selectOption('fixture-pieces');
+  await manual.getByLabel('份量（个）',{exact:true}).fill('6');
+  assert.equal(await manual.locator('[name=portion]').inputValue(),'6 个');
+  assert.equal(await manual.locator('[name=stockQty]').inputValue(),'6');
+  assert.equal(await manual.locator('[name=kcal]').inputValue(),'120');
   await manual.locator('[name=foodId]').selectOption('fixture');
   await manual.locator('[name=status]').selectOption('plan');
   await manual.locator('[type=submit]').click();
@@ -145,6 +155,7 @@ try {
   await page.locator('[data-tab="inventory"]').click();
   await page.locator('#inventory-list').getByText('合成库存',{exact:true}).waitFor();
   const inventory=page.locator('#inventory-list');
+  await inventory.getByRole('button',{name:'合成计数食品'}).getByText('20 个',{exact:true}).waitFor();
   assert.equal(await inventory.getByText(/空库存样品|合计样品/).count(),0);
   const merged=inventory.locator('details').filter({hasText:'合成瓶'});
   assert.equal(await merged.count(),1);
@@ -239,6 +250,24 @@ try {
     }
     const fixtureReply={status:'completed',output:[{type:'message',content:[{type:'output_text',
       text:'{"reply":"连接正常。","proposal":null}'}]}]};
+    if(input.text==='分析合成月度分类支出'){
+      const last=body.input.at(-1),start=input.date.slice(0,7)+'-01';
+      assert.ok(body.tools.some(tool=>tool.name==='read_expense_summary'));
+      if(last.type!=='function_call_output')return route.fulfill({headers,json:{status:'completed',output:[
+        {type:'function_call',name:'read_expense_summary',call_id:'fixture-expenses',
+         arguments:JSON.stringify({start,end:input.date,groupBy:'category'})}
+      ]}});
+      const summary=JSON.parse(last.output);
+      assert.equal(summary.start,start);
+      assert.equal(summary.end,input.date);
+      assert.equal(summary.groupBy,'category');
+      assert.ok(summary.rows.some(row=>row.label==='餐饮'&&row.expense>=71));
+      assert.ok(summary.rows.every(row=>Object.keys(row).sort().join(',')==='count,expense,label'));
+      assert.ok(!last.output.includes('合成批量支出'));
+      return route.fulfill({headers,json:{status:'completed',output:[
+        {type:'message',content:[{type:'output_text',text:'{"reply":"已按分类查看本月支出。","proposal":null}'}]}
+      ]}});
+    }
     if(input.text===batchText){
       const reply=(reply,proposal=null)=>route.fulfill({headers,json:{status:'completed',output:[{type:'message',
         content:[{type:'output_text',text:JSON.stringify({reply,proposal})}]}]}});
@@ -432,10 +461,18 @@ try {
   await chat.getByText('保存后还剩 90 g。',{exact:true}).waitFor();
   assert.equal(await ledger(),savedBatch);
   console.log('PASS batch save before fresh read, minimal follow-up context and no duplicate writes on retry');
+  await form.locator('[name=allowRead]').check();
+  const beforeAnalysis=calls.length;
+  await say('分析合成月度分类支出');
+  await batchSummary.getByText(/按分类汇总/).waitFor();
+  assert.equal(calls.length,beforeAnalysis+1);
+  await batchSummary.getByRole('button',{name:'发送摘要'}).click();
+  await chat.getByText('已按分类查看本月支出。',{exact:true}).waitFor();
+  assert.equal(await ledger(),savedBatch);
   await access.locator('[data-remove]').click();await access.getByText('已移除本机 Key').waitFor();
   await say('未授权的请求');
   await chat.getByText('请先导入 API Key',{exact:true}).waitFor();
-  assert.equal(calls.length,15);
+  assert.equal(calls.length,17);
   console.log('PASS streamed preview before completion, validated final proposal and no unconfirmed ledger writes');
   await page.getByRole('link',{name:'财务',exact:true}).click();
   console.log('PASS shared day picker, legacy export, shared key, chat follow-ups and confirmed finance, health and inventory writes');
@@ -610,7 +647,7 @@ try {
   await page.getByRole('link',{name:'健康',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#hero-goal').textContent.includes('kcal'));
   await page.getByRole('button',{name:'前一天'}).click();
-  await page.locator('#local-events').getByRole('button',{name:/牛奶.*300 g.*186 kcal/}).waitFor();
+  await page.locator('#local-events').getByRole('button',{name:/牛奶.*300\.0 g.*186\.0 kcal/}).waitFor();
   await page.getByRole('link',{name:'AI 助手'}).click();
   const demoLedger=()=>page.evaluate(async()=>{
     const {demoWorkspace}=await import('../ai/demo.mjs'),{localDate}=await import('../calendar.mjs');

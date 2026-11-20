@@ -1,9 +1,11 @@
 import {readFinance} from '../finance-storage.mjs';
-import {inventoryWithMoves,isStockReference,numeric} from './core.mjs';
+import {inventoryWithMoves,isStockReference} from './core.mjs';
 import {cents,newPurchaseId,orderBatchId,purchaseForTransaction,purchaseTransactionId,recordPurchase,revisePurchase} from './purchases.mjs';
 import {projectedExpense,readPendingPurchase,updatePurchaseLedgers,resumePurchaseUpdate,abandonPurchaseUpdate} from './purchase-sync.mjs';
 import {settleShopping} from './shopping.mjs';
 import {displayDay,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
+import {displayStockQuantity,stockMeasure,storedStockQuantity} from './inventory.mjs';
+import {stockUnit} from './presentation.mjs';
 
 export function attachPurchases({getState,commit,setState,notify,switchTab,today}) {
  const account=window.airplaneAccount;
@@ -27,15 +29,22 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   const row=document.createElement('fieldset');row.className='form-grid';
   if(item.batchId)row.dataset.batchId=item.batchId;
   const sku=document.createElement('select');sku.name='foodId';
-  for(const food of inventoryWithMoves(getState()).filter(s=>s.active&&!isStockReference(s)||s.id===item.foodId))
-   sku.add(new Option(food.name+' · '+food.unit,food.id));
+  const foods=inventoryWithMoves(getState()).filter(s=>s.active&&!isStockReference(s)||s.id===item.foodId);
+  for(const food of foods)sku.add(new Option(food.name+' · '+stockUnit(stockMeasure(food).unit),food.id));
   if(item.foodId)sku.value=item.foodId;
   const input=(name,type,value,required=false)=>{
    const el=document.createElement('input');Object.assign(el,{name,type,required,value:value??''});
    if(type==='number')Object.assign(el,{min:name==='quantity'?'0.000001':'0',step:name==='quantity'?'any':'0.01'});
    return el;
   };
-  row.append(label('食品',sku),label('数量',input('quantity','number',item.quantity,true)),
+  const food=()=>foods.find(x=>x.id===sku.value),qty=input('quantity','number',displayStockQuantity(food(),item.quantity),true);
+  const qtyTitle=document.createElement('span');
+  const explainQuantity=()=>{
+   const unit=stockUnit(stockMeasure(food()).unit);
+   qtyTitle.textContent=unit?'数量（'+unit+'）':'数量';
+  };
+  explainQuantity();sku.onchange=()=>{qty.value='';explainQuantity();};
+  row.append(label('食品',sku),label(qtyTitle,qty),
    label('该项金额 ¥',input('cost','number',item.costCents==null?'':item.costCents/100)),label('到期日',input('expires','date',item.expires)));
   row.append(action('移除该项',()=>{if(lines.children.length>1)row.remove();}));
   lines.append(row);syncCalendarFields(row);
@@ -93,12 +102,16 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   reveal();syncCalendarFields(form);
  }
  function readItems(){
-  return [...lines.children].map(row=>({
-   foodId:row.querySelector('[name=foodId]').value,quantity:numeric(row.querySelector('[name=quantity]').value),
+  const foods=new Map(inventoryWithMoves(getState()).map(row=>[row.id,row]));
+  return [...lines.children].map(row=>{
+   const foodId=row.querySelector('[name=foodId]').value;
+   return {
+   foodId,quantity:storedStockQuantity(foods.get(foodId),row.querySelector('[name=quantity]').value),
    costCents:row.querySelector('[name=cost]').value===''?null:cents(row.querySelector('[name=cost]').value),
    expires:row.querySelector('[name=expires]').value||null,
    ...(row.dataset.batchId?{batchId:row.dataset.batchId}:{})
-  }));
+   };
+  });
  }
  async function showPending(){
   try {pendingPanel.hidden=!(await readPendingPurchase(account));}catch(err){notify(err.message);}

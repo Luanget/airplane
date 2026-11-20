@@ -11,6 +11,8 @@ import {matches,resultSchema,validInput,assistantInput} from '../health/contract
 import {accountKeys,privateAccount} from '../account.mjs';
 import nacl from '../vendor/nacl-fast.min.js';
 import {randomBytes} from 'node:crypto';
+import {STORAGE_KEY,freshData} from '../finance-storage.mjs';
+import {displayStockQuantity,stockMeasure} from '../health/inventory.mjs';
 
 const nutrition={kcal:100,protein:10,carbs:8,fat:3,sodium:20};
 const part={name:'样品',sku:null,amount:2,unit:'包',action:'eat',basisAmount:100,basisUnit:'g',
@@ -51,6 +53,40 @@ test('explicit gram and mL units require a defensible conversion',()=>{
   state.legacy.inventory.push({id:'milk',name:'牛奶',active:true,standard:'每100mL',unit:'mL',nutritionBasis:'per100ml',qty:1000,nutrition});
   assert.throws(()=>confirmItems(state,[{...part,sku:'milk',amount:533,unit:'g'}],date,'早餐'));
   assert.equal(confirmItems(state,[{...part,sku:'milk',amount:533,unit:'mL'}],date,'早餐').local.foods[0].nutrition.kcal,533);
+});
+test('a documented count converts individual servings while retaining the stored box ledger',()=>{
+ const state=normalizeLedger({tables:{food_events:[],weight_events:[],food_inventory:[
+  {'食品ID':'fixture-pieces','名称':'合成食品','库存值':2,'库存单位':'盒','标准份量':'200g/盒；10个/盒；按100g标签',kcal:100}
+ ]}});
+ const sku=inventoryWithMoves(state)[0];
+ assert.deepEqual(stockMeasure(sku),{unit:'个',factor:10});
+ const change={...part,sku:sku.id,name:sku.name,amount:6,unit:'个'};
+ const eaten=confirmItems(state,[change],date,'午餐');
+ assert.equal(eaten.local.foods[0].portion,'6 个');
+ assert.equal(eaten.local.foods[0].nutrition.kcal,120);
+ const remaining=inventoryWithMoves(eaten)[0];
+ assert.equal(remaining.qty,1.4);
+ assert.equal(displayStockQuantity(remaining,remaining.qty),14);
+ assert.deepEqual(stockMeasure({...sku,unitDescription:'11个/盒'}),{unit:'盒',factor:1});
+});
+test('expense habit analysis returns only approved date buckets and spending summaries',async()=>{
+ const data=freshData();
+ data.transactions=[
+  {id:'private-id',note:'private memo',type:'expense',amount:8.15,date,categoryId:'default-5'},
+  {type:'expense',amount:10,date:'2030-01-03',categoryId:'default-5'},
+  {type:'expense',amount:18.75,date:'2030-01-03',categoryId:'default-1'},
+  {type:'income',amount:50,date:'2030-01-03'},
+  {type:'expense',amount:1,date:'2029-12-31',categoryId:'default-5'}
+ ];
+ const workspace={finance:{getItem:key=>key===STORAGE_KEY?JSON.stringify(data):null}};
+ const call={type:'function_call',name:'read_expense_summary',call_id:'fixture-summary',
+  arguments:'{"start":"2030-01-01","end":"2030-01-03","groupBy":"category"}'};
+ const {args}=pendingLedgerRead({status:'completed',output:[call]});
+ assert.deepEqual(await readLedger(workspace,args,'2030-01-04'),{
+  start:date,end:'2030-01-03',groupBy:'category',expense:36.90,count:3,
+  rows:[{label:'餐饮',expense:18.75,count:1},{label:'日用',expense:18.15,count:2}]
+ });
+ await assert.rejects(readLedger(workspace,args,'2030-01-02'));
 });
 test('one-day food lookup sends every matching record and its full selected fields',async()=>{
  const state=newState(),previous=addDays(date,-1);

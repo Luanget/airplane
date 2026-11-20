@@ -1,6 +1,5 @@
-export const mealOrder=['早餐','早午餐','午餐','晚餐','加餐','未分餐','其他记录'];
-export function timelineGroup({type,meal}){
- if(type!=='food')return '其他记录';
+export const mealOrder=['早餐','早午餐','午餐','晚餐','加餐','未分餐'];
+export function timelineGroup({meal}){
  const label=String(meal??'');
  if(/早午餐|早午饭/.test(label))return '早午餐';
  if(/早餐|早饭|早点/.test(label))return '早餐';
@@ -8,6 +7,19 @@ export function timelineGroup({type,meal}){
  if(/晚餐|晚饭/.test(label))return '晚餐';
  if(/加餐|夜宵|宵夜/.test(label))return '加餐';
  return '未分餐';
+}
+
+export function eatingState(row){
+ if(row.actual===true||row.status==='actual')return 'actual';
+ const status=String(row.status??'');
+ if(/取消|作废|失效|未吃|覆盖|superseded/i.test(status))return 'cancelled';
+ return /计划|待定/.test(status)?'plan':'unknown';
+}
+
+export function compactPortion(portion){
+ const text=String(portion??'').split(/[；;\n（(]/,1)[0].trim();
+ return text.replace(/^(约\s*)?(\d+(?:\.\d+)?)\s*(g|mL|千克|克|毫升|包|袋|个|份|盒|瓶)(?=$|[\s，,、])/i,
+  (_,approx='',amount,unit)=>approx+Number(amount).toFixed(1)+' '+unit);
 }
 
 export function stockName(row){

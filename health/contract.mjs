@@ -77,6 +77,7 @@ export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
 ]}});
 export const ledgerReadSchema=object({scope:choice('stock','meal','expenses'),query:string()});
 export const foodHistoryReadSchema=object({date:string(10,10),query:string()});
+export const expenseSummaryReadSchema=object({start:string(10,10),end:string(10,10),groupBy:choice('category','day','month')});
 const jpegPhoto=photo=>photo?.startsWith('data:image/jpeg;base64,/9j/') &&
   /^[A-Za-z0-9+/]+={0,2}$/.test(photo.slice(23));
 export function validFinanceEntry(entry,input) {

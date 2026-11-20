@@ -50,6 +50,15 @@ body[data-module="health"] .weight-chart-value { margin:7px 0 2px; color:var(--m
 .health-tx-row .category-symbol { color:var(--green); background:var(--green-soft) }
 .health-tx-row :is(.tx-title,.tx-sub,.tx-money,.tx-time) { display:block }
 .health-tx-value { white-space:nowrap }
+.diet-row { display:grid; gap:4px; justify-content:stretch }
+.diet-main,.diet-meta { display:flex; justify-content:space-between; align-items:baseline; gap:8px; min-width:0 }
+.diet-main .tx-title { min-width:0; white-space:normal; overflow-wrap:anywhere }
+.diet-meta,.diet-nutrients { font-size:12px; line-height:1.45; color:var(--muted); font-variant-numeric:tabular-nums }
+.diet-meta span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.diet-nutrients { display:flex; flex-wrap:wrap; gap:2px 10px }
+.diet-nutrients span,.diet-status { white-space:nowrap }
+.diet-nutrients span:first-child { color:var(--text); font-weight:650 }
+.diet-status { padding:1px 7px; border-radius:10px; color:var(--muted); background:var(--surface-2); font-size:11px }
 .cycle-total, .event-value, .stock-qty { white-space:nowrap; font-variant-numeric:tabular-nums }
 .event-row, .inv-row {
   display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -116,5 +125,14 @@ body[data-module="health"] [data-shell] .shopping-row input[type=number] { width
 .inventory-food .stock-qty.low { color:var(--red) }
 .inventory-food:active { background:var(--surface-2) }
 .inventory-food:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
-.inventory-tool { margin-top:10px; padding-top:10px; border-top:1px solid var(--line) }
+.form-panel:has(> .setting-row) { padding:0 }
+details > summary.setting-row { list-style:none; cursor:pointer; padding:10px 14px; border:0 }
+details > summary.setting-row::-webkit-details-marker { display:none }
+details[open] > summary.setting-row { border-bottom:1px solid var(--line) }
+details[open] > summary > .chevron { transform:rotate(90deg) }
+details > summary.setting-row:focus-visible { outline:2px solid var(--green); outline-offset:-2px; border-radius:12px }
+.form-panel:has(> .setting-row) > :is(form, div, section, p, button) { margin:10px 14px }
+.inventory-tool + .inventory-tool { border-top:1px solid var(--line) }
+.inventory-tool > summary.setting-row { padding-inline-start:22px }
+.inventory-tool > :is(form, div) { margin:10px 14px }
 .inventory-purchase-log { margin-top:14px; padding-top:10px; border-top:1px solid var(--line) }

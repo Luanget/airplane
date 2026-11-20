@@ -7,7 +7,7 @@ import {healthReview,jpeg} from '../health/assistant.mjs';
 import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
 import {financeReview} from './finance.mjs';
 import {chatInstructions} from './responses.mjs';
-import {cleanSkill,localWorkspace,shortHistory,readLedger,readLabels} from './workspace.mjs';
+import {cleanSkill,localWorkspace,shortHistory,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
 import {foodEditReview,inventoryReview,skillReview} from './operations.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
@@ -327,6 +327,11 @@ async function complete(response,flow,source){
 }
 function describeSummary(scope,summary){
  if(scope==='expenses')return summary.date+' · 支出 '+summary.expense+' 元 · 收入 '+summary.income+' 元 · '+summary.count+' 笔';
+ if(scope==='expense_summary')return [
+  summary.start+' 至 '+summary.end,
+  '按'+expenseGroupLabels[summary.groupBy]+'汇总 · 支出 '+summary.expense+' 元 · '+summary.count+' 笔',
+  ...summary.rows.map(row=>row.label+' · '+row.expense+' 元 · '+row.count+' 笔')
+ ].join('\n');
  if(scope==='foods'){
   const rows=summary.foods.map(row=>[row.time,row.meal,row.name,row.portion].filter(Boolean).join(' · '));
   if(!rows.length)rows.push('没有匹配的实际饮食记录');
