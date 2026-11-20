@@ -78,7 +78,7 @@ export function bindSheetSwipe(modal,backdrop,dismiss=()=>modal.close()){
     return true;
   };
   const begin=(point,target,force=false)=>{
-    if(target?.closest?.('.drag-handle'))return false;
+    if(target?.closest?.('.drag-handle,.inline-picker-panel'))return false;
     // Arm the gesture from the whole sheet, including controls. Nothing is
     // prevented on touchstart, so a normal tap still behaves like a tap. Only
     // after a clearly downward movement do we take over and dismiss the sheet.

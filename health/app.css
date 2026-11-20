@@ -94,6 +94,7 @@ body[data-module="health"] [data-shell] :is(input,select,textarea):not([type=che
   display:block; width:100%; min-width:0; min-height:42px; margin:5px 0 12px;
   padding:8px 10px; border:1px solid var(--line); border-radius:12px; background:var(--surface-2); color:var(--text); font-size:16px
 }
+body[data-module="health"] [data-shell] .inline-picker-panel .choice-search { width:calc(100% - 16px); margin:8px; background:var(--surface-2) }
 body[data-module="health"] [data-shell] label.checkbox { display:flex; gap:8px; align-items:center; margin:10px 0 }
 .form-panel summary { cursor:pointer; font-weight:650 }
 .form-panel[open] > form { margin-top:14px }
@@ -114,7 +115,6 @@ body[data-module="health"] [data-shell] label.checkbox { display:flex; gap:8px; 
 .entry-fields summary { color:var(--muted); font-size:13px; cursor:pointer }
 .entry-fields details[open] > summary { margin-bottom:10px }
 body[data-module="health"] :is(form,main) .calendar-field { display:grid; margin:5px 0 12px; border:1px solid var(--line); background:var(--surface-2); min-height:42px }
-body[data-module="health"] [data-shell] .calendar-field input:is([type=date],[type=time]) { margin:0; padding:0; min-height:0 }
 .shopping-row .checkbox { flex:1; min-width:0; min-height:44px; overflow-wrap:anywhere; cursor:pointer }
 .shopping-row input[type=checkbox] { flex:none; width:18px; height:18px; margin:0; accent-color:var(--green) }
 body[data-module="health"] [data-shell] .shopping-row input[type=number] { width:78px; margin:0 }

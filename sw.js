@@ -1,10 +1,10 @@
-const SW_VERSION = '58';
+const SW_VERSION = '59';
 const scope = self.registration.scope;
 const prefix = 'airplane-shell:' + new URL(scope).pathname + ':';
 const CACHE = prefix + SW_VERSION;
 const SHELL = [
   './index.html','./styles.css','./app.js','./shared.css','./updates.mjs',
-  './calendar.mjs','./boot.mjs','./legacy-export.mjs','./shell.mjs','./choice-picker.mjs','./account.mjs','./vendor/nacl-fast.min.js','./manifest.webmanifest',
+  './calendar.mjs','./boot.mjs','./legacy-export.mjs','./shell.mjs','./choice-picker.mjs','./field-picker.mjs','./account.mjs','./vendor/nacl-fast.min.js','./manifest.webmanifest',
   './health/index.html','./health/app.css','./health/app.mjs','./health/core.mjs','./health/presentation.mjs','./health/weight-chart.mjs',
   './finance-storage.mjs','./health/backup.mjs','./health/inventory.mjs','./health/purchases.mjs','./health/purchase-sync.mjs','./health/shopping.mjs','./health/purchase-ui.mjs','./health/storage.mjs','./health/assistant.mjs','./health/candidates.mjs',
   './assistant/index.html','./assistant/workspace.css','./ai/workspace.mjs','./ai/operations.mjs','./ai/demo.mjs','./ai/threads.mjs','./ai/batch.mjs',

@@ -81,11 +81,23 @@ dialog.ai-dialog.bottom-sheet { padding:12px 16px calc(24px + var(--safe-bottom)
 .choice-trigger svg,.choice-check svg { width:17px; height:17px }
 .choice-trigger:focus-visible,.choice-option:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
 .choice-trigger:disabled { opacity:.6 }
-dialog.choice-sheet { height:min(68dvh,580px); overscroll-behavior:contain }
-.choice-search {
- width:100%; min-height:44px; padding:9px 12px; margin:0 0 12px; border:1px solid var(--line); border-radius:12px;
+.inline-field { display:block; position:relative; min-width:0 }
+.inline-field.is-open { z-index:5 }
+.inline-picker-panel {
+ position:absolute; top:calc(100% + 3px); left:var(--picker-shift,0px); display:block;
+ width:100%; min-width:min(245px,calc(100vw - 24px)); max-width:calc(100vw - 24px);
+ max-height:min(330px,60dvh); overflow:auto; overscroll-behavior:contain;
+ color:var(--text); background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow)
+}
+.inline-field.is-open > :is(.choice-trigger,.calendar-trigger) .chevron,
+.inline-field.is-open > label > :is(.choice-trigger,.calendar-trigger) .chevron { transform:rotate(90deg) }
+.app-shell .inline-picker-panel .choice-search {
+ position:sticky; top:0; display:block; width:calc(100% - 16px); margin:8px; min-height:44px;
+ padding:9px 10px; border:1px solid var(--line); border-radius:10px;
  background:var(--surface); color:var(--text); font:inherit; font-size:16px
 }
+.choice-list { display:block; padding-bottom:2px }
+.choice-option { padding:9px 12px }
 .choice-option .setting-copy { display:grid; gap:2px; min-width:0; overflow-wrap:anywhere }
 .choice-option .setting-sub { margin-top:0 }
 .choice-option[aria-pressed="true"] { background:var(--green-soft) }
@@ -94,21 +106,39 @@ dialog.choice-sheet { height:min(68dvh,580px); overscroll-behavior:contain }
 .choice-empty { padding:14px; color:var(--muted); text-align:center; font-size:13px }
 .confirmation-sheet p { margin:0 0 12px; color:var(--muted); line-height:1.6; white-space:pre-line }
 
-/* WebKit's date and time inputs stay tappable over the shared visible label. */
 .calendar-field {
  display:inline-grid; position:relative; align-items:center; min-width:0; min-height:38px;
- padding:5px 8px; border-radius:10px; font-variant-numeric:tabular-nums; color:var(--text)
+ border-radius:10px; font-variant-numeric:tabular-nums; color:var(--text)
 }
-.calendar-field .calendar-value { pointer-events:none }
-.calendar-field :is(input[type=date],input[type=time]) {
- position:absolute; inset:0; width:100%; height:100%; min-width:0; margin:0; padding:0; opacity:0; cursor:pointer; font-size:16px
+.calendar-trigger {
+ display:flex; align-items:center; justify-content:space-between; gap:5px; width:100%; min-height:inherit;
+ padding:5px 8px; border-radius:inherit; text-align:start; white-space:nowrap
 }
-.calendar-field:focus-within { outline:2px solid var(--green); outline-offset:-2px }
-.form-row .calendar-field { justify-items:end }
+.calendar-trigger .chevron { display:grid; place-items:center }
+.calendar-trigger svg { width:14px; height:14px }
+.calendar-trigger:focus-visible,.calendar-menu button:focus-visible { outline:2px solid var(--green); outline-offset:-2px }
+.form-row .calendar-trigger { justify-content:end }
+.calendar-menu { min-width:min(270px,calc(100vw - 24px)); padding:8px }
+.calendar-menu-head { display:flex; align-items:center; justify-content:space-between; gap:4px }
+.calendar-menu-head button { flex:0 0 42px; font-size:20px; color:var(--green) }
+.calendar-date-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:2px }
+.calendar-weekday { min-height:27px; display:grid; place-items:center; color:var(--muted); font-size:12px }
+.calendar-menu button { min-height:36px; border-radius:8px; font-weight:650 }
+.calendar-menu button:disabled { opacity:.42 }
+.calendar-menu [aria-current=date] { color:var(--green) }
+.calendar-menu [aria-pressed=true] { background:var(--green-soft); color:var(--green) }
+.calendar-time-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px }
+.calendar-time-column { min-width:0; text-align:center }
+.calendar-time-column strong { display:block; padding:5px; font-size:13px }
+.calendar-time-list { display:block; position:relative; height:153px; overflow-y:auto; overscroll-behavior:contain; padding:2px 6px; background:var(--surface-2); border-radius:9px }
+.calendar-time-list button { display:block; width:100%; min-height:36px; font-variant-numeric:tabular-nums }
+.calendar-actions { display:flex; justify-content:flex-end; gap:4px; padding-top:5px }
+.calendar-actions button { padding:3px 8px; color:var(--green) }
+.calendar-actions .calendar-apply { background:var(--green); color:white }
 
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap }
 .day-picker-value { display:grid; align-items:center; color:var(--muted); font-size:13px }
-.day-picker .calendar-field { min-height:44px; padding:0 5px; color:inherit; white-space:nowrap }
+.day-picker .calendar-field { min-height:44px; color:inherit; white-space:nowrap }
 .day-picker .month-step { height:44px }
 [data-action=choose-month] { display:inline-flex; align-items:center; gap:3px }
 [data-action=choose-month] svg { width:14px; height:14px }
@@ -131,7 +161,6 @@ dialog.choice-sheet { height:min(68dvh,580px); overscroll-behavior:contain }
   border:1px solid var(--line); border-radius:12px; padding:8px; font-size:16px; background:var(--surface-2); color:var(--text);
 }
 .assistant-workspace .chat-review .calendar-field { display:grid; min-height:44px; margin:4px 0 9px; border:1px solid var(--line); background:var(--surface-2) }
-.assistant-workspace .chat-review .calendar-field :is(input[type=date],input[type=time]) { min-height:0; margin:0; padding:0 }
 .chat-composer textarea { resize:none }
 .assistant-workspace .chat-actions { display:flex; align-items:center; gap:6px; flex-wrap:wrap }
 .chat-actions :is(.primary-button,.secondary-button) { width:auto; padding:8px 12px }
