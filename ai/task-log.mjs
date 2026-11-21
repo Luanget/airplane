@@ -76,10 +76,11 @@ export function requestMetric({model,servedModel,body,elapsedMs,error,bytes,rate
 
 function database(){
  return new Promise((resolve,reject)=>{
-  const request=indexedDB.open('airplane-agent-tasks-v1',2);
+  const request=indexedDB.open('airplane-agent-tasks-v1',3);
   request.onupgradeneeded=event=>{
    if(event.oldVersion===0)request.result.createObjectStore('tasks');
-   request.result.createObjectStore('recent');
+   if(event.oldVersion<2)request.result.createObjectStore('recent');
+   if(event.oldVersion<3)request.result.createObjectStore('runs');
   };
   request.onerror=()=>reject(request.error);
   request.onsuccess=()=>resolve(request.result);
@@ -92,11 +93,11 @@ export function taskJournal(account={}){
  const accountKeys=()=>IDBKeyRange.bound(prefix,prefix+'\uffff');
  const seal=value=>account.id&&account.seal?account.seal('health',value):value;
  const open=value=>value&&account.id&&account.open?account.open('health',value):value;
- async function transact(mode,operation){
+ async function transact(mode,operation,table='tasks'){
   const db=await database();
   try{
    return await new Promise((resolve,reject)=>{
-    const tx=db.transaction(['tasks','recent'],mode),store=tx.objectStore('tasks');
+    const tx=db.transaction([table,'recent'],mode),store=tx.objectStore(table);
     let result,failure;
     const guard=fn=>value=>{
      try{result=fn(value);}catch(error){failure=error;tx.abort();}
@@ -108,6 +109,18 @@ export function taskJournal(account={}){
   }finally{db.close();}
  }
  return {
+  saveRun(run){
+   return transact('readwrite',store=>store.put(seal(run),prefix+run.id),'runs');
+  },
+  readRun(id){
+   return transact('readonly',(store,guard)=>{
+    const read=store.get(prefix+id);
+    read.onsuccess=guard(()=>open(read.result));
+   },'runs');
+  },
+  removeRun(id){
+   return transact('readwrite',store=>store.delete(prefix+id),'runs');
+  },
   write(id,event){
    if(!id)return Promise.resolve();
    return transact('readwrite',(store,guard,recent)=>{

@@ -72,12 +72,25 @@ function apiError(response,body,model){
  };
  const reason=Object.hasOwn(causes,code)?causes[code]:errors[response.status]??'OpenAI 暂时无法处理请求';
  const id=response.headers.get('x-request-id')??'';
- return Error(reason+'（HTTP '+response.status+(/^[A-Za-z0-9_-]{1,100}$/.test(id)?'，请求 ID '+id:'')+'）。');
+ return Object.assign(Error(reason+'（HTTP '+response.status+(/^[A-Za-z0-9_-]{1,100}$/.test(id)?'，请求 ID '+id:'')+'）。'),
+  {status:response.status,code,parameter:body?.error?.param});
 }
 
-export async function recognize(input,{onMetric,rates,...options}={}){
+export async function recognize(input,{onMetric,rates,onReply,onTool,signal,...options}={}){
+ const body=await requestResponses(modelRequest(input,options),{onMetric,rates,onReply,onTool,signal});
+ try{
+  const call=pendingLedgerRead(body,options);
+  if(call){
+   if(!options.allowRead)throw Error();
+   return {call};
+  }
+  return parseResult(body,input,options);
+ }catch{throw Error('已收到 OpenAI 响应，但无法读取回复或候选格式。');}
+}
+
+export async function requestResponses(request,{onMetric,rates,...options}={}){
  const metric={rates,started:performance.now()};
- try{return await send(input,options,metric);}
+ try{return await send({...request,stream:true},options,metric);}
  catch(error){metric.error=error;throw error;}
  finally{
   if(metric.model&&onMetric){
@@ -86,11 +99,10 @@ export async function recognize(input,{onMetric,rates,...options}={}){
  }
 }
 
-async function send(input,{signal,onReply,onTool,...options},metric){
+async function send(request,{signal,onReply,onTool},metric){
  if(!navigator.onLine)throw Error('目前离线，手动录入仍可用');
  const key=await readDeviceKey();
  if(!key)throw Error('请在设置的「API Key」中导入自己的密钥');
- const request={...modelRequest(input,options),stream:true};
  const serialized=JSON.stringify(request);
  metric.bytes=new TextEncoder().encode(serialized).length;
  const controller=new AbortController(),cancel=()=>controller.abort();
@@ -109,7 +121,7 @@ async function send(input,{signal,onReply,onTool,...options},metric){
    referrerPolicy:'no-referrer',redirect:'error',signal:controller.signal,
    headers:{Authorization:'Bearer '+key,'Content-Type':'application/json',Accept:'text/event-stream'},body:serialized});
   if(response.ok&&response.headers.get('content-type')?.includes('text/event-stream')){
-   body=await readResponseStream(response,{onReply,onTool,onActivity:()=>{
+   body=await readResponseStream(response,{onReply,onTool,plain:!request.text?.format,onActivity:()=>{
     receivedEvent=true;waitForData();
    }});
   }else{
@@ -135,13 +147,5 @@ async function send(input,{signal,onReply,onTool,...options},metric){
  }).catch(()=>{});
  if(body?.status==='incomplete')throw Error('OpenAI 返回了未完成的响应。可以重试，原账本数据仍保留。');
  if(body?.status==='failed')throw Error('OpenAI 在生成回复时失败，请稍后重试。');
- try{
-  const call=pendingLedgerRead(body,options);
-  if(call){
-   if(!options.allowRead)throw Error();
-   return {call};
-  }
-  return parseResult(body,input,options);
- }
- catch{throw Error('已收到 OpenAI 响应，但无法读取回复或候选格式。');}
+ return body;
 }

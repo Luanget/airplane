@@ -24,10 +24,11 @@ function replyPreview(onReply) {
  };
 }
 
-export async function readResponseStream(response,{onActivity=()=>{},onReply=()=>{},onTool=()=>{}}={}) {
+export async function readResponseStream(response,{onActivity=()=>{},onReply=()=>{},onTool=()=>{},plain=false}={}) {
  if(!response.body?.getReader)throw new ResponseStreamError('当前浏览器无法读取实时回复。');
  const reader=response.body.getReader(),decoder=new TextDecoder();
- const reveal=replyPreview(onReply);
+ let text='';
+ const reveal=plain?(delta=>{text+=delta;onReply(text);}):replyPreview(onReply);
  let buffer='',firstPart=null;
  try {
   while(true){
