@@ -20,6 +20,11 @@ const safeOrder=value=>{
  const clean=String(value??'').normalize('NFKC').trim().replace(/\s+/g,'').toLowerCase();
  return /^[a-z0-9][a-z0-9_-]{3,119}$/.test(clean)&&!/[x*]{3}/i.test(clean)?clean:null;
 };
+const receiptWindow=30*60*1000;
+const repeatedPurchase=text=>/又买|再买|另外(?:一笔|一单)|新(?:订单|下单)|第二次|第[二三四五六七八九十]笔|另[付购]|不同.{0,5}订单/.test(text??'');
+const fingerprint=lines=>hash(stable(lines.map(line=>[
+ productName(line.name)||key(line.name),line.quantity,key(line.unit),line.packAmount??null,key(line.packUnit)
+]).map(stable).sort()));
 const rowsFor=(state,receiptKey)=>state.local.agentReceipts?.find(row=>row.id===receiptKey);
 const blocked=reason=>({state:'blocked',reason});
 const preview=(reason,text)=>({state:'review',reason,detail:text});
@@ -102,7 +107,7 @@ function verifyReceiptRecord(workspace,state,id){
    return '入库 '+(sku?.name??row.foodId)+' '+row.quantity+' '+(sku?.unit??'')+
     (row.costCents===null?' · 成本未知':' · 成本 '+money(row.costCents));
   }):[]),...(record.discount!=null?['优惠 '+money(record.discount)]:[]),...(record.shipping!=null?['运费 '+money(record.shipping)]:[]),
-  ...(record.refundOf?['退款保留原采购，实物退回需另行核对。']:[])].join('\n'),receipt:{orderId:id,transactionIds:record.financeIds,purchaseId:record.purchaseId},undo:{kind:'receipt',id}};
+  ...(record.refundOf?['退款保留原采购，实物退回需另行核对。']:[])].join('\n'),receipt:{orderId:id,transactionIds:record.financeIds,purchaseId:record.purchaseId,revision:state.revision??0,source:'receipt'},undo:{kind:'receipt',id}};
 }
 
 export async function executeReceipt(workspace,receipt,options){
@@ -130,28 +135,52 @@ export async function executeReceipt(workspace,receipt,options){
  if(!(amount>0)||!amountQuoted(receipt.totalEvidence,amount))
   return blocked('请核对截图上的实付或实退金额。');
  const total=cents(amount);
- if(!orderNo)return blocked('缺少可核对的完整订单号，请补充以免重复记账。');
- const originalKey='receipt-'+hash(stable(['order',orderNo]));
+ const rows=state.local.agentReceipts??[];
+ const signature=fingerprint(receipt.lines);
+ const retry=rows.find(row=>row.operation===operation);
+ if(retry){
+  if((retry.orderNo??null)!==orderNo)return blocked('同次操作的订单号不一致，请核对原始截图。');
+  if(retry.merchantKey!==key(merchant)||retry.date!==receipt.date||retry.total!==total||!!retry.refundOf!==refund||retry.signature!==signature)
+   return blocked('同次操作的商品或付款信息不一致，请核对原始截图。');
+  return verifyReceiptRecord(workspace,state,retry.id);
+ }
+ const merchantKey=key(merchant);
+ const recent=row=>Number.isFinite(row.recordedAt)&&Date.now()-row.recordedAt<=receiptWindow;
+ const sameProof=row=>(row.evidenceKeys??[]).some(item=>evidenceKeys.includes(item))||
+  row.mediaKey===mediaKey&&attachmentKeys.length===1;
+ const sameProducts=row=>(row.signature??fingerprint(row.lines??[]))===signature;
+ const repeat=repeatedPurchase(options.text);
  const refundNo=safeOrder(receipt.refundNo);
- if(refund&&!refundNo)return blocked('请补充退款流水号，以免重复登记退款。');
- const id=refund?'refund-'+hash(stable([orderNo,refundNo])):originalKey;
+ const originalMatches=refund&&!orderNo&&receipt.lines.length?rows.filter(row=>!row.cancelled&&!row.refundOf&&
+  row.merchantKey===merchantKey&&row.date<=receipt.date&&row.total>=total&&sameProducts(row)):[];
+ const originalKey=orderNo?'receipt-'+hash(stable(['order',orderNo])):originalMatches.length===1?originalMatches[0].id:null;
+ if(refund&&!originalKey)return blocked('未找到唯一匹配的已付款原订单，需核对退款归属。');
+ const id=refund?'refund-'+hash(stable([originalKey,refundNo??operation])):
+  orderNo?originalKey:'receipt-'+hash(stable(['operation',operation,merchantKey,receipt.date,total,signature]));
  const old=rowsFor(state,id);
  if(old){
-  if(old.merchantKey!==key(merchant)||old.total!==total||old.date!==receipt.date)
+  if(old.merchantKey!==merchantKey||old.total!==total||old.date!==receipt.date)
    return blocked('同一订单号的商家、金额或日期与原账不一致，需核对原单。');
   const verified=verifyReceiptRecord(workspace,state,id);
   return {...verified,text:old.cancelled?verified.text:verified.text+' · 已有记录，未重复写入'};
  }
- const sameImage=(state.local.agentReceipts??[]).find(row=>!!row.refundOf===refund&&
-  row.merchantKey===key(merchant)&&row.date===receipt.date&&row.total===total&&
-  ((row.evidenceKeys??[]).some(item=>evidenceKeys.includes(item))||row.mediaKey===mediaKey&&attachmentKeys.length===1));
- if(sameImage)return blocked('相同截图已出现过，但识别出的订单号不一致，请核对。');
+ const duplicate=rows.find(row=>!!row.refundOf===refund&&(!row.cancelled||sameProof(row))&&
+  row.merchantKey===merchantKey&&row.date===receipt.date&&row.total===total&&
+  (refund?row.refundOf===originalKey&&(!refundNo||!row.refundNo)&&(sameProof(row)||recent(row)):
+   (!orderNo||!row.orderNo)&&sameProducts(row)&&(sameProof(row)||recent(row))));
+ if(duplicate&&!(!refund&&repeat&&!orderNo)){
+  const verified=verifyReceiptRecord(workspace,state,duplicate.id);
+  return {...verified,text:verified.text+' · 疑似重复，未再次写入'};
+ }
+ const conflictingPhoto=rows.some(row=>!!row.refundOf===refund&&!row.cancelled&&sameProof(row)&&
+  (row.merchantKey!==merchantKey||row.total!==total||orderNo&&row.orderNo&&row.orderNo!==orderNo||!sameProducts(row)));
+ if(conflictingPhoto)return blocked('相同截图的付款信息与原账冲突，请核对。');
  if(ledger.transactions.some(row=>row.receiptKey===id||row.id.startsWith(id+':')))
   return blocked('财务已有对应截图条目，库存回执未关联。请核对原账。');
 
  const eligible=!refund?ledger.transactions.filter(row=>row.type==='expense'&&row.date===receipt.date&&
   !row.receiptKey&&cents(Number(row.amount))===total&&key(row.note).includes(key(merchant))):[];
- if(eligible.length)return blocked('财务中已有同商家同日同金额的支出，请核对后关联，未创建重复支出。');
+ if(!repeat&&eligible.length)return blocked('财务中已有同商家同日同金额的支出，请核对后关联，未创建重复支出。');
 
  let units,groups,allocationResult;
  const next=structuredClone(state);
@@ -169,6 +198,7 @@ export async function executeReceipt(workspace,receipt,options){
   groups=[{category,sum:total,kind:'refund',names:[]}];units=[];
  }else{
   try{allocationResult=allocation(receipt,total);}catch(err){return blocked(err.message);}
+  if(!confirmed&&!receipt.lines.length&&!orderNo)return preview('商品明细不可见。确认后可按实付只记财务。',money(total));
   const kinds=receipt.lines.map(line=>household.test(line.name)?'nonfood':line.kind);
   if(kinds.includes('unknown'))return blocked('有商品无法确认是食品或日用品，请核对后再保存。');
   units=[];
@@ -246,7 +276,7 @@ export async function executeReceipt(workspace,receipt,options){
  const purchaseId=units.length?id+':purchase':null,financeIds=entries.map(row=>row.id);
  if(purchaseId)recordPurchase(next,{id:purchaseId,date:receipt.date,time:start,items:units,
   totalCents:units.reduce((sum,row)=>sum+(row.costCents??0),0),note:merchant+' · 截图采购',receiptId:id,financeIds},entries);
- const record={id,merchant,merchantKey:key(merchant),orderNo,date:receipt.date,total,financeIds,purchaseId,
+ const record={id,merchant,merchantKey:key(merchant),orderNo,refundNo,signature,operation,recordedAt:Date.now(),date:receipt.date,total,financeIds,purchaseId,
   refundOf:refund?originalKey:null,discount:allocationResult?.discount??null,shipping:allocationResult?.shipping??null,mediaKey,evidenceKeys,
   lines:receipt.lines.map((line,i)=>({...line,kind:!refund&&household.test(line.name)?'nonfood':line.kind,
    net:allocationResult?.known[i]==null?null:allocationResult.known[i]/100}))};

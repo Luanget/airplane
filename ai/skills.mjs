@@ -39,7 +39,7 @@ export const HEALTH_SKILLS=Object.freeze([
  define('exercise','运动和 TDEE',/运动|骑|跑步|通勤|散步|训练|手表|watch|tdee|消耗/i,
   ['read_health_report','read_ledger'],['activity','correct_activity'],'区分通勤、专项和设备全天数据，核对重叠。','按本机能量政策计算，不重复累计。','运动口径、计入消耗和周期。'),
  define('progress','晨重和六天周期',/体重|晨重|均重|周期|缺口|减脂|趋势|全天|封账|待补/,
-  ['read_health_report','read_ledger'],['weight','cycle','correct_weight','day_status'],'按日期查询有效晨重和周期。','缺报不记为零，正式和条件分开。','七次窗口、正式缺口、进度和理论脂肪当量。'),
+  ['read_health_report','read_ledger'],['weight','cycle','correct_weight','day_status'],'按日期查询有效晨重和周期。','可用实际摄入纳入账面缺口，缺报记未知，可能未记全时标记缺口可能高估。','七次窗口、当前账面缺口、进度和理论脂肪当量。'),
  define('correction','历史补报和纠错',/补报|补记|漏了|更正|改成|少算|多算|昨天|前天|原记录/,
   ['read_food_history','read_health_report','read_packages'],['correct'],'定位日期、餐次、原记录和关联库存。','更正原事件，新补报才新增。','改前改后、影响日期和重新计算。'),
  define('sync','文件同步',/同步|备份|外部主账|sqlite|library|合并导入|导出/i,

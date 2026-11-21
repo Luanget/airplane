@@ -35,6 +35,8 @@ function separateReceiptTurn(text,today){
  if(!orders.some(part=>/识别|处理|记录|核对|报销/.test(part))||weights.length>1||plans.length>2||(!weights.length&&!plans.length))return null;
  return {weights,plans,wireText:orders.join('，')};
 }
+export const separateAttachmentRequests=text=>
+ /逐张|每张|独立识别|分别(?:处理|记|入账|识别)/.test(text)&&!/同一|同个|合计|不重复|只记一次|续粉/.test(text);
 export function routeAgent(store,{text='',photos=0,medical=null,allowRead=true,legacy=false,today}={}){
  const own=manualChatModel(store);
  const isHealth=healthMode.test(text),isFinance=finance.test(text);
@@ -47,7 +49,7 @@ export function routeAgent(store,{text='',photos=0,medical=null,allowRead=true,l
   if(medical)profile='medical';
   else if(decomposed)profile='receipt';
   else if(photos){
-   if(!/分别|逐张|每张|独立识别/.test(text)||isReceipt)profile=mixed?'mixed':isReceipt&&!isHealth?'receipt':'vision';
+   if(!separateAttachmentRequests(text)||isReceipt)profile=mixed?'mixed':isReceipt&&!isHealth?'receipt':'vision';
   }else if(!raw.test(text)){
    if(mixed)profile='mixed';
    else if(isFinance&&!isHealth)profile='finance';
@@ -59,7 +61,7 @@ export function routeAgent(store,{text='',photos=0,medical=null,allowRead=true,l
  return {profile,model:model.id,manual:!!own,visual,mixed,decomposed};
 }
 
-export function localAgentCommand(workspace,{text,today,allowRead=true,files=0}){
+export function localAgentCommand(workspace,{text,today,allowRead=true,files=0,reference}){
  if(!allowRead||files||!text.trim())return null;
  const source=text.trim(),normalized=source.normalize('NFKC').replace(/[。！？!?]$/,'').trim();
  if(/^(?:(?:帮我|请|想)查(?:一下)?|我想知道)?(?:我(?:的)?|目前|现在|当前|本机|总)*\s*(?:账本)?(?:总)?余额(?:是)?多少$/.test(normalized)||
@@ -74,21 +76,38 @@ export function localAgentCommand(workspace,{text,today,allowRead=true,files=0})
  ];
  const exact=reads.find(([pattern])=>pattern.test(normalized));
  if(exact)return {query:{scope:exact[1],query:''}};
- const intake=normalized.match(/^(今天|昨天|前天|\d{4}-\d{2}-\d{2})(?:我)?(?:的)?(?:吃了什么|有哪些实际饮食|饮食记录有哪些)$/);
+ const intake=normalized.match(/^(?:回顾(?:一下|下)?|查(?:一下|下)?|查看|看看)?(?:我)?(今天|昨天|前天|\d{4}-\d{2}-\d{2})(?:我)?(?:的)?(早餐|午餐|晚餐|加餐)?(?:都)?(?:吃了什么|有哪些实际饮食|饮食记录有哪些)$/);
  if(intake){
   const date={今天:today,昨天:addDays(today,-1),前天:addDays(today,-2)}[intake[1]]??intake[1];
-  if(validDate(date)&&date<=today)return {query:{scope:'foods',date,query:''}};
+  if(validDate(date)&&date<=today)return {query:{scope:'foods',date,query:''},...(intake[2]?{meal:intake[2]}:{})};
  }
  const morning=normalized.match(/^(?:(今天|昨天|前天)\s*)?(?:记录|记下|记一下|记)?\s*(?:晨重|早晨体重)\s*(?:是|为|:)?\s*(\d{1,3}(?:\.\d+)?)\s*(?:kg|公斤|千克)$/i);
  if(morning&&Number(morning[2])>=1&&Number(morning[2])<=650){
   const date={昨天:addDays(today,-1),前天:addDays(today,-2)}[morning[1]]??null;
   return {proposal:healthAction(step('weight',source,{date,kg:Number(morning[2]),morning:'yes'}))};
  }
+ const weighed=normalized.match(/(\d{1,3}(?:\.\d+)?)\s*(?:kg|公斤|千克)/gi);
+ if(weighed?.length===1&&/(?:起床|早上|晨重|早起)/.test(normalized)&&/空腹|体重|称了/.test(normalized)&&
+  /留档|记录|记上|补上|记下来/.test(normalized)&&!/如果|大概|也记|同时|顺便|另外|再记|修正|更正|改|除了|计划|不是/.test(normalized)){
+  const kg=Number(weighed[0].match(/\d+(?:\.\d+)?/)[0]);
+  if(kg>=1&&kg<=650){
+   const day=/前天/.test(normalized)?addDays(today,-2):/昨天|昨日/.test(normalized)?addDays(today,-1):null;
+   return {proposal:healthAction(step('weight',source,{date:day,kg,morning:'yes'}))};
+  }
+ }
  const weight=normalized.match(/^([\p{L}][\p{L}\p{N} ]{1,30}?)(?:现在|最新毛重|剩余毛重)\s*(?:是|为|:)?\s*(\d{1,5}(?:\.\d{1,3})?)\s*(?:g|克)$/iu);
  if(weight&&!/[a-z0-9]\s*[瓶盒袋包]$/i.test(weight[1])&&!/可能|大概|应该|如果|比如|不是|不确定|昨天|今天|前天|上次|刚才|称错|更正|全部|合计|计划|体重|餐|已经吃|用了|买/.test(weight[1])&&Number(weight[2])>0){
   return {proposal:healthAction(step('weigh',source,{name:weight[1].trim(),gross:Number(weight[2])}))};
  }
  const unit=term=>/^ml$/i.test(term)||term==='毫升'?'mL':'g';
+ const relative=reference?.recordId&&/这[条笔道]|那[条笔道]|刚(?:记|才)|上一条/.test(normalized)&&
+  !/如果|不要|先看看|多个|全部|昨天|前天|另一/.test(normalized)&&
+  normalized.match(/改成\s*(\d+(?:\.\d{1,3})?)\s*(g|克|mL|毫升)(?:[，,、\s]|$)/iu);
+ if(relative&&Number(relative[1])>0){
+  const meal=normalized.match(/(?:留在|改到|移到)\s*(早餐|午餐|晚餐|加餐)/)?.[1]??null;
+  return {proposal:healthAction(step('correct',source,{name:'那条',recordId:reference.recordId,
+   date:reference.date,amount:Number(relative[1]),unit:unit(relative[2]),newMeal:meal}))};
+ }
  const correction=normalized.match(/^(昨天|前天|今天)(?:的)?([\p{L}][\p{L}\p{N} ]{1,22}?)(?:记录)?(少算|多算|漏记)\s*(\d{1,5}(?:\.\d{1,3})?)\s*(g|克|mL|毫升)$/iu);
  if(correction&&!/或|估|好像|可能|应该|这条|那条|原来/.test(correction[2])&&Number(correction[4])>0)
   return {proposal:healthAction(step('correct',source,{name:correction[2],unit:unit(correction[5]),
@@ -119,12 +138,11 @@ export function routedSkills(skills,profile){
 }
 
 export function scopedHistory(profile,text,current){
- if(profile==='general')return current;
- if(profile==='receipt')return {turns:[],summary:null};
- if(!/刚才|那条|这条|那瓶|那盒|上一条|上面|前面|按之前|继续|然后|也(?:记|改|算)|还要|结合|跟上次/.test(text))
-  return {turns:[],summary:null};
- const turns=current.turns.slice(-4).map(row=>({...row,text:row.text.slice(-450)}));
- return {turns,summary:null};
+ const recent=current.turns.slice(-24);
+ const terms=new Set((text.match(/[a-z0-9_-]{3,}|[\p{Script=Han}]{2}/giu)??[]).map(word=>word.toLowerCase()));
+ const earlier=current.turns.slice(0,Math.max(0,current.turns.length-24))
+  .filter(row=>[...terms].some(term=>row.text.toLowerCase().includes(term))).slice(-6);
+ return {...current,turns:[...earlier,...recent]};
 }
 
 const unknownReceipt={merchant:null,orderNo:null,date:null,state:'unknown',currency:null,paid:null,discount:null,shipping:null,

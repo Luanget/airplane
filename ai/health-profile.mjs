@@ -6,7 +6,7 @@ export const CORE_RULES=Object.freeze({
  '03_food_nutrition_cost':'明确数据依据；营养和价格未知保留未知。',
  '04_diet_targets_preferences':'按可用库存和已启用习惯规划，与实际摄入分开。',
  '05_exercise_and_tdee':'通勤、专项和设备合计去重；计入规则由本机执行。',
- '06_six_day_cycle':'仅已报数据可结算；条件估算不进入正式累计。',
+ '06_six_day_cycle':'有实际摄入且可计算热量的日期参与账面缺口；缺报未知，可能未记全时标记缺口可能高估。',
  '07_weight_trend':'显示有效晨重及最近七次窗口；不把单日波动等同于脂肪变化。',
  '08_recovery_and_safety':'高热量外食后恢复正常用餐、饮水和日常活动。'
 });

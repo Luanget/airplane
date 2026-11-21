@@ -1,7 +1,8 @@
+import {apportionedCost,packageCostReference} from './package-price.mjs';
 import {addFood,allocateStock,actualFood,batchBalances,changeFoodMeal,events,inventoryWithMoves,isStockReference,makeId,numeric,round,
  sampleNutrientSum,suggestNutritionByInventory,validDate} from './core.mjs';
 import {basis,packageInfo,quantityInUnit} from './candidates.mjs';
-import {addBatch} from './inventory.mjs';
+import {addBatch,auditedDisposition} from './inventory.mjs';
 import {hasLaterPackageReading,managedFoodPackage,onShelf,packageJournal,packageReading} from './container-ledger.mjs';
 import {normalizeClock} from '../calendar.mjs';
 
@@ -23,8 +24,9 @@ function packageSpec(sku){
   return {kind:configured??'盒',stockMode:'whole',stockAmount:sizeMl,nominal:{value:sizeMl,unit:'mL'}};
  const unit=configured&&sku.unit===configured?configured:sku.unit.match(/^(瓶|盒)/)?.[1];
  if(!unit||/盒当量|个\s*[/／]盒|每盒\s*\d+个/.test(text))return null;
- const size=spec.size??(/虎邦.*牛肉.*辣椒酱/.test(sku.name)?200:null);
- return {kind:unit,stockMode:'whole',stockAmount:1,nominal:size?{value:size,unit:spec.measure??'g'}:null};
+ const labeled=text.match(/每(?:瓶|盒)\s*(\d+(?:\.\d+)?)\s*(g|克|ml|毫升)/i);
+ const size=spec.size??(labeled?Number(labeled[1]):/虎邦.*牛肉.*辣椒酱/.test(sku.name)?200:null);
+ return {kind:unit,stockMode:'whole',stockAmount:1,nominal:size?{value:size,unit:spec.measure??(labeled&&/ml|毫升/i.test(labeled[2])?'mL':'g')}:null};
 }
 
 function append(state,container,event){
@@ -61,6 +63,16 @@ export function ensureContainers(state){
  for(const sku of skuRows){
   if(!sku.active||isStockReference(sku))continue;
   const skuLots=lots.filter(lot=>lot.foodId===sku.id);
+  const disposition=sku.unit==='g'&&auditedDisposition(state,sku);
+  if(disposition?.event==='unopened_bottle_given_away'){
+   const spec=packageInfo(sku);
+   const container=newContainer(sku,virtualBatch(sku.id),0,{kind:'瓶',stockMode:'grossSnapshot',stockAmount:sku.qty,openingBaselinePartial:true,
+    nominal:spec.size?{value:spec.size,unit:spec.measure??'g'}:null,origin:'opening'});
+   add(container);
+   const journal=packageJournal(state,container.id);
+   if(!journal.length)append(state,container,{id:operationId(container.id,'audited-opening'),type:'baseline',
+    date:disposition.date,gross:sku.qty,source:'migration',reason:'赠送未开封瓶后，沿用剩余开封瓶实测毛重'});
+  }
   const defaultSpec=packageSpec(sku);
   if(defaultSpec||skuLots.some(lot=>lot.packageSpec)){
    const receipts=local.stockMoves.filter(row=>row.foodId===sku.id&&!row.batchId&&!row.containerId&&row.delta>0)
@@ -122,9 +134,12 @@ export function packagesFor(state,foodId){
  const numbers=new Map();
  return (state.local.containers??[]).filter(row=>!foodId||row.foodId===foodId).map(container=>{
   const journal=packageJournal(state,container.id);
+  const sku=productRows(state).find(row=>row.id===container.foodId);
+  const rate=packageCostReference(sku,container,lots.get(container.batchId));
+  const costed={...container,...rate};
   const number=(numbers.get(container.foodId)??0)+1;
   numbers.set(container.foodId,number);
-  const view={...packageReading(container,journal),number};
+  const view={...packageReading(costed,journal),number};
   const lot=lots.get(container.batchId);
   if(container.stockMode==='portion'||container.stockMode==='estimated'&&container.origin==='batch'){
    if(!lot)return {...view,status:'retired'};
@@ -164,12 +179,12 @@ const validMass=(value,message)=>{
  if(n===null||n<0)throw Error(message);
  return round(n,3);
 };
-function consumptionCost(container,grams){
- if(container.costCents==null)return null;
- const initial=container.actualNetGrams??(container.initialGross!=null&&container.tare!=null?container.initialGross-container.tare:null);
- const reference=initial??(container.nominal?.unit==='g'?container.nominal.value:null);
- if(!(reference>0))return null;
- return Math.max(0,Math.min(container.costCents-container.spent-container.lossCost,Math.round(container.costCents*grams/reference)));
+function consumptionCost(container,grams,volumeMl){
+ const initial=container.actualNetGrams??(!container.openingBaselinePartial&&container.initialGross!=null&&container.tare!=null?container.initialGross-container.tare:null);
+ const volumeBasis=initial==null&&container.nominal?.unit==='mL';
+ const reference=initial??container.nominal?.value;
+ const amount=volumeBasis?volumeMl:grams;
+ return apportionedCost(container.costCents,amount,reference,container.spent+container.lossCost);
 }
 function foodFields(container,sku,grams,form,costCents){
  const [,unit]=basis(sku);
@@ -242,12 +257,13 @@ export function previewPackageAction(state,input){
    foodId:sku.id,stockQty:null,cost:event.costCents==null?null:event.costCents/100,
    quality:labelAmount==null?'unknown':'label',uncertainty:container.nominal?'完整包装，按包装标称规格记录':'完整包装；未提供净含量',...nutrition};
  }else if(action==='eat'||action==='net'){
-  event.costCents=consumptionCost(container,event.grams);
   if(container.nominal?.unit==='mL')event.volumeMl=numeric(input.volumeMl)??quantityInUnit(sku,event.grams,'g','mL');
-  food=foodFields(container,sku,event.grams,{...input,gross:event.gross},event.costCents);
+  event.costCents=consumptionCost({...container,tare},event.grams,event.volumeMl);
+  event.costEstimated=event.costCents!==null&&(container.costEstimated||container.actualNetGrams==null&&tare==null);
+  food={...foodFields(container,sku,event.grams,{...input,gross:event.gross},event.costCents),costEstimated:event.costEstimated};
  }
- if(action==='loss')event.costCents=consumptionCost(container,event.grams);
- if(action==='discard')event.costCents=container.costCents==null?null:Math.max(0,container.costCents-container.spent-container.lossCost);
+ if(action==='loss')event.costCents=consumptionCost({...container,tare},event.grams,quantityInUnit(sku,event.grams,'g','mL'));
+ if(closeTypes.includes(action))event.costCents=container.costCents==null?null:Math.max(0,container.costCents-container.spent-container.lossCost);
  return {container,event,food,difference:event.grams??null};
 }
 
@@ -255,7 +271,7 @@ function settleStock(state,view,event,food){
  if(food?.stockQty>0)return;
  let delta=0;
  if(closeTypes.includes(event.type)){
-  if(view.stockMode==='whole')delta=-view.stockAmount;
+  if(['whole','grossSnapshot'].includes(view.stockMode))delta=-view.stockAmount;
   if(view.stockMode==='portion')delta=-(batchBalances(state,view.foodId).find(row=>row.id===view.batchId)?.remaining??0);
   if(view.stockMode==='estimated'){
    const lot=batchBalances(state,view.foodId).find(row=>row.id===view.batchId);
@@ -272,7 +288,7 @@ function settleStock(state,view,event,food){
    const allocated=batchBalances(state,view.foodId).reduce((sum,row)=>sum+row.remaining,0);
    if(available==null||round(available-allocated,6)<-delta)throw Error('对应包装的期初库存不足，请核对实盘');
   }
-  allocateStock(state,view.foodId,-delta,lot?.id,event.date);
+  if(view.stockMode!=='grossSnapshot')allocateStock(state,view.foodId,-delta,lot?.id,event.date);
  }
  const move={id:'movement:'+event.id,foodId:view.foodId,batchId:lot?.id??null,containerId:view.id,date:event.date,
   delta,costCents:event.costCents??null,reason:event.type==='empty'?'包装已用完':event.type==='discard'?'包装丢弃':event.type==='refill'?'包装补充':'包装损耗'};
@@ -324,7 +340,9 @@ export function revisePackageFood(current,input){
   throw Error('该包装已更新，请重看称重预览');
  if(hasLaterPackageReading(journal,event)||event.type!=='eat')
   throw Error('这笔已成为后续称重基准。可调整餐次或撤销饮食，历史毛重保留供核对');
- const previous=packageReading(container,journal.slice(0,journal.indexOf(event)));
+ const lot=next.local.batches?.find(row=>row.id===container.batchId);
+ const product=productRows(next).find(row=>row.id===container.foodId);
+ const previous=packageReading({...container,...packageCostReference(product,container,lot)},journal.slice(0,journal.indexOf(event)));
  const gross=validMass(input.gross,'请填写更正后的毛重');
  if(gross>=previous.gross||previous.tare!==null&&gross<previous.tare)throw Error('请核对本次称重范围');
  const grams=round(previous.gross-gross-previous.unweighedGrams,3);

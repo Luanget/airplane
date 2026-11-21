@@ -135,7 +135,7 @@ test('commute and wearable totals do not inflate TDEE, repeated exercise is dedu
  assert.equal(energyForDay(saved,yesterday,date).tdee,prior);
 });
 
-test('daily reports distinguish pending meals, missing nutrients, measured weights and formal versus conditional cycle totals',()=>{
+test('daily reports distinguish pending meals, missing nutrients, measured weights and a live cycle deficit',()=>{
  const state=applyProfileSettings(make(),plan.settings,date);
  const mix=(name,day,meal,status,energy)=>addFood(state,{name,date:day,meal,status,kcal:energy,protein:20,carbs:30,fat:10,sodium:111});
  const missing=addDays(date,-2);
@@ -153,12 +153,14 @@ test('daily reports distinguish pending meals, missing nutrients, measured weigh
  assert.equal(full.actual.kcal,550);
  assert.equal(full.conditionalNutrition.kcal,1150);
  assert.equal(full.plans.length,1);
- assert.notEqual(full.cycle.formal,full.cycle.conditionalTotal);
- assert.match(renderHealthReport(full),/正式累计缺口.*\n理论脂肪当量/s);
+ assert.equal(full.cycle.deficit,3762.2);
+ assert.equal(full.cycle.possibleOverestimate,true);
+ assert.match(renderHealthReport(full),/周期账面缺口.*\n理论脂肪当量/s);
  mix('历史补报',missing,'晚餐','actual',1500);
- assert.equal(healthReport(state,date,date).cycle.closedDays,full.cycle.closedDays);
+ assert.equal(healthReport(state,date,date).cycle.reportedDays,full.cycle.reportedDays+1);
+ const result=healthReport(state,date,date).cycle.deficit;
  setDayCompleteness(state,missing,'complete');
- assert.equal(healthReport(state,date,date).cycle.closedDays,full.cycle.closedDays+1);
+ assert.equal(healthReport(state,date,date).cycle.deficit,result);
 });
 
 const basePhoto={dishKey:'noodle',name:'合成米粉',role:'served',images:[1],amount:170,unit:'g',
@@ -226,4 +228,15 @@ test('two-meal plans reserve the same celery portion across lunch and dinner wit
  assert.equal((preview.source.text.match(/合成芹菜 · 250 g/g)??[]).length,2);
  assert.equal((preview.source.text.match(/合成熟鸡胸 ·/g)??[]).length,1);
  assert.equal(inventoryWithMoves(state).find(row=>row.id==='celery').qty,500);
+});
+
+test('a readable label and one stated eaten weight are enough to save the same named food',()=>{
+ const label={...basePhoto,name:'合成米粉',role:'label',confidence:'label',amount:null,unit:null};
+ const proposal={intent:'preview',date:null,meal:null,observations:[label],steps:[]};
+ const grouped=groupMealPhotos(proposal,'中午吃完合成米粉150g，请按标签记录',1);
+ assert.equal(grouped.plan.intent,'execute');
+ assert.equal(grouped.plan.steps[0].amount,150);
+ assert.equal(grouped.plan.steps[0].nutrition.kcal,150);
+ assert.equal(grouped.plan.steps[0].meal,'午餐');
+ assert.equal(groupMealPhotos(proposal,'中午吃完合成鸡蛋150g，请按标签记录',1).plan.steps.length,0);
 });

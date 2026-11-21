@@ -15,7 +15,7 @@ import {quantityInUnit,basis,packageInfo} from './candidates.mjs';
 import {APP_VERSION,shellIcon} from '../shell.mjs';
 import {bindUpdateCheck} from '../updates.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
-import {newState,normalizeLedger,recoverLegacyPortions,validateAppState,APP_SCHEMA,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,setDayCompleteness,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,availableBatches,addDays,isOnHand,isStockReference,carbReference,currentCarbReference,importedDietTargets} from './core.mjs';
+import {newState,normalizeLedger,recoverLegacyPortions,validateAppState,APP_SCHEMA,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,availableBatches,addDays,isOnHand,isStockReference,carbReference,currentCarbReference,importedDietTargets} from './core.mjs';
 import {readState,saveState} from './storage.mjs';
 import {mealOrder,timelineGroup,eatingState,stockName,stockUnit,stockGroups} from './presentation.mjs';
 import {renderWeightChart} from './weight-chart.mjs';
@@ -98,13 +98,8 @@ function renderOverview(){
  const today=dateNow(),intake=dayIntake(state,selectedDate),cals=intake.totals.kcal,known=intake.reported;
  const goal=state.settings.calorieTarget,energy=energyForDay(state,selectedDate,today);
  $('report-date').value=selectedDate;
- text('today-status',selectedDate>today?'未来日期':energy.closed?'已结算':!known?'缺少记录':
-  energy.completeness.status==='complete'?(energy.reported?'次日结算':'热量数据待补'):'全天记录待确认');
- const completeness=$('today-status');
- completeness.disabled=selectedDate>today||!known;
- completeness.title=completeness.disabled?'':energy.completeness.status==='complete'?'标记全天待补':'确认全天已记录';
- completeness.setAttribute('aria-label',completeness.title||completeness.textContent);
- completeness.dataset.status=energy.completeness.status==='complete'?'partial':'complete';
+ text('today-status',selectedDate>today?'未来日期':!energy.reported?'摄入待补':
+  energy.possibleOverestimate?'缺口可能高估':'已计入周期');
  text('hero-calories',known?fmt(cals,1):'—'); text('hero-goal',`目标 ${fmt(goal)} kcal`);
  syncCalendarFields($('report-date').parentElement);
  text('hero-remaining',cals!==null&&!intake.incomplete.includes('kcal')?(goal-cals>=0?`剩余 ${fmt(goal-cals,1)} kcal`:`超出 ${fmt(cals-goal,1)} kcal`):'摄入数据待补');progress('cal-progress',known?cals/goal*100:0);
@@ -116,7 +111,15 @@ function renderOverview(){
  const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,1)} kg`:'—');text('weight-date',weights.last?displayDay(weights.last.date):'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,1)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>=.05?'+':''}${fmt(weights.delta,1)} kg`:'需至少8次有效晨重');
  renderWeightChart($('weight-chart'),$('weight-chart-value'),weights.points.slice(-14));
  text('cycle-title',state.settings.cycleDays===6?'六天减脂周期':state.settings.cycleDays+' 天减脂周期');
- const cycle=cycleForDate(state,selectedDate,today);text('cycle-range',`${displayDay(cycle.start)} — ${displayDay(cycle.end)} · ${cycle.closedDays}/${cycle.days}天已封账`);text('cycle-deficit',`${fmt(cycle.deficit)} kcal`);progress('cycle-progress',cycle.progress);text('cycle-pct',`目标完成 ${fmt(cycle.progress,1)}% / ${fmt(cycle.goal)} kcal`);text('cycle-equivalent',`理论脂肪当量 ${fmt(cycle.fatEquivalent,3)} kg`);text('cycle-note',cycle.unreported?`有 ${cycle.unreported} 天记录缺失、未确认全天或热量待补，暂未纳入正式缺口。`:'全天记录确认后于次日结算。历史补报会重算。');
+ const cycle=cycleForDate(state,selectedDate,today);
+ text('cycle-range',`${displayDay(cycle.start)} — ${displayDay(cycle.end)} · ${cycle.reportedDays}/${cycle.days} 天有摄入`);
+ text('cycle-deficit',cycle.deficit===null?'—':`${fmt(cycle.deficit)} kcal`);
+ progress('cycle-progress',cycle.progress);
+ text('cycle-pct',`目标 ${fmt(cycle.goal)} kcal`);
+ text('cycle-equivalent',cycle.fatEquivalent===null?'':`理论脂肪当量 ${fmt(cycle.fatEquivalent,3)} kg`);
+ text('cycle-note',[cycle.unreported?`${cycle.unreported} 天缺报，缺口未知`:'',
+  cycle.possibleOverestimate?'餐食可能未记全，当前缺口可能高估':''].filter(Boolean).join(' · '));
+
  renderTimeline();
 }
 function setDateDefaults(){document.querySelectorAll('form input[name=date]').forEach(el=>{if(!el.value)el.value=dateNow();});}
@@ -233,9 +236,9 @@ function renderTrends(){
   `<div class="day-group"><div class="day-head">${dayLabel(date)}</div>${rows.map(timelineRow).join('')}</div>`
  ).join('')||'<p class="muted">本月暂无称重或运动。</p>';
  const kilos=new Map(points.map(e=>[e.date,e.kg]));
- $('trend-days').innerHTML=`<p>本周期缺口 ${fmt(cycle.deficit)} kcal · 已结算 ${cycle.closedDays}/${cycle.days} 天</p>`+Array.from({length:14},(_,i)=>{
+ $('trend-days').innerHTML=`<p>本周期缺口 ${fmt(cycle.deficit)} kcal · 有摄入 ${cycle.reportedDays}/${cycle.days} 天</p>`+Array.from({length:14},(_,i)=>{
   const date=addDays(today,-i),intake=dayIntake(state,date),e=energyForDay(state,date,today);
-  return `<div class="event-row"><div class="event-main"><strong>${displayDay(date)} · 晨重 ${fmt(kilos.get(date),2)} kg</strong><small>摄入 ${intake.incomplete.includes('kcal')?'≥ ':''}${fmt(intake.totals.kcal)} kcal · 蛋白质 ${fmt(intake.totals.protein,1)} g · 碳水 ${fmt(intake.totals.carbs,1)} g · 脂肪 ${fmt(intake.totals.fat,1)} g · 钠 ${fmt(intake.totals.sodium)} mg</small><small>${e.closed?'缺口 '+fmt(e.deficit)+' kcal':date===today?'待结算':'待补数据'} · 饮食成本 ${intake.cost===null?'未知':(intake.costPartial?'已知部分 ':'')+'¥'+fmt(intake.cost,2)}</small></div></div>`;
+  return `<div class="event-row"><div class="event-main"><strong>${displayDay(date)} · 晨重 ${fmt(kilos.get(date),2)} kg</strong><small>摄入 ${intake.incomplete.includes('kcal')?'≥ ':''}${fmt(intake.totals.kcal)} kcal · 蛋白质 ${fmt(intake.totals.protein,1)} g · 碳水 ${fmt(intake.totals.carbs,1)} g · 脂肪 ${fmt(intake.totals.fat,1)} g · 钠 ${fmt(intake.totals.sodium)} mg</small><small>${e.reported?'缺口 '+fmt(e.deficit)+' kcal'+(e.possibleOverestimate?'（可能高估）':''):'缺口未知'} · 饮食成本 ${intake.cost===null?'未知':(intake.costPartial?'已知部分 ':'')+'¥'+fmt(intake.cost,2)}</small></div></div>`;
  }).join('');
 }
 function closeInlineStock({reset=false}={}){
@@ -285,13 +288,14 @@ function renderInventory(){
     <span class="stock-name"><strong>${E(label)}</strong>${secondary?`<small>${E(secondary)}</small>`:''}</span>
     <span class="stock-qty ${row.qty<0?'low':''}">${E(stockLabel)}</span></button>
     <div class="stock-actions"${open?'':' hidden'}>
+     ${row.packagePrice?`<div class="package-rows"><small>参考价 ¥${fmt(row.packagePrice.cents/100,2)} / ${row.packagePrice.unit==='瓶'?'瓶':row.packagePrice.quantity+' '+row.packagePrice.unit}${!row.grossStockOnly&&row.looseCostEstimateCents!=null&&row.packagePrice.unit==='g'?' · 期初剩余约 ¥'+fmt(row.looseCostEstimateCents/100,2):''}</small></div>`:''}
      ${hasPackages?`<div class="package-rows">${packRows}</div>`:''}
      ${history.length?`<details class="package-history" data-package-history="${E(row.id)}"${expandedPackageHistory.has(row.id)?' open':''}><summary>包装历史</summary>
       ${history.map(item=>`<p>${E(packageLabel(item)+' · '+packageDetail(item))}</p>${item.measurements.map(read=>`<p>${E(displayDay(read.date))} · ${E(fmt(read.gross,1))} g${read.revised?' · 已更正':''}</p>`).join('')}`).join('')}</details>`:''}
      <div class="button-row">${hasPackages&&onHand.filter(item=>item.status==='open').length===1?
      `<button type="button" class="btn btn-secondary" data-package-sku="${E(row.id)}">记录最新毛重</button>`:''}
-     ${isOnHand(row)&&!hasPackages?`<button type="button" class="btn btn-secondary" data-stock-meal="${E(row.id)}">记饮食</button>`:''}
-     ${isOnHand(row)&&!hasPackages?`<button type="button" class="btn btn-text" data-stock-split="${E(row.id)}" aria-controls="split-form" aria-expanded="false">记录分装</button>`:''}
+     ${isOnHand(row)&&!hasPackages&&!row.grossStockOnly?`<button type="button" class="btn btn-secondary" data-stock-meal="${E(row.id)}">记饮食</button>`:''}
+     ${isOnHand(row)&&!hasPackages&&!row.grossStockOnly?`<button type="button" class="btn btn-text" data-stock-split="${E(row.id)}" aria-controls="split-form" aria-expanded="false">记录分装</button>`:''}
      <button type="button" class="btn btn-text" data-sku-edit="${E(row.id)}" aria-controls="sku-form" aria-expanded="false">编辑食品</button>
      </div>
     </div></div>`;
@@ -328,6 +332,7 @@ function fmtStock(sku,quantity=sku?.qty){
  return E(stockText(sku,quantity));
 }
 function stockText(sku,quantity=sku?.qty){
+ if(sku?.grossStockOnly&&quantity>0)return Number(quantity.toFixed(3))+' g 毛重';
  const value=displayStockQuantity(sku,quantity),unit=stockUnit(stockMeasure(sku).unit);
  return value==null?'—':Number(value.toFixed(3))+' '+unit;
 }
@@ -572,16 +577,6 @@ function attach(){
  $('add-health').onclick=openEntry;
  for(const type of Object.keys(historyTypes)) $(`${type}-form`).addEventListener('input',()=>dirtyEntries.add(type));
  $('health-settings').onclick=openSettings;
- $('today-status').onclick=async()=>{
-  const button=$('today-status'),status=button.dataset.status;
-  const next=structuredClone(state);
-  const date=selectedDate;
-  if(date>dateNow()||!dayIntake(state,date).reported)return;
-  button.disabled=true;
-  try{setDayCompleteness(next,date,status);await commit(next,status==='complete'?'已确认全天记录':'已标记为待补');}
-  catch(err){toast(err.message);}
-  finally{button.disabled=false;}
- };
  document.querySelectorAll('[data-entry]').forEach(b=>b.onclick=()=>selectEntry(b.dataset.entry));
  document.querySelectorAll('.health-sheet').forEach(d=>d.addEventListener('close',()=>{
   const t=$('toast');
@@ -727,7 +722,7 @@ function attach(){
    }
   }
   const measure=stockMeasure(row),pack=packageInfo(row);
-  fillForm(form,{...row,...row.nutrition,price:row.priceBasis===row.unit?row.pricePerUnit:null,basisAmount,basisUnit,
+  fillForm(form,{...row,...row.nutrition,price:!row.packagePrice&&row.priceBasis===row.unit?row.pricePerUnit:null,basisAmount,basisUnit,
    piecesPerPack:measure.unit!==row.unit?measure.factor:null,
    packageSize:pack.pack===row.unit?pack.size:row.packageSize,packageUnit:pack.pack===row.unit?pack.measure:row.packageUnit});
   $('inventory-catalog').value=id;

@@ -248,7 +248,7 @@ try{
  assert.equal(afterPhoto.state.local.foods.at(-1).agentEvidence.part,'extra');
  assert.equal(afterPhoto.state.local.foods.at(-2).agentEvidence.part,'served');
  await log.getByText('营养、库存与进度明细',{exact:true}).last().click();
- await log.getByText(/续份独立计入.*正式累计缺口/s).waitFor();
+ await log.getByText(/续份独立计入.*周期账面缺口/s).waitFor();
  await composer.locator('[name=image]').setInputFiles(attachments);
  await sent(photoText,/刚已保存，未重复入账/,0);
  assert.equal((await read()).state.revision,afterPhoto.state.revision);

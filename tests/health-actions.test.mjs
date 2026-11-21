@@ -166,7 +166,7 @@ test('split, morning weight, exercise and cycle computations share the same tran
   action('activity','跑步30分钟消耗200kcal',{name:'跑步',minutes:30,kcal:200,uncertainty:''}),
   action('cycle','查周期',{}));
  const response=await model(w,text,plan);
- assert.match(response.text,/已结算/);
+ assert.match(response.text,/有摄入 1 天.*可能高估/);
  const state=await w.readHealth();
  assert.equal(w.writes,1);
  assert.equal(state.local.weights.at(-1).kg,72.3);

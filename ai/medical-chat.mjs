@@ -30,7 +30,7 @@ function dateIn(text,today){
  if(/今天|今日/.test(text))return today;
  return null;
 }
-const aliases={空腹血糖:['血糖','fpg'],糖化血红蛋白:['hba1c','糖化'],甘油三酯:['tg','血脂'],总胆固醇:['tc','血脂'],
+const aliases={空腹血糖:['血糖','fpg','fasting glucose','1558-6'],'fasting glucose':['空腹血糖','血糖','fpg','1558-6'],糖化血红蛋白:['hba1c','糖化'],甘油三酯:['tg','血脂'],总胆固醇:['tc','血脂'],
  丙氨酸氨基转移酶:['alt','谷丙转氨酶','转氨酶'],谷丙转氨酶:['alt','转氨酶','丙氨酸氨基转移酶']};
 
 export function selectedMedicalIndicators(state,text,today){
@@ -38,7 +38,7 @@ export function selectedMedicalIndicators(state,text,today){
  const names=new Map();
  for(const row of data.measurements){
   const indicator=indicatorKey(matchIndicator(data,row));
-  const words=[row.name,row.code,...(aliases[row.name]??[])].map(normalized).filter(word=>word.length>=2);
+  const words=[row.name,row.code,...(aliases[row.name.toLowerCase()]??[]),...(row.code==='1558-6'?aliases.空腹血糖:[])].map(normalized).filter(word=>word.length>=2);
   if(words.some(word=>query.includes(word)))names.set(indicator,row.name);
  }
  return [...names].flatMap(([id,name])=>{
@@ -57,7 +57,9 @@ function queryMedical(state,text,today){
    const first=group.points[0],last=group.points.at(-1);
    return row.name+' · '+group.method+' · '+first.value+' → '+last.value+' '+group.unit;
   }));
-  return {text:'本机档案 · '+selected.map(group=>group.name).join('、'),detail:[...trend,...details].join('\n')};
+  const recent=!/趋势|历次|变化/.test(text)&&selected.length===1?selected[0].rows.at(-1):null;
+  return {text:recent?summaryLine(recent):'本机档案 · '+selected.map(group=>group.name).join('、'),
+   detail:[...trend,...details].join('\n')};
  }
  const date=dateIn(text,today);
  if(/基础资料/.test(text)){
@@ -124,7 +126,7 @@ function checkGrant(workspace,allowed,automatic,kind){
  assertSkillAction(skillCatalog(workspace.finance),kind);
 }
 
-export async function useMedicalTurn(workspace,{kind,text,files,ask,allowed,show,review}){
+export async function useMedicalTurn(workspace,{kind,text,files,ask,allowed,show,review,onSaved}){
  const previewOnly=/(?:只|仅)(?:识别|看看|预览)|先(?:看看|预览|别记)|(?:不要|不用|不必|暂不)(?:录入|保存|写入|记录)/.test(text);
  const today=localDate(),action=kind==='extract'?'medical_extract':kind==='symptom'?'medical_symptom':'medical_read';
  assertSkillAction(skillCatalog(workspace.finance),action);
@@ -153,10 +155,15 @@ export async function useMedicalTurn(workspace,{kind,text,files,ask,allowed,show
   const save=async(_date,automatic=false)=>{
    const latest=await workspace.readHealth(),next=structuredClone(latest);
    checkGrant(workspace,allowed,automatic,action);
-   if(medicalData(latest).symptoms.some(row=>row.id===draft.id))return '症状已记录，重试未新增。';
+   if(medicalData(latest).symptoms.some(row=>row.id===draft.id)){
+    onSaved?.({symptomId:draft.id,revision:latest.revision??0,source:'medical'});
+    return '症状已记录，重试未新增。';
+   }
    saveMedicalNote(next,'symptoms',draft);
    await workspace.saveHealth(next,latest.revision??0,()=>checkGrant(workspace,allowed,automatic,action));
-   if(!medicalData(await workspace.readHealth()).symptoms.some(row=>row.id===draft.id))throw Error('未能核对症状保存回执。');
+   const stored=await workspace.readHealth();
+   if(!medicalData(stored).symptoms.some(row=>row.id===draft.id))throw Error('未能核对症状保存回执。');
+   onSaved?.({symptomId:draft.id,revision:stored.revision??0,source:'medical'});
    return '已保存症状自述。';
   };
   const detail=[draft.description,draft.date??'发生日期未知',draft.change,draft.visit,draft.uncertainty].filter(Boolean).join('\n');
@@ -183,10 +190,12 @@ export async function useMedicalTurn(workspace,{kind,text,files,ask,allowed,show
   if(!validDate(date)||date>today)throw Error('请核对体检日期。');
   const result=saveMedicalReport(next,{...draft,date},originals,{rejectConflicts:true,dedupeByResult:true});
   if(result.changed)await workspace.saveHealth(next,latest.revision??0,()=>checkGrant(workspace,allowed,automatic,action));
-  const saved=medicalData(await workspace.readHealth());
+  const stored=await workspace.readHealth(),saved=medicalData(stored);
   const record=saved.reports.find(row=>row.id===result.id);
   if(!record||originals.some(file=>!record.attachmentIds.includes(file.id)||
     !saved.attachments.some(attachment=>attachment.id===file.id)))throw Error('未能核对报告和原件的保存回执。');
+  onSaved?.({reportId:record.id,measurementIds:saved.measurements.filter(row=>row.reportId===record.id).map(row=>row.id),
+   revision:stored.revision??0,source:'medical'});
   return result.changed?'已在本机保存报告 · 新录入 '+result.added+' 项指标。':'此报告已在本机，未重复录入。';
  };
  if(draft.auto&&!previewOnly&&medicalAuto(workspace.finance))show(await save(draft.date,true),detail);

@@ -289,7 +289,7 @@ test('six-day boundary, next-day closing and missing days, with imported energy-
   assert.equal(energyForDay(next,date,date).closed,false);
   assert.equal(energyForDay(next,date,'2030-01-03').intake,900);
   assert.equal(energyForDay(next,date,'2030-01-03').tdee,2200);
-  assert.equal(cycleForDate(next,date,'2030-01-03').unreported,1);
+  assert.equal(cycleForDate(next,date,'2030-01-03').unreported,2);
   assert.ok(!validDate('2030-02-30')); assert.ok(!validateAppState({...state,local:{foods:[]}}));
 });
 

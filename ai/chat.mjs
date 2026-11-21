@@ -1,5 +1,5 @@
-import {combineReceiptTurn,localAgentCommand,routeAgent,routedSkills,scopedHistory} from './routing.mjs';
-import {failureKind,taskJournal} from './task-log.mjs';
+import {combineReceiptTurn,localAgentCommand,routeAgent,routedSkills,scopedHistory,separateAttachmentRequests} from './routing.mjs';
+import {healthTraceReceipt,relatedTaskSummaries,failureKind,taskJournal} from './task-log.mjs';
 import {mountTaskSettings} from './task-settings.mjs';
 import {readFinance} from '../finance-storage.mjs';
 import {medicalAuto,medicalIntent,renderMedicalReview,setMedicalAuto,useMedicalTurn} from './medical-chat.mjs';
@@ -305,7 +305,7 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
   undo.onclick=async()=>{
    if(busy||saving||undo.disabled)return;
    undo.disabled=true;
-   try{undo.textContent=await undoHealthAction(workspace,healthActionId);}
+   try{undo.textContent=await undoHealthAction(workspace,healthActionId);await journal.undo(healthActionId).catch(()=>{});}
    catch(err){report(err);undo.disabled=false;}
   };
   node.querySelector('.chat-bubble').after(undo);
@@ -322,7 +322,7 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
     undo.onclick=async()=>{
      if(busy||saving||undo.disabled)return;
      saving=true;undo.disabled=true;lock();
-     try{undo.textContent=await undoAgentTask(workspace,token);}
+     try{undo.textContent=await undoAgentTask(workspace,token);await journal.undo(token.id).catch(()=>{});}
      catch(err){report(err);undo.disabled=false;}
      finally{saving=false;lock();}
     };
@@ -722,7 +722,8 @@ function healthTrace(plan,flow,status,result,error){
  const traceId=flow.options.traceId;
  for(const [index,step] of (plan?.steps??[]).entries()){
   void traceStep(traceId,{id:'health-'+index,kind:step.kind,dependsOn:index?['health-'+(index-1)]:[],
-   evidence:[step.evidence],status,receipt:result?.record?{operationId:result.record.id,revision:result.record.revision}:null,
+   tool:'health_action',intent:[step.kind],objects:step.name?[step.name]:[],evidence:[step.date].filter(Boolean),
+   operationId:result?.record?.id??flow.options.traceId,status,receipt:healthTraceReceipt(result?.record),retryable:status==='pending',
    failure:failureKind(error)});
  }
  void traceStatus(traceId,status,error);
@@ -895,11 +896,11 @@ function describeSummary(scope,summary){
  if(scope==='cycle'){
   const day=summary.today,source={device_total:'设备全天消耗',imported_energy_model:'导入的消耗模型',base_tdee_estimate:'基础 TDEE 估计'};
   return [
-   displayDay(summary.start,true)+'至'+displayDay(summary.end,true)+' · 已结算 '+summary.closedDays+'/'+summary.days+' 天',
+   displayDay(summary.start,true)+'至'+displayDay(summary.end,true)+' · 有摄入 '+summary.reportedDays+'/'+summary.days+' 天',
    '最近结算 '+(summary.closedThrough?displayDay(summary.closedThrough):'暂无')+' · 待补 '+summary.unreported+' 天',
    '已结算缺口 '+summary.deficit+' / '+summary.goal+' kcal · 进度 '+summary.progress+'% · 剩余 '+summary.remaining+' kcal',
    '理论脂肪当量 '+summary.fatEquivalent+' kg',
-   displayDay(day.date)+(day.closed?'已结算缺口 ':'条件缺口 ')+(day.conditionalDeficit??'待补')+' · 摄入 '+(day.intake??'待补')+' · 消耗 '+(day.tdee??'待补')+' kcal'+(day.source?' · '+source[day.source]:'')
+   displayDay(day.date)+' 账面缺口 '+(day.deficit??'待补')+(day.possibleOverestimate?'（可能高估）':'')+' · 摄入 '+(day.intake??'待补')+' · 消耗 '+(day.tdee??'待补')+' kcal'+(day.source?' · '+source[day.source]:'')
   ].join('\n');
  }
  if(scope==='expense_summary')return [
@@ -925,7 +926,7 @@ function describeSummary(scope,summary){
    '钠 '+(day.sodium??'未知')+' mg · 参考 '+day.sodiumTarget+' mg');
   if(scope==='nutrition'){
    rows.push('饮食成本 '+(day.cost===null?'未知':(day.costPartial?'已知部分 ':'')+'¥'+day.cost),
-    (day.closed?'已结算缺口 ':'条件缺口 ')+(day.deficit??'待补')+' kcal');
+    '账面缺口 '+(day.deficit??'待补')+(day.possibleOverestimate?'（可能高估）':'')+' kcal');
   }
   if(day.incomplete.length){
    const names={kcal:'热量',protein:'蛋白质',fat:'脂肪',carbs:'碳水',sodium:'钠'};
@@ -1171,6 +1172,7 @@ async function sendMessage(input,options,files){
  const reuse=previous?.text===input.text&&previous.hasPhoto===hasPhoto&&(previous.mediaKey??null)===(options.mediaKey??null);
  const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto,
   healthClock:options.healthClock,mediaKey:options.mediaKey,traceId:options.traceId},reuse);
+ void trace(options.traceId,{type:'thread',threadId:book.current?.id});
  const saved=checkpoint(text=>book.checkpoint(ticket,text));
  clearReview();restoreReview.hidden=true;retryRequest.hidden=true;photoResults.replaceChildren();
  renderTranscript();syncThreads();
@@ -1197,12 +1199,16 @@ async function sendMessage(input,options,files){
    await completeHealth(staged.plan??staged,flow,null,ticket);
   }else if(options.local?.query){
    const args=options.local.query,summary=await readLedger(workspace,args,input.date);
-   if(args.scope==='foods')book.setFoodDate(args.date);
+   if(args.scope==='foods'){
+    book.setFoodDate(args.date);
+    if(options.local.meal)summary.foods=summary.foods.filter(row=>row.meal===options.local.meal);
+   }
    const source=querySource([{scope:args.scope,summary}]);
    const reply=args.scope==='balance'?'当前总余额 '+summary.balance.toFixed(2)+' 元。':
+    args.scope==='foods'&&options.local.meal?describeSummary(args.scope,summary):
     args.scope==='foods'?'本机 '+summary.date+' 的实际饮食共 '+summary.foods.length+' 条。':describeSummary(args.scope,summary);
    if(book.finish(ticket,reply,source,null)){bubble('assistant',reply,source,null,true);syncThreads();updateContext();}
-   void traceStep(options.traceId,{id:'read-1',kind:args.scope,dependsOn:[],status:'done',evidence:[input.text]});
+   void traceStep(options.traceId,{id:'read-1',kind:args.scope,dependsOn:[],status:'done',evidence:[input.date]});
    void traceStatus(options.traceId,'done');tell('');
   }else if(options.local?.proposal){
    await complete({proposal:options.local.proposal},flow,null,ticket);
@@ -1261,16 +1267,16 @@ async function runMedicalTurn(kind,text,files,route,traceId){
   book.append(role,message,false,source,{privateMedical:true});
   bubble(role,message,source,null,true);start.hidden=true;syncThreads();updateContext();
  }
+ let medicalReceipt=null;
  const finish=(message,detail)=>{
   const status=/已取消/.test(message)?'cancelled':/未能|无法/.test(message)?'blocked':'done';
-  const receipt=/已在本机保存|已保存症状|未重复录入/.test(message)?{summary:message}:null;
-  void traceStep(traceId,{id:'medical',kind,dependsOn:[],status,receipt});
+  void traceStep(traceId,{id:'medical',kind,tool:'medical_'+kind,operationId:traceId,dependsOn:[],status,receipt:medicalReceipt});
   void traceStatus(traceId,status);
   echo('assistant',message,detail);clearReview();tell('');
  };
  echo('user',text||'识别本轮选中的体检报告');
  await useMedicalTurn(workspace,{
-  kind,text,files,allowed,show:finish,
+  kind,text,files,allowed,show:finish,onSaved:receipt=>{medicalReceipt=receipt;},
   ask:async(question,medical)=>{
    if(!await readDeviceKey()){revealKeySettings();throw Error('请先导入 API Key。');}
    tell('正在处理本轮所选健康档案…');
@@ -1305,12 +1311,12 @@ composer.onsubmit=async e=>{
  try{
   const allowRead=composer.elements.allowRead.checked,date=(retry?pending.date:null)??localDate();
   const route=routeAgent(workspace.finance,{text,photos:files.length+medicalFiles.length,medical:kind,allowRead,legacy:demo,today:date});
-  let local=!demo&&!kind&&!resumeSaved?localAgentCommand(workspace,{text,today:date,allowRead,files:files.length}):null;
+  let local=!demo&&!kind&&!resumeSaved?localAgentCommand(workspace,{text,today:date,allowRead,files:files.length,reference:book.current?.healthReference}):null;
   if(local?.needsStock){
    const scoped=healthContext(await workspace.readHealth(),{text,date},book.current?.healthReference);
    if(scoped.stock?.length!==1||!(scoped.stock[0].quantity>0))local=null;
   }
-  await trace(traceId,{type:'start',route:local?'local':resumeSaved?'resume':route.profile});
+  await trace(traceId,{type:'start',route:local?'local':resumeSaved?'resume':route.profile,threadId:book.current?.id});
   if(kind){
    void traceStep(traceId,{id:'medical',kind,dependsOn:[],status:'running',evidence:medicalFiles.length||files.length?
     ['本轮所选附件 '+(medicalFiles.length||files.length)+' 份']:['本轮指定档案']});
@@ -1325,10 +1331,11 @@ composer.onsubmit=async e=>{
   const model=route.model;
   const context=resumeSaved||local?{turns:[],summary:null}:route.profile==='general'?
    await prepareContext(date,model,traceId):scopedHistory(route.profile,text,updateContext());
-  const {turns,summary}=context;
+  const {turns,summary}=route.profile==='general'?scopedHistory(route.profile,text,context):context;
   const history=retry&&turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
   const catalog=allowRead?skillCatalog(workspace.finance):[];
-  const groupedPhotos=!demo&&files.length>1&&(!/分别|逐张|每张|独立识别/.test(text)||/采购|订单|支付|付款|退款/.test(text))&&
+  const groupedPhotos=!demo&&(files.length>1||files.length===1&&route.profile==='vision'&&/标签|营养成分/.test(text))&&
+   (!separateAttachmentRequests(text)||/采购|订单|支付|付款|退款/.test(text))&&
    catalog.some(skill=>['photos','receipts'].includes(skill.id)&&skill.enabled);
   const input={mode:'chat',text,photo,date,history};
   const agentTasks=!demo&&allowRead&&(local?.proposal?.mode==='agent_task'||files.length>0||
@@ -1337,8 +1344,11 @@ composer.onsubmit=async e=>{
    (readFinance(workspace.finance).payload?.categories??[]).filter(row=>!row.hidden&&
     (route.profile!=='receipt'||!row.id.startsWith('default-')))
     .map(({id,name,type})=>({id,name,type})):undefined;
-  const options={model,profile:route.profile,traceId,local,decomposed:route.decomposed,financeContext,contextSummary:summary,allowRead,
-   memory:route.profile==='receipt'?[]:memoriesFor(input,allowRead,route.profile),
+  const logs=allowRead&&!local&&!resumeSaved?await journal.recent().catch(()=>[]):[];
+  const taskContext=logs.length?relatedTaskSummaries(logs,{text,threadId:book.current?.id,profile:route.profile,
+   health:await workspace.readHealth().catch(()=>null),ledger:readFinance(workspace.finance).payload}):[];
+  const options={model,profile:route.profile,traceId,local,taskContext,decomposed:route.decomposed,financeContext,contextSummary:summary,allowRead,
+   memory:memoriesFor(input,allowRead,route.profile),
    documentAccess:hasDocumentAccess(workspace.finance),autoMemory:automaticMemoryEnabled(workspace.finance),
    skills:routedSkills(selectSkills(catalog,{text,photos:files.length>0,
     previousText:history.filter(row=>row.role==='user').at(-1)?.text}),route.profile),groupedPhotos,

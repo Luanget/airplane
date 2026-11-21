@@ -1,4 +1,4 @@
-# Airplane PWA 0.9.16
+# Airplane PWA 0.9.17
 
 Airplane 在设备上保存财务和健康账本。通过顶部设置旁的健康或财务图标切换模块。两页顶部共用 AI 图标，底部「＋」打开手动录入。健康首页底部按日期显示饮食、体重和运动记录，点击体重趋势可查看详情。
 
@@ -34,6 +34,8 @@ python3 serve.py
 AI 可按数据集和原记录 ID 读取并建议修改健康、财务、库存、规则和助手设置。字段、关联和恢复流程见 [助手数据规范](docs/ASSISTANT_DATA.md)。
 
 「任务用量与费率」显示按实际回执汇总的请求和缓存统计，并可导出本机任务日志。费率按模型修改，后续回执采用新价格。运行日志使用本机检查点和程序核对过的保存回执，账本事实在执行时查询。[OpenAI 缓存统计](https://developers.openai.com/api/docs/guides/prompt-caching)
+近期执行回执会按当前会话或对象检索，发送前核对本机账本。采购截图可以缺少订单号，程序按凭据和商品明细检查重复。六天周期随实际摄入重算，缺报日的缺口显示未知。
+
 
 打开 **http://127.0.0.1:8080/assistant/?demo=1** 可以点「更正饮食、记账并安排晚餐」体验批量确认和保存后续办，无需 Key。通过上方财务与健康图标看样例写入结果。已单独部署的 Worker 可继续使用原接口。
 
@@ -44,6 +46,8 @@ npm test
 npm run test:worker
 npm run test:browser
 npm run test:agent-eval
+# 真实 API 可选验收。凭据由标准输入读取，测试只发送合成数据。
+stty -echo; npm run test:agent-live; stty echo
 npm run test:medical-ui
 ```
 

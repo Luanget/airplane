@@ -1,3 +1,4 @@
+import {inventoryWithMoves} from './core.mjs';
 import {localDate} from '../calendar.mjs';
 import {readFinance} from '../finance-storage.mjs';
 import {APP_VERSION} from '../shell.mjs';
@@ -159,7 +160,11 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
 
 export function renderSyncCatalog(panel,state){
  const groups={aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',pendingStock:'扣库待核对',rules:'现行规则'};
- const catalogs={...state.legacy.catalogs,rules:state.legacy.rules,pendingStock:state.sync?.pendingStock};
+ const reference=inventoryWithMoves(state).filter(row=>row.packagePrice).map(row=>
+  ({id:row.id,name:row.name,price:row.packagePrice,basis:'确认的旧包装参考价；实际采购批次优先'}));
+ const corrected=new Set(reference.map(row=>row.id));
+ const catalogs={...state.legacy.catalogs,rules:state.legacy.rules,pendingStock:state.sync?.pendingStock,
+  prices:[...reference,...(state.legacy.catalogs?.prices??[]).filter(row=>!corrected.has(row.foodId))]};
  panel.replaceChildren(...Object.entries(groups).flatMap(([key,label])=>{
   const rows=catalogs[key]??[];
   if(!rows.length)return [];

@@ -220,3 +220,65 @@ test('same product after stock is exhausted receives a new purchase package and 
  state=op(state,'started',{containerId:rows[1].id,action:'baseline',gross:490});
  assert.throws(()=>revisePurchase(state,'second-order',null),/已有包装/);
 });
+
+test('legacy packaged prices correct loose oats and ration bottle cost without altering imported records',()=>{
+ const date='2031-05-16',raw={handoff_version:'310516.1',tables:{food_events:[],weight_events:[],food_inventory:[
+  {食品ID:'FD_RYE_FLAKES_055',名称:'合成黑麦片',库存单位:'g',库存值:884,'单价(CNY)':1.65,价格基准:'g',kcal:100},
+  {食品ID:'FD_SAUCE_HUBANG_BEEF_CHILI_20261120',名称:'合成辣椒酱',库存单位:'瓶',库存值:2,标准份量:'200g/瓶',kcal:100}
+ ]}};
+ let state=ensureContainers(normalizeLedger(raw));
+ const oats=state.legacy.inventory[0].id,sauce=state.legacy.inventory[1].id;
+ assert.equal(inventoryWithMoves(state)[0].looseCostEstimateCents,2652);
+ assert.equal(addFood(state,{date,name:'合成黑麦片',meal,foodId:oats,stockQty:50,kcal:50}).cost,1.5);
+ const containerId=packagesFor(state,sauce)[0].id;
+ state=op(state,'price-opening',{containerId,action:'baseline',gross:360});
+ state=op(state,'price-first',{containerId,gross:322.2});
+ assert.equal(state.local.foods.at(-1).cost,1.89);
+ assert.equal(state.local.foods.at(-1).costSource,'estimated_package');
+ state=op(state,'price-over-nominal',{containerId,gross:150});
+ assert.equal(packagesFor(state,sauce)[0].spent,1000);
+ assert.equal(packagesFor(state,sauce)[0].status,'open');
+ const second=packagesFor(state,sauce)[1].id;
+ state=op(state,'price-discard',{containerId:second,action:'discard'});
+ assert.equal(packagesFor(state,sauce)[1].lossCost,1000);
+ assert.equal(state.local.foods.length,3);
+ assert.deepEqual(state.legacy.sourceSnapshot.tables,raw.tables);
+ recordPurchase(state,{id:'price-purchase',date,totalCents:1700,items:[{foodId:sauce,quantity:1,costCents:1700}]});
+ assert.equal(packagesFor(ensureContainers(state),sauce).at(-1).costCents,1700);
+});
+
+test('audited disposal and gift are retained against a stale same-lineage opening balance',()=>{
+ const fixture={ledger_id:'fixture-dispositions',handoff_version:'310516.1',updated_at:date+'T11:00:00Z',tables:{
+  food_events:[],weight_events:[],inventory_transactions_audit:[],food_inventory:[
+   {食品ID:'fixture-discard',名称:'合成醋',库存单位:'g毛重',库存值:1200,kcal:null},
+   {食品ID:'fixture-gift',名称:'合成调味汁',库存单位:'瓶（270g/瓶）',库存值:2,kcal:null}
+  ]
+ }};
+ const local=structuredClone(fixture);
+ Object.assign(local.tables.food_inventory[0],{active:'否',库存值:0});
+ Object.assign(local.tables.food_inventory[1],{库存单位:'g毛重（含开封瓶）',库存值:283.2});
+ local.tables.inventory_transactions_audit=[
+  {food_id:'fixture-discard',date,event:'discarded',qty_delta:-1200,prior_balance:1200,remaining_balance:0,affects_calorie_totals:false},
+  {food_id:'fixture-gift',date,event:'unopened_bottle_given_away',qty_delta:-1,prior_balance:2,remaining_balance:1,
+   remaining_status:'opened_bottle_gross_weight_only',affects_calorie_totals:false}
+ ];
+ const fromPhone=ensureContainers(normalizeLedger(local));
+ const merged=ready(apply(fromPhone,fixture));
+ assert.equal(inventoryWithMoves(merged).find(row=>row.id==='fixture-discard').qty,0);
+ const [bottle]=packagesFor(merged,'fixture-gift');
+ assert.equal(bottle.gross,283.2);
+ assert.equal(bottle.net,null);
+ assert.equal(merged.local.foods.length,0);
+ assert.equal(merged.local.stockMoves.length,0);
+ assert.equal(apply(merged,fixture).changed,false);
+ const conflicting=structuredClone(fixture);
+ conflicting.tables.inventory_transactions_audit.push({food_id:'fixture-gift',date,event:'counted',remaining_balance:2,affects_calorie_totals:false});
+ assert.ok(apply(merged,conflicting).unresolved.some(row=>row.kind==='inventory'));
+});
+
+test('unknown conversion or net contents do not become a zero-cost intake',async()=>{
+ const {apportionedCost}=await import('../health/package-price.mjs');
+ assert.equal(apportionedCost(1000,null,200),null);
+ assert.equal(apportionedCost(1000,37.8,null),null);
+ assert.equal(apportionedCost(1000,50,210,990),10);
+});

@@ -44,13 +44,15 @@ test('chicken batch split and meal edits conserve mass and actual cost; milk tar
 test('an unknown intake does not close a day; watch total suppresses duplicate activity calories',()=>{
  const s=newState(),tomorrow='2030-05-06';s.settings.cycleAnchor=day;
  const row=addFood(s,{...food,kcal:''});
- assert.equal(energyForDay(s,day,tomorrow).closed,false);
+ assert.equal(energyForDay(s,day,tomorrow).deficit,null);
+ assert.equal(cycleForDate(s,day,tomorrow).deficit,null);
  recordEvent(s,'activities',{date:day,kcal:300,includedInBase:false});
  recordEvent(s,'activities',{date:day,kcal:2400,energyKind:'total'});
  addFood(s,food,row.id);
  assert.equal(energyForDay(s,day,day).closed,false);
  assert.equal(energyForDay(s,day,tomorrow).tdee,2400);
- assert.equal(cycleForDate(s,day,tomorrow).deficit,0);
+ assert.equal(cycleForDate(s,day,tomorrow).deficit,2300);
+ assert.equal(cycleForDate(s,day,tomorrow).possibleOverestimate,true);
  setDayCompleteness(s,day,'complete');
  assert.equal(cycleForDate(s,day,tomorrow).deficit,2300);
 });
@@ -66,4 +68,15 @@ test('a historical supplement cannot use a batch acquired later',()=>{
  addBatch(s,{foodId:sku.id,date:'2030-05-06',quantity:400});
  assert.throws(()=>addFood(s,{...food,foodId:sku.id,stockQty:100}));
  assert.equal(inventoryWithMoves(s)[0].qty,400);
+});
+
+test('an unreported historical placeholder of zero cannot contribute a full TDEE deficit',()=>{
+ const state=newState();
+ state.settings.cycleAnchor=day;
+ state.legacy.energy[day]={intake:0,tdee:2900,status:'缺报'};
+ assert.equal(energyForDay(state,day,day).deficit,null);
+ assert.equal(cycleForDate(state,day,day).deficit,null);
+ addFood(state,{...food,kcal:0});
+ assert.equal(energyForDay(state,day,day).deficit,2900);
+ assert.equal(energyForDay(state,day,day).possibleOverestimate,true);
 });

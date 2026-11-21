@@ -298,8 +298,8 @@ export function projectExternalLedger(raw,state,{version,id,today=localDate(),no
  const cycles=new Map(sameCycleSettings?priorCycles.map(row=>[row.start,row]):[]);
  if(!sameCycleSettings)for(const row of priorCycles)dates.add(row.start);
  for(const date of dates){
-  const {start,end,closedDays,deficit,goal,fatEquivalent}=cycleForDate(state,date,today);
-  cycles.set(start,{start,end,closedDays,deficit,goal,fatEquivalent});
+  const {start,end,closedDays,reportedDays,possibleOverestimate,unreported,deficit,goal,fatEquivalent}=cycleForDate(state,date,today);
+  cycles.set(start,{start,end,closedDays,reportedDays,possibleOverestimate,unreported,deficit,goal,fatEquivalent});
  }
  const bridge=createSyncPackage(state,{id,version,now,includeMedicalAttachments});
  const medical=bridge.health.local.medical;

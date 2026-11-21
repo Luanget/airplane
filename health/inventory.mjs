@@ -126,3 +126,14 @@ export function stockAlerts(state,today) {
     new Date(b.expires+'T00:00:00Z')-new Date(today+'T00:00:00Z')<=3*86400000);
   return {low,expiry};
 }
+
+// Opening balances and their raw audit stay intact. These records only explain
+// what the imported balance represents and can support a shared-source merge.
+export function auditedDisposition(state,sku){
+ const rows=state.legacy.sourceSnapshot?.tables?.inventory_transactions_audit??
+  state.legacy.catalogs?.inventoryAudit?.map(row=>row.original)??[];
+ return rows.findLast(row=>row?.food_id===sku.id&&validDate(row.date)&&row.affects_calorie_totals===false&&(
+  row.event==='discarded'&&row.remaining_balance===0&&sku.qty===0&&sku.active===false||
+  row.event==='unopened_bottle_given_away'&&row.qty_delta===-1&&row.remaining_balance===1&&
+   row.remaining_status==='opened_bottle_gross_weight_only'&&sku.active&&sku.qty>0&&/毛重/.test(sku.unitDescription)));
+}

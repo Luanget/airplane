@@ -1,5 +1,5 @@
 import {displayDay} from '../calendar.mjs';
-import {NUTRIENTS,actualFood,cycleForDate,dayIntake,energyForDay,events,inventoryWithMoves,round,
+import {NUTRIENTS,actualFood,cycleForDate,dayIntake,energyForDay,events,foodCost,inventoryWithMoves,round,
  sampleNutrientSum,validDate,weightTrend} from '../health/core.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {same} from '../health/sync-source.mjs';
@@ -11,17 +11,17 @@ const dietKeys=['早餐','午餐','晚餐','加餐'];
 const fieldTotals=totals=>NUTRIENTS.map((key,index)=>labels[index]+' '+amount(totals[key])+' '+units[index]).join(' · ');
 function cost(rows){
  const known=rows.filter(row=>row.cost!=null);
- return {known:known.length?round(known.reduce((sum,row)=>sum+row.cost,0),2):null,partial:known.length<rows.length};
+ return {known:known.length?round(known.reduce((sum,row)=>sum+row.cost,0),2):null,partial:known.length<rows.length,estimated:known.some(row=>row.costEstimated)};
 }
 function foodLine(row){
- return [row.name,row.portion??'',fieldTotals(row.nutrition??{}),'成本 '+money(row.cost),
+ return [row.name,row.portion??'',fieldTotals(row.nutrition??{}),'成本 '+(row.costEstimated?'约 ':'')+money(row.cost),
   ...(row.uncertainty?[row.uncertainty]:[])].filter(Boolean).join(' · ');
 }
 function mealRows(rows){
  return [...new Set([...dietKeys,...rows.map(row=>row.meal||'未注明餐次')])].flatMap(meal=>{
   const items=rows.filter(row=>(row.meal||'未注明餐次')===meal);
   return items.length?[{meal,rows:items.map(row=>({id:row.id,name:row.name,portion:row.portion,foodId:row.foodId,
-   nutrition:row.nutrition,cost:row.cost,quality:row.quality??null,uncertainty:row.uncertainty??null,evidence:row.agentEvidence??null})),
+   nutrition:row.nutrition,cost:row.cost,costEstimated:row.costEstimated,quality:row.quality??null,uncertainty:row.uncertainty??null,evidence:row.agentEvidence??null})),
    totals:sampleNutrientSum(items),cost:cost(items)}]:[];
  });
 }
@@ -31,7 +31,10 @@ function conditional(actual,plans){
 }
 export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}){
  if(!validDate(date)||!validDate(today)||date>today)throw Error('请选择今天或更早的报告日期');
- const all=events(state,'foods').filter(row=>row.date===date),actual=all.filter(actualFood);
+ const all=events(state,'foods').filter(row=>row.date===date),actual=all.filter(actualFood).map(row=>{
+  const cost=foodCost(state,row);
+  return {...row,cost,costEstimated:row.costSource==='estimated_package'||row.cost==null&&cost!==null};
+ });
  const savedPlans=all.filter(row=>!actualFood(row)&&/^(plan|计划)/i.test(row.status??''));
  const candidates=[...savedPlans,...proposed];
  const actualMeals=new Set(actual.map(row=>row.meal));
@@ -40,7 +43,7 @@ export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}
  const pending=candidates.filter(row=>!actualMeals.has(row.meal)&&(proposed.includes(row)||!newestMeals.has(row.meal)));
  const intake=dayIntake(state,date),day=energyForDay(state,date,today);
  const cycle=cycleForDate(state,date,today),trend=weightTrend(state,date);
- const latest=trend.points.at(-1),previous=trend.points.at(-2),conditionalToday=!day.closed?day.deficit:null;
+ const latest=trend.points.at(-1),previous=trend.points.at(-2);
  const {calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget}=state.settings;
  const targets={kcal:calorieTarget,proteinMin,proteinMax,fatMin,sodium:sodiumTarget};
  const difference={kcal:intake.totals.kcal==null?null:round(calorieTarget-intake.totals.kcal,1),
@@ -48,18 +51,17 @@ export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}
   fat:intake.totals.fat==null?null:round(fatMin-intake.totals.fat,1),
   sodium:intake.totals.sodium==null?null:round(sodiumTarget-intake.totals.sodium,1)};
  return {date,...(includeMeals?{meals:mealRows(actual),plans:mealRows(pending)}:{}),actual:intake.totals,
-  cost:{known:intake.cost,partial:intake.costPartial},targets,difference,quality:{status:!intake.reported?'缺报':intake.incomplete.length?'部分营养数据待补':day.completeness.status==='complete'?'全天记录已确认':'全天记录待确认',
+  cost:{known:intake.cost,partial:intake.costPartial,estimated:intake.costEstimated},targets,difference,quality:{status:!intake.reported?'缺报':intake.incomplete.length?'部分营养数据待补':day.completeness.status==='complete'?'全天记录已确认':'摄入可能未记全',
    missingMeals:['午餐','晚餐'].filter(meal=>!actualMeals.has(meal)),
    unknown:intake.incomplete},conditionalNutrition:pending.length?conditional(intake.totals,pending):null,
-  energy:{tdee:day.tdee,source:day.source,closed:day.closed,completeness:day.completeness,deficit:day.deficit},
-  cycle:{start:cycle.start,end:cycle.end,days:cycle.days,closedDays:cycle.closedDays,unreported:cycle.unreported,
-   closedThrough:cycle.entries.filter(row=>row.closed).at(-1)?.date??null,formal:cycle.deficit,goal:cycle.goal,
-   conditionalToday,conditionalTotal:conditionalToday==null?null:round(cycle.deficit+conditionalToday,2),
+  energy:{tdee:day.tdee,source:day.source,possibleOverestimate:day.possibleOverestimate,completeness:day.completeness,deficit:day.deficit},
+  cycle:{start:cycle.start,end:cycle.end,days:cycle.days,reportedDays:cycle.reportedDays,unreported:cycle.unreported,
+   deficit:cycle.deficit,goal:cycle.goal,possibleOverestimate:cycle.possibleOverestimate,
    progress:cycle.progress,fatEquivalent:cycle.fatEquivalent,remaining:cycle.remaining,daysRemaining:cycle.entries.filter(row=>row.date>=today).length},
   weight:{latest:latest?{date:latest.date,kg:latest.kg}:null,change:latest&&previous?round(latest.kg-previous.kg,2):null,
    count:Math.min(trend.points.length,7),last7:trend.points.length>=7?trend.last7:null,previous7:trend.previous7,delta:trend.delta}};
 }
-const costText=value=>money(value.known)+(value.partial?'（部分价格未知）':'');
+const costText=value=>(value.estimated?'约 ':'')+money(value.known)+(value.partial?'（部分价格未知）':'');
 export function renderHealthReport(report){
  const {meals,plans,actual,cost,targets,difference,quality,energy,cycle,weight,conditionalNutrition}=report;
  const groups=(rows,plan)=>rows.flatMap(group=>[
@@ -73,11 +75,11 @@ export function renderHealthReport(report){
   ' g · 脂肪下限差 '+amount(difference.fat)+' g · 钠参考差 '+amount(difference.sodium)+' mg');
  if(quality.missingMeals.length)lines.push('未找到已记录的'+quality.missingMeals.join('、')+'，可能尚未报告。');
  if(quality.unknown.length)lines.push('待补 '+quality.unknown.map(key=>labels[NUTRIENTS.indexOf(key)]).join('、'));
- lines.push('消耗 '+energy.tdee+' kcal · '+(energy.closed?'已结算缺口':'当前条件缺口')+' '+amount(energy.deficit)+' kcal',
-  cycle.days+'天周期 '+displayDay(cycle.start)+'—'+displayDay(cycle.end)+' · 最近结算 '+(cycle.closedThrough?displayDay(cycle.closedThrough):'暂无'),
-  '正式累计缺口 '+cycle.formal+' / '+cycle.goal+' kcal · 已结 '+cycle.closedDays+' 天 · 缺报 '+cycle.unreported+' 天 · 进度 '+cycle.progress+'%',
-  '理论脂肪当量 '+cycle.fatEquivalent+' kg · 距目标 '+cycle.remaining+' kcal · 剩 '+cycle.daysRemaining+' 天');
- if(cycle.conditionalTotal!=null)lines.push('当日条件缺口 '+cycle.conditionalToday+' kcal · 条件累计 '+cycle.conditionalTotal+' kcal');
+ lines.push('消耗 '+energy.tdee+' kcal · 账面缺口 '+amount(energy.deficit)+' kcal'+(energy.possibleOverestimate?'（可能高估）':''),
+  cycle.days+'天周期 '+displayDay(cycle.start)+'—'+displayDay(cycle.end),
+  '周期账面缺口 '+amount(cycle.deficit)+' / '+cycle.goal+' kcal · 有摄入 '+cycle.reportedDays+' 天 · 缺报 '+cycle.unreported+' 天'+
+   (cycle.possibleOverestimate?' · 可能高估':''),
+  '理论脂肪当量 '+amount(cycle.fatEquivalent)+' kg · 距目标 '+amount(cycle.remaining)+' kcal · 剩 '+cycle.daysRemaining+' 天');
  if(weight.latest)lines.push('晨重 '+weight.latest.kg+' kg · 较上次 '+amount(weight.change)+' kg · 7次均重 '+amount(weight.last7)+
   ' kg（有效 '+weight.count+' 次） · 前窗 '+amount(weight.previous7)+' kg · 窗口变化 '+amount(weight.delta)+' kg');
  return lines.join('\n');

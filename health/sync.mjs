@@ -1,3 +1,4 @@
+import {auditedDisposition} from './inventory.mjs';
 import {ensureMedical,medicalData,MEDICAL_TABLES,medicalTableLabel} from './medical.mjs';
 import {ensureContainers} from './containers.mjs';
 import {managedFoodPackage,packageJournal} from './container-ledger.mjs';
@@ -355,14 +356,27 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   }
   const target=ids.get(sku.id),before=existingInventory.find(row=>row.id===target);
   const location=next.legacy.inventory.find(row=>row.id===target)??next.local.inventory?.find(row=>row.id===target);
+  const disposition=sameEdition&&raw&&target===sku.id&&auditedDisposition(current,location);
+  const sourceAudit=Array.isArray(raw?.tables?.inventory_transactions_audit)?raw.tables.inventory_transactions_audit:[];
+  const laterAudit=disposition?sourceAudit.filter(row=>row.food_id===sku.id&&row.date>=disposition.date):[];
+  const observedInventory=laterAudit.length?{...sku,inventoryAudit:laterAudit}:sku;
+  const staleOpening=disposition&&validDate(observedDay)&&disposition.date>=observedDay&&
+   disposition.prior_balance===base.qty&&!laterAudit.length;
+  if(staleOpening){
+   entry('inventory',key,before,sku,'existing',[],disposition.event==='discarded'?
+    '保留本机已审计的丢弃记录，不计摄入。':'保留本机已审计的赠送记录和已开封瓶毛重，净余未知。');
+   saveAnchor('inventory',key,target,observedInventory,location);
+   continue;
+  }
   const signature=row=>({...row,id:target});
   const comparableBefore=raw&&!sameEdition?before:location,comparableIncoming=raw&&!sameEdition?sku:base;
   const sameOpening=sameEdition&&before.id===sku.id&&location.qty===base.qty&&
-   location.pricePerUnit===base.pricePerUnit&&same(location.nutrition,base.nutrition);
+   location.active===base.active&&
+   (location.pricePerUnit===base.pricePerUnit||before.packagePrice&&same(before.packagePrice,sku.packagePrice))&&same(location.nutrition,base.nutrition);
   const sameInventory=sameOpening||same(signature(comparableBefore),signature(comparableIncoming));
-  if(!sameInventory&&(!old||old.incoming!==hash(stable(sku)))){
-   const change=entry('inventory',key+'-values',before,sku,'conflict',review,
-    raw&&!sameEdition
+  if(!sameInventory&&(!old||old.incoming!==hash(stable(observedInventory)))){
+   const change=entry('inventory',key+'-values',before,sku,'conflict',laterAudit.length?[review[0]]:review,
+    laterAudit.length?'同一食品有较新的来源审计，请核对后单独更正本机实盘。':raw&&!sameEdition
      ?(validDate(observedDay)?'采用即确认 '+observedDay+' 及此前的本机流水已含在来源净盘点，之后的流水另计。':
       '来源盘点日期未定。采用即确认其净余额已包含当前本机流水。')
      :'采用来源期初数量，本机后续流水继续计算现存量');
@@ -376,7 +390,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    }
    if(!change.chosen)continue;
   }else entry('inventory',key,before,sku,sameInventory?'same':'existing');
-  saveAnchor('inventory',key,target,sku,location);
+  saveAnchor('inventory',key,target,observedInventory,location);
  }
 
  // Package journals are linear per ID. Hold the whole incoming branch and

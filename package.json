@@ -1,6 +1,6 @@
 {
   "name": "airplane-pwa",
-  "version": "0.9.16",
+  "version": "0.9.17",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -10,6 +10,7 @@
     "test:worker": "node tests/runtime.mjs",
     "test:browser": "node tests/browser.mjs",
     "test:health-actions-ui": "node tests/health-actions-browser.mjs",
+    "test:agent-live": "node tests/agent-live.mjs",
     "test:agent-eval": "node tests/agent-eval.mjs",
     "test:medical-ui": "node tests/medical-browser.mjs",
     "test:inventory-ui": "node tests/package-browser.mjs",

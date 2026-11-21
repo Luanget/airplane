@@ -1,3 +1,4 @@
+import {apportionedCost,catalogCost,packageCostReference,packagePrice} from './package-price.mjs';
 import {ensureMedical,validMedical} from './medical.mjs';
 import {effectiveTdee} from './agent-rules.mjs';
 import {hasLaterPackageReading,managedFoodPackage,validContainerTables,voidPackageFood} from './container-ledger.mjs';
@@ -201,6 +202,20 @@ export function events(state,key){
 }
 export const actualFood=e=>e.status==='actual' || (e.source==='legacy' && e.actual);
 export function foodsForDay(state,date){return events(state,'foods').filter(e=>e.date===date&&actualFood(e));}
+export function foodCost(state,food){
+ const saved=numeric(food.cost);
+ if(saved!==null||!food.foodId)return saved;
+ const link=managedFoodPackage(state,food.id);
+ if(!link?.container||link.event.source!=='migration')return null;
+ const {container,event}=link;
+ const sku=state.legacy.inventory.find(row=>row.id===food.foodId);
+ const price=packageCostReference(sku,container);
+ if(!price.costEstimated)return null;
+ const grams=event.grams;
+ const net=container.actualNetGrams??(container.nominal?.unit==='g'?container.nominal.value:null);
+ const estimate=apportionedCost(price.costCents,grams,net);
+ return estimate===null?null:estimate/100;
+}
 export function dayIntake(state,date){
  const legacy=state.legacy.foods.filter(e=>e.date===date&&e.actual);
  const summary={...state.legacy.daily[date]?.nutrition};
@@ -222,10 +237,11 @@ export function dayIntake(state,date){
   if(adjusted!==null && adjusted<0){if(!incomplete.includes(k))incomplete.push(k);return [k,summed[k]];}
   return [k,adjusted];
  }));
- const costs=effective.map(e=>numeric(e.cost));
+ const costs=effective.map(e=>foodCost(state,e));
  return {reported:effective.length>0 || numeric(summary.kcal)!==null,totals,incomplete,
   cost:costs.some(x=>x!==null)?round(costs.reduce((a,b)=>a+zero(b),0),2):null,
-  costPartial:costs.some(x=>x===null)};
+  costPartial:costs.some(x=>x===null),
+  costEstimated:effective.some((row,index)=>row.costSource==='estimated_package'||numeric(row.cost)===null&&costs[index]!==null)};
 }
 export function mergedWeights(state){return events(state,'weights');}
 export function latestWeights(state){
@@ -272,20 +288,29 @@ export function energyForDay(state,date,today){
  const previouslyIncluded=state.legacy.activities.filter(e=>e.date===date).reduce((sum,e)=>sum+extra(e),0);
  const currentExtra=activities.reduce((sum,e)=>sum+extra(e),0);
  const tdee=deviceTotal ?? (importedTotal===null? effectiveTdee(state.settings,date)+currentExtra : importedTotal+currentExtra-previouslyIncluded);
- const reported=food.totals.kcal!==null && !food.incomplete.includes('kcal') && !activities.some(e=>deviceTotal===null&&!e.includedInBase&&numeric(e.kcal)===null);
- const intake=food.totals.kcal;
  const completeness=completenessFor(state,date,food);
- return {date,reported,completeness,closed:date<today&&reported&&completeness.status==='complete',deficit:reported?round(tdee-intake,2):null,intake,tdee,
+ const reported=date<=today&&food.totals.kcal!==null&&
+  (food.totals.kcal>0||completeness.status==='complete'||foodsForDay(state,date).length>0);
+ const uncertainEnergy=food.incomplete.includes('kcal')||activities.some(e=>deviceTotal===null&&!e.includedInBase&&numeric(e.kcal)===null);
+ const intake=reported?food.totals.kcal:null;
+ return {date,reported,completeness,possibleOverestimate:reported&&(completeness.status!=='complete'||uncertainEnergy),
+  closed:date<today&&reported&&!uncertainEnergy&&completeness.status==='complete',deficit:reported?round(tdee-intake,2):null,intake,tdee,
   source:deviceTotal!==null?'device_total':importedTotal!==null?'imported_energy_model':'base_tdee_estimate'};
 
 }
 export function cycleForDate(state,date,today){
  const settings=state.settings;const anchor=validDate(settings.cycleAnchor)?settings.cycleAnchor:today;const days=Math.max(1,Number(settings.cycleDays)||DEFAULT_SETTINGS.cycleDays);
  const numDays=utcDay(date)-utcDay(anchor);const shift=Math.floor(numDays/days)*days;const start=addDays(anchor,shift),end=addDays(start,days-1);
- const dates=Array.from({length:days},(_,i)=>addDays(start,i));const entries=dates.map(d=>energyForDay(state,d,today));const closed=entries.filter(e=>e.closed&&e.reported);
- const sum=round(closed.reduce((s,e)=>s+e.deficit,0),2);const goal=Number(settings.cycleTarget)||7700;
- return {start,end,dates,entries,closedDays:closed.length,days,unreported:entries.filter(e=>e.date<today&&!e.closed).length,
-  deficit:sum,goal,progress:round(sum/goal*100,1),fatEquivalent:round(sum/7700,3),remaining:round(goal-sum,2)};
+ const dates=Array.from({length:days},(_,i)=>addDays(start,i));
+ const entries=dates.map(d=>energyForDay(state,d,today));
+ const reported=entries.filter(e=>e.reported);
+ const sum=reported.length?round(reported.reduce((s,e)=>s+e.deficit,0),2):null;
+ const goal=Number(settings.cycleTarget)||7700;
+ return {start,end,dates,entries,days,closedDays:reported.filter(e=>e.closed).length,reportedDays:reported.length,
+  unreported:entries.filter(e=>e.date<=today&&!e.reported).length,
+  possibleOverestimate:reported.some(e=>e.possibleOverestimate),
+  deficit:sum,goal,progress:sum===null?null:round(sum/goal*100,1),
+  fatEquivalent:sum===null?null:round(sum/7700,3),remaining:sum===null?null:round(goal-sum,2)};
 }
 export function inventoryWithMoves(state){
  const adjusted=new Map();
@@ -294,6 +319,9 @@ export function inventoryWithMoves(state){
   if(move.opening)opened.add(move.foodId);
   adjusted.set(move.foodId,(adjusted.get(move.foodId)??0)+move.delta);
  }
+ const batchQuantities=new Map(),lots=new Map((state.local.batches??[]).map(row=>[row.id,row]));
+ for(const row of lots.values())if(row.openingPortion)batchQuantities.set(row.foodId,(batchQuantities.get(row.foodId)??0)+row.quantity);
+ for(const move of state.local.stockMoves)if(lots.has(move.batchId))batchQuantities.set(move.foodId,(batchQuantities.get(move.foodId)??0)+move.delta);
  const normalize=value=>String(value??'').normalize('NFKC').trim().toLowerCase();
  const catalog=state.legacy.catalogs??{};
  return [...state.legacy.inventory,...(state.local.inventory??[])].map(item=>{
@@ -301,8 +329,13 @@ export function inventoryWithMoves(state){
   const aliases=(catalog.aliases??[]).filter(applies).map(row=>row.alias).filter(Boolean);
   const price=item.pricePerUnit==null?(catalog.prices??[]).filter(row=>applies(row)&&normalize(row.unit)===normalize(item.unit)&&
    numeric(row.unitPrice)>=0&&numeric(row.unitPrice)!==null).sort((a,b)=>b.date.localeCompare(a.date))[0]:null;
-  return {...item,...(aliases.length?{aliases}:{}),...(price?{pricePerUnit:price.unitPrice,priceBasis:item.unit}:{}),
-   qty:item.qty===null&&!opened.has(item.id)?null:round(zero(item.qty)+(adjusted.get(item.id)??0),6)};
+  const pack=packagePrice(item);
+  const qty=item.qty===null&&!opened.has(item.id)?null:round(zero(item.qty)+(adjusted.get(item.id)??0),6);
+  const lotQuantity=batchQuantities.get(item.id)??0;
+  const grossStockOnly=item.unit==='g'&&/^g?毛重|^[gG]\s*(?:[（(]\s*)?(?:含|连)瓶/.test(item.unitDescription??'');
+  return {...item,...(grossStockOnly?{grossStockOnly:true}:{}),...(pack?{packagePrice:pack,looseCostEstimateCents:pack.unit===item.unit&&qty!==null?
+    catalogCost({...item,packagePrice:pack},Math.max(0,qty-lotQuantity)):null}:{}),...(aliases.length?{aliases}:{}),...(price?{pricePerUnit:price.unitPrice,priceBasis:item.unit}:{}),
+   qty};
  });
 }
 export function batchBalances(state,foodId){
@@ -332,6 +365,7 @@ export function assertBalances(state,foodId) {
 export function allocateStock(state,foodId,qty,batchId,date) {
  const sku=inventoryWithMoves(state).find(x=>x.id===foodId);
  if(!sku||sku.qty===null)throw Error('请先确认食品和库存实盘数量');
+ if(sku.grossStockOnly)throw Error('这项库存记录的是包装毛重，请使用包装称重。');
  if(qty>sku.qty+1e-6)throw Error('库存不足，当前剩余 '+sku.qty+' '+sku.unit);
  const allocations=[];
  let remaining=qty;
@@ -340,8 +374,7 @@ export function allocateStock(state,foodId,qty,batchId,date) {
  const loose=round(sku.qty-batches.reduce((n,b)=>n+b.remaining,0),6);
  if(!batchId && loose>0){
   const part=Math.min(remaining,loose);
-  const unitPrice=numeric(sku.pricePerUnit);
-  allocations.push({qty:part,costCents:unitPrice!==null&&sku.priceBasis===sku.unit?Math.round(part*unitPrice*100):null});
+  allocations.push({qty:part,costCents:catalogCost(sku,part)});
   remaining=round(remaining-part,6);
  }
  for(const b of batches){
@@ -350,7 +383,7 @@ export function allocateStock(state,foodId,qty,batchId,date) {
   const part=Math.min(remaining,b.remaining);
   // Allocate the remaining cost. Reversals return exactly the original cents.
   const allocated=state.local.stockMoves.filter(m=>m.batchId===b.id&&m.delta<0).reduce((n,m)=>n+(m.costCents??0),0);
-  const cents=b.costCents==null?null:Math.round(part/b.remaining*(b.costCents-allocated));
+  const cents=b.costCents==null?null:Math.round(part/b.remaining*Math.max(0,b.costCents-allocated));
   allocations.push({batchId:b.id,qty:part,costCents:cents});
   remaining=round(remaining-part,6);
  }
@@ -373,7 +406,7 @@ export function addFood(state,fields,id,newId) {
   throw Error('请在包装的称重历史中更正这笔饮食重量');
  const createdAt=previous?.createdAt ?? new Date().toISOString();
  const entry={id:id??newId??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
-  foodId:foodId||null,stockQty:qty,amount:numeric(amount),...(amountUnit?{amountUnit}:{}),...(weighing?{weighing}:{}),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:explicitCost===null?'inventory':'manual'};
+  foodId:foodId||null,stockQty:qty,amount:numeric(amount),...(amountUnit?{amountUnit}:{}),...(weighing?{weighing}:{}),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:fields.costEstimated?'estimated_package':explicitCost===null?'inventory':'manual'};
  const oldMoves=state.local.stockMoves;
  state.local.stockMoves=oldMoves.filter(m=>m.linkedFoodId!==entry.id);
  try{

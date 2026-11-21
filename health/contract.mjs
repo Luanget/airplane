@@ -178,17 +178,17 @@ const scopedModes={
  vision:['entry','purchase','inventory','portions','activity','plan'],
  mixed:['finance','activity','purchase','entry','plan','food_edit','inventory','portions','batch']
 };
-export function selectChatSchema({documentAccess,autoMemory,healthActions=false,groupedPhotos=false,agentTasks=false,profile='general'}){
+export function selectChatSchema({documentAccess,autoMemory,healthActions=false,groupedPhotos=false,agentTasks=false,labelMealOnly=false,profile='general'}){
  const base=documentAccess?documentChatSchema:chatSchema;
  const scoped=scopedModes[profile];
- const original=scoped?base.properties.proposal.anyOf.filter(row=>row.type==='null'||scoped.includes(proposalMode(row))):
+ const original=labelMealOnly?[{type:'null'}]:scoped?base.properties.proposal.anyOf.filter(row=>row.type==='null'||scoped.includes(proposalMode(row))):
   base.properties.proposal.anyOf;
  const kinds=profile==='receipt'||profile==='vision'?[agentKinds[2]]:
   profile==='finance'?[agentKinds[1]]:profile==='health'?[agentKinds[0]]:agentKinds;
  const additions=[
-  ...(healthActions&&!['finance','receipt'].includes(profile)?[proposal('health_action',healthActionSchema)]:[]),
+  ...(healthActions&&!labelMealOnly&&!['finance','receipt'].includes(profile)?[proposal('health_action',healthActionSchema)]:[]),
   ...(groupedPhotos&&profile!=='receipt'?[proposal('photo_meal',groupedMealSchema)]:[]),
-  ...(agentTasks?[proposal('agent_task',agentTasksWith(kinds))]:[])
+  ...(agentTasks&&!labelMealOnly?[proposal('agent_task',agentTasksWith(kinds))]:[])
  ];
  const schema=object({...base.properties,proposal:{anyOf:[...original,...additions]}});
  return autoMemory?withAutomaticMemory(schema):schema;

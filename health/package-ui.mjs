@@ -25,7 +25,7 @@ export function packageSummary(rows){
 export function packageDetail(row){
  if(row.status==='empty'||row.status==='discarded')return statusLabel[row.status];
  if(row.gross!=null)return '最新毛重 '+format(row.gross)+' g · '+(row.net===null?'净余未知':(row.estimated?'估计':'')+'净余 '+format(row.net)+' g')+
-  (row.eaten?' · 已吃 '+format(row.eaten)+' g':'');
+  (row.eaten?' · 已吃 '+format(row.eaten)+' g':'')+(row.costEstimated&&row.spent?' · 耗用成本约 ¥'+(row.spent/100).toFixed(2):'');
  if(row.net!=null)return (row.estimated?'约 ':'')+format(row.net)+' g · '+(row.estimated?'估算':'净重');
  if(row.nominal)return '标称 '+format(row.nominal.value)+' '+row.nominal.unit;
  return '净含量未知';

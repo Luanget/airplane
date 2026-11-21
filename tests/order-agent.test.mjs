@@ -83,7 +83,7 @@ test('paid mixed receipt honors corrected custom taxonomy, paid discounts, unkno
  assert.match(wrongNumber.text,/订单号不一致/);
  const newOrder=await run(w,orderReceipt(today,{orderNo:'SYNTH-NEW-002',images:[2],
   lines:[item('合成脱脂牛奶','food',{quantity:2,unit:'盒',packAmount:250,packUnit:'mL'})],
-  shipping:null,discount:null}),{attachmentKeys:['new-bag','new-receipt'],mediaKey:'new-bag:new-receipt'});
+  shipping:null,discount:null}),{id:'new-purchase',attachmentKeys:['new-bag','new-receipt'],mediaKey:'new-bag:new-receipt'});
  assert.equal(newOrder.rows[0].state,'done',newOrder.text);
  const next=await w.readHealth();
  assert.equal(next.local.inventory.length,1);
@@ -100,7 +100,6 @@ test('cart, conflicting payments, incomplete image references and unproven alloc
   [{images:[3]},'blocked'],
   [{totalEvidence:'实付 34.004'},'blocked'],
   [{shipping:4},'blocked'],
-  [{orderNo:null},'blocked'],
   [{lines:[item('商品名称无法读取','unknown')]},'blocked']
  ];
  for(const [change,status] of cases){
@@ -244,4 +243,21 @@ test('Responses request includes receipt workflow with images and checks strict 
  const mock={status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]};
  assert.deepEqual(parseResult(mock,input,options),value);
  assert.throws(()=>parseResult(mock,input,{...options,allowRead:false}));
+});
+
+test('missing order number uses independent operation, image and product identities',async()=>{
+ const w=make();authorize(w);
+ const base=orderReceipt(today,{orderNo:null});
+ const runWith=(receipt,id,text='')=>run(w,receipt,{id,text,attachmentKeys:[id],mediaKey:id});
+ assert.equal((await runWith(base,'receipt-no-id')).rows[0].state,'done');
+ assert.match((await runWith(base,'duplicate-short-window')).text,/疑似重复/);
+ assert.equal((await w.readHealth()).local.purchases.length,1);
+ await runWith(base,'second-purchase','我又买了一次');
+ assert.equal((await w.readHealth()).local.purchases.length,2);
+ await runWith(base,'second-purchase','我又买了一次');
+ assert.equal((await w.readHealth()).local.purchases.length,2);
+ const different={...base,lines:[{...base.lines[0],quantity:1},base.lines[1]]};
+ await runWith(different,'different-groceries');
+ assert.equal((await w.readHealth()).local.purchases.length,3);
+ assert.equal(ledger(w).transactions.filter(row=>row.receiptKey).reduce((sum,row)=>sum+row.amount,0),102);
 });

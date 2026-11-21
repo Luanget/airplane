@@ -1,3 +1,4 @@
+import {apportionedCost} from './package-price.mjs';
 // The journal keeps physical observations even when an associated food is corrected.
 export const containerTypes=['baseline','eat','net','loss','refill','reweigh','portion','empty','discard','correct','void'];
 export const onShelf=container=>container.status==='sealed'||container.status==='open';
@@ -40,8 +41,11 @@ export function packageReading(container,rows){
     eaten+=event.grams??0;
     volumeMl+=event.volumeMl??0;
     if(event.foodId)foodIds.push(event.foodId);
-    if(event.costCents==null)unknownCost=true;
-    else spent+=event.costCents;
+    const estimatedCost=event.source==='migration'&&container.costEstimated?apportionedCost(container.costCents,
+     container.nominal?.unit==='mL'?event.volumeMl:event.grams,container.actualNetGrams??container.nominal?.value,spent+lossCost):null;
+    const cost=event.costCents??estimatedCost;
+    if(cost==null)unknownCost=true;
+    else spent+=cost;
    }
   }
   if(event.type==='loss'||event.type==='discard'){
@@ -53,6 +57,7 @@ export function packageReading(container,rows){
    if(event.costCents!=null)lossCost+=event.costCents;
   }
   if(event.type==='refill'&&net!=null)net=rounded(net+event.grams);
+  if(event.type==='empty')lossCost+=event.costCents??0;
   if(event.type==='empty'||event.type==='discard')status=event.type==='empty'?'empty':'discarded';
   if(event.gross!=null)measurements.push({id:row.id,date:event.date,gross:event.gross,type:event.type,revised:!!revision});
  }

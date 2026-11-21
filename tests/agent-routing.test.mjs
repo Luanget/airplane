@@ -80,8 +80,8 @@ test('focused memory keeps current ledger facts and tentative plans outside cont
  assert.equal(memory.relevant('牛肉酱')[0].text,'平时牛肉酱放一勺');
  assert.deepEqual(memory.rememberFromTurn([{name:'退款余额',text:'当前余额 5 元',evidence:'以后记住余额 5 元'}],'以后记住余额 5 元'),[]);
  const turns=Array.from({length:12},(_,i)=>({role:i%2?'assistant':'user',text:'之前的反复文本'.repeat(100)}));
- assert.equal(scopedHistory('receipt','识别这张截图',{turns,summary:'总结'}).turns.length,0);
- assert.ok(scopedHistory('health','修改刚才那条',{turns,summary:'总结'}).turns.every(row=>row.text.length<=450));
+ assert.equal(scopedHistory('receipt','识别这张截图',{turns,summary:'总结'}).turns.length,12);
+ assert.deepEqual(scopedHistory('health','正常问题',{turns,summary:'总结'}),{turns,summary:'总结'});
 });
 test('usage distinguishes cache misses from absent reports and estimates with editable rate snapshots',()=>{
  const store=makeStore();
@@ -116,4 +116,20 @@ test('a deferred order checkpoint exposes evidence and waits without allowing a 
  assert.ok(tracedStep(receiptStep(receipt)).evidence.includes('支付成功'));
  assert.equal(steps[1].receipt,null);
  assert.deepEqual(steps.at(-1).dependsOn,['order']);
+});
+
+test('execution memory verifies pertinent health and finance receipts from current books',async()=>{
+ const {healthTraceReceipt,relatedTaskSummaries}=await import('../ai/task-log.mjs');
+ const record=healthTraceReceipt({id:'operation',revision:5,changes:{foods:[['food1',null]],edits:{foods:[['legacy1',true,null]]}}});
+ assert.deepEqual(record.records.foods,['food1','legacy1']);
+ let task=updateTask(null,'task-one',{type:'start',route:'mixed',threadId:'thread-one'},100);
+ task=updateTask(task,'task-one',{type:'step',step:{id:'health',kind:'health',objects:['牛肉酱'],status:'done',receipt:record}},110);
+ task=updateTask(task,'task-one',{type:'step',step:{id:'purchase',kind:'receipt',dependsOn:['health'],status:'pending',retryable:true}},120);
+ const health={local:{assistantActions:[{id:'operation',undone:true}]}};
+ const [verified]=relatedTaskSummaries([task],{text:'继续',threadId:'thread-one',health});
+ assert.equal(verified.steps[0].status,'undone');
+ assert.equal(verified.steps[1].retryable,true);
+ assert.deepEqual(relatedTaskSummaries([task],{text:'月度预算',threadId:'different-thread'}),[]);
+ assert.equal(relatedTaskSummaries([task],{text:'那瓶牛肉酱'})[0].taskId,'task-one');
+ assert.equal(updateTask(task,'task-one',{type:'undo',operation:'operation'},130).steps[0].status,'undone');
 });

@@ -454,6 +454,10 @@ try {
       fields.push('memory');
       assert.ok(input.memory.every(item=>Object.keys(item).sort().join(',')==='name,text'));
     }
+    if(input.recentOperations){
+      fields.push('recentOperations');
+      assert.ok(input.recentOperations.length<=5&&input.recentOperations.every(task=>task.taskId&&task.steps.length<=8));
+    }
     if(input.activeSkills)fields.push('activeSkills');
     if(input.financeCategories)fields.push('financeCategories');
     if(input.healthContext)fields.push('healthContext');
