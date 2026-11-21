@@ -1,4 +1,5 @@
-import {isMealPlan,planOperation,undoMealPlan} from '../ai/meal-planning.mjs';
+import {planOperation,undoMealPlan} from '../ai/meal-planning.mjs';
+import {dietGoals,isMealPlan,mealDay} from './meal-status.mjs';
 import {attachMedical} from './medical-ui.mjs';
 import {ensureMedical,medicalCounts,verifyMedicalState} from './medical.mjs';
 import {attachHealthMerge,renderSyncCatalog} from './sync-ui.mjs';
@@ -16,7 +17,7 @@ import {quantityInUnit,basis,packageInfo} from './candidates.mjs';
 import {APP_VERSION,shellIcon} from '../shell.mjs';
 import {bindUpdateCheck} from '../updates.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
-import {newState,normalizeLedger,recoverLegacyPortions,validateAppState,APP_SCHEMA,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,availableBatches,addDays,isOnHand,isStockReference,carbReference,currentCarbReference,importedDietTargets} from './core.mjs';
+import {newState,normalizeLedger,recoverLegacyPortions,validateAppState,APP_SCHEMA,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,availableBatches,addDays,isOnHand,isStockReference,carbReference,importedDietTargets} from './core.mjs';
 import {readState,saveState} from './storage.mjs';
 import {mealOrder,timelineGroup,eatingState,stockName,stockUnit,stockGroups} from './presentation.mjs';
 import {renderWeightChart} from './weight-chart.mjs';
@@ -99,19 +100,29 @@ function carbLabel(range){
  return range?(range.low===range.high?range.low:range.low+'–'+range.high)+' g':'';
 }
 function renderOverview(){
- const today=dateNow(),intake=dayIntake(state,selectedDate),cals=intake.totals.kcal,known=intake.reported;
- const goal=state.settings.calorieTarget,energy=energyForDay(state,selectedDate,today);
+ const today=dateNow(),future=selectedDate>today,day=mealDay(state,selectedDate,{today}),goals=dietGoals(state);
+ const intake=day.actual,totals=future?(day.remaining.length?day.planned:{}):intake.totals,cals=totals.kcal;
+ const goal=goals.kcal,energy=energyForDay(state,selectedDate,today);
  $('report-date').value=selectedDate;
- text('today-status',selectedDate>today?'未来日期':!energy.reported?'摄入待补':
+ text('hero-calorie-label',future?'计划热量':'已记录热量');
+ text('today-status',future?(day.remaining.length?'未来计划':'尚无计划'):!energy.reported?'摄入待补':
   energy.possibleOverestimate?'缺口可能高估':'已计入周期');
- text('hero-calories',known?fmt(cals,1):'—'); text('hero-goal',`目标 ${fmt(goal)} kcal`);
+ text('hero-calories',fmt(cals,1)); text('hero-goal',`目标 ${fmt(goal)} kcal`);
  syncCalendarFields($('report-date').parentElement);
- text('hero-remaining',cals!==null&&!intake.incomplete.includes('kcal')?(goal-cals>=0?`剩余 ${fmt(goal-cals,1)} kcal`:`超出 ${fmt(cals-goal,1)} kcal`):'摄入数据待补');progress('cal-progress',known?cals/goal*100:0);
- for (const [id,key,unit] of [['protein-stat','protein','g'],['fat-stat','fat','g'],['carbs-stat','carbs','g'],['sodium-stat','sodium','mg']])text(id,intake.totals[key]===null?'—':`${fmt(intake.totals[key],1)} ${unit}`);
- text('protein-goal',`目标 ${state.settings.proteinMin}–${state.settings.proteinMax}g`);text('fat-goal',`目标 ≥${state.settings.fatMin}g`);text('sodium-goal',`参考 ${state.settings.sodiumTarget} mg`);
- const {range,fromImport}=currentCarbReference(state);
- const carbs=carbLabel(range);
- text('carbs-goal',carbs?(fromImport?'按主账约 ':'普通日约 ')+carbs:'请核对营养目标');
+ text('hero-remaining',cals!=null&&(future||!intake.incomplete.includes('kcal'))?
+  (goal-cals>=0?`${future?'距目标':'剩余'} ${fmt(goal-cals,1)} kcal`:`超出 ${fmt(cals-goal,1)} kcal`):future?
+   (day.remaining.length?'计划热量待补':'暂无计划营养'):'摄入数据待补');
+ progress('cal-progress',cals==null?0:cals/goal*100);
+ for(const [key,,unit] of dietFields.slice(1))text(key+'-stat',totals[key]==null?'—':`${fmt(totals[key],1)} ${unit}`);
+ text('protein-goal',`目标 ${goals.proteinMin}–${goals.proteinMax}g`);text('fat-goal',`目标 ≥${goals.fatMin}g`);text('sodium-goal',`参考 ${goals.sodiumTarget} mg`);
+ const carbs=carbLabel(goals.carbs);
+ text('carbs-goal',carbs?(goals.fromImport?'按主账约 ':'普通日约 ')+carbs:'请核对营养目标');
+ const projection=$('overview-plan-totals');
+ projection.hidden=future||!day.plans.length;
+ if(!projection.hidden){
+  text('overview-plan-label',`剩余计划 ${calories(day.planned)} · 预计全天 ${calories(day.projected)}`);
+  $('overview-plan-values').innerHTML=planTotalsMarkup(day);
+ }
  const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,1)} kg`:'—');text('weight-date',weights.last?displayDay(weights.last.date):'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,1)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>=.05?'+':''}${fmt(weights.delta,1)} kg`:'需至少8次有效晨重');
  renderWeightChart($('weight-chart'),$('weight-chart-value'),weights.points.slice(-14));
  text('cycle-title',state.settings.cycleDays===6?'六天减脂周期':state.settings.cycleDays+' 天减脂周期');
@@ -125,6 +136,7 @@ function renderOverview(){
   cycle.possibleOverestimate?'餐食可能未记全，当前缺口可能高估':''].filter(Boolean).join(' · '));
 
  renderTimeline();
+ for(const details of $('local-events').querySelectorAll('[data-plan-day]'))details.hidden=details.dataset.planDay===selectedDate;
 }
 function setDateDefaults(){document.querySelectorAll('form input[name=date]').forEach(el=>{if(!el.value)el.value=dateNow();});}
 const historyTypes={food:'foods',weight:'weights',activity:'activities'};
@@ -135,6 +147,7 @@ function renderTimeline(){
  renderedDiet=state;renderedMonth=month;
  text('health-history-period',month.slice(0,4)+'年'+Number(month.slice(5))+'月');
  const groups=[...monthGroups(['food'],month)];
+ const today=dateNow();
  const planIds=groups.flatMap(([,rows])=>rows.filter(isMealPlan).map(row=>row.id));
  for(const id of selectedPlans)if(!planIds.includes(id))selectedPlans.delete(id);
  updatePlanButtons(planIds.length);
@@ -145,28 +158,22 @@ function renderTimeline(){
    if(!meals.has(label))meals.set(label,[]);
    meals.get(label).push(row);
   }
-  return `<div class="day-group"><div class="day-head">${dayLabel(date)}</div>${timelinePlanTotals(date,rows)}${mealOrder.filter(label=>meals.has(label)).map(label=>
-   `<section class="meal-group" aria-label="${label}"><h3>${label}</h3><div class="card transaction-list">${meals.get(label).map(dietRow).join('')}</div></section>`
+  const day=validDate(date)&&rows.some(isMealPlan)?mealDay(state,date,{today,foods:rows}):null;
+  const plans=new Map(day?.plans.map(plan=>[plan.row.id,plan.status]));
+  return `<div class="day-group"><div class="day-head">${dayLabel(date)}</div>${day?timelinePlanTotals(date,day):''}${mealOrder.filter(label=>meals.has(label)).map(label=>
+   `<section class="meal-group" aria-label="${label}"><h3>${label}</h3><div class="card transaction-list">${meals.get(label).map(row=>dietRow(row,plans.get(row.id))).join('')}</div></section>`
   ).join('')}</div>`;
  }).join('')||'<div class="card event-empty health-ledger-empty">本月暂无饮食</div>';
 }
 const dietFields=[['kcal','热量','kcal'],['protein','蛋白','g'],['fat','脂肪','g'],['carbs','碳水','g'],['sodium','钠','mg']];
-function timelinePlanTotals(date,rows){
- if(!validDate(date)||!rows.some(isMealPlan))return '';
- const actual=dayIntake(state,date);
- const actualMeals=new Set(foodsForDay(state,date).map(row=>row.meal));
- const plans=rows.filter(row=>isMealPlan(row)&&!actualMeals.has(row.meal));
- const planned=Object.fromEntries(NUTRIENTS.map(key=>[key,plans.every(row=>row.nutrition?.[key]!=null)?
-  plans.reduce((sum,row)=>sum+row.nutrition[key],0):null]));
- const projection=Object.fromEntries(NUTRIENTS.map(key=>[key,
-  planned[key]===null||actual.reported&&(actual.totals[key]===null||actual.incomplete.includes(key))?null:
-   (actual.totals[key]??0)+planned[key]]));
- const metrics=values=>dietFields.map(([key,label,unit])=>label+' '+(values[key]==null?'—':fmt(values[key],1)+' '+unit)).join(' · ');
- return `<details class="diet-day-plan"><summary>实际、计划与预计全天</summary><dl>
-  <dt>实际</dt><dd>${E(metrics(actual.totals))}</dd>
-  <dt>有效计划</dt><dd>${E(metrics(planned))}</dd>
-  <dt>预计全天</dt><dd>${E(metrics(projection))}</dd></dl></details>`;
+const calories=values=>values.kcal==null?'待补':fmt(values.kcal,1)+' kcal';
+const metrics=values=>dietFields.map(([key,label,unit])=>label+' '+(values[key]==null?'—':fmt(values[key],1)+' '+unit)).join(' · ');
+function planTotalsMarkup({actual,planned,projected}){
+ return [['实际',actual.totals],['剩余计划',planned],['预计全天',projected]].map(([label,values])=>
+  `<dt>${label}</dt><dd>${E(metrics(values))}</dd>`).join('');
 }
+function timelinePlanTotals(date,day){return `<details class="diet-day-plan" data-plan-day="${E(date)}">
+ <summary>实际、计划与预计全天</summary><dl>${planTotalsMarkup(day)}</dl></details>`;}
 function updatePlanButtons(count=events(state,'foods').filter(row=>isMealPlan(row)&&row.date?.startsWith(selectedDate.slice(0,7))).length){
  $('select-plans').hidden=!count;
  text('select-plans',selectingPlans?'完成选择':'选择计划');
@@ -196,9 +203,9 @@ const mealSymbols={
 function recordSymbol(glyph){
  return `<span class="category-symbol health-record-symbol" data-tone="${glyph}" aria-hidden="true">${shellIcon(glyph)}</span>`;
 }
-function dietRow(row){
+function dietRow(row,planStatus){
  const status=eatingState(row);
- const badge={plan:'计划',cancelled:'已取消',unknown:'待确认'}[status];
+ const badge={plan:({executed:'已执行',partial:'部分执行'})[planStatus]??'计划',cancelled:'已取消',unknown:'待确认'}[status];
  const nutrients=[['kcal','','kcal'],['protein','蛋白','g'],['fat','脂肪','g'],['carbs','碳水','g'],['sodium','钠','mg']];
  const values=['actual','plan'].includes(status)?nutrients.map(([key,label,unit])=>{
   const amount=row.nutrition?.[key];

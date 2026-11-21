@@ -65,8 +65,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   }
  }
  function showQueue(){
-  const count=book.current?.agentQueue?.length??0;
-  onQueue(count);
+  onQueue(book.current?.agentQueue??[]);
  }
  const writeStatus=(id,value,error)=>trace(id,{type:'status',status:value,failure:error?.name??null});
  const removeReview=()=>{review.hidden=true;review.replaceChildren();review.onsubmit=null;};
@@ -155,7 +154,8 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   await trace(run.id,{type:'start',route:'responses-tools',threadId:ticket.threadId});
   let partial='',writtenAt=0;
   const live=document.createElement('p');
-  live.className='chat-bubble assistant agent-live';live.hidden=true;transcript.append(live);
+  live.className='chat-bubble assistant agent-live';live.hidden=true;
+  transcript.insertBefore(live,transcript.querySelector('[data-queued-job]'));
   const updatePartial=reply=>{
    if(!active(ticket))return;
    const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
@@ -218,8 +218,8 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   if(!entry)return;
   const ticket=book.startAgent(entry.id);
   if(!ticket)return;
-  onUser(entry.label);
   showQueue();
+  onUser(entry.label);
   try{
    const seed=await journal.readRun(entry.id);
    if(!seed)throw Error('找不到该任务的本机附件或恢复点');

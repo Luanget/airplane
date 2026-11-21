@@ -1,15 +1,16 @@
-import {NUTRIENTS,actualFood,addFood,allocateStock,carbReference,dayIntake,deleteEvent,energyForDay,events,inventoryWithMoves,isOnHand,
+import {NUTRIENTS,addFood,allocateStock,deleteEvent,energyForDay,events,foodsForDay,inventoryWithMoves,isOnHand,
  round,validDate} from '../health/core.mjs';
 import {basis,quantityInUnit} from '../health/candidates.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {onShelf} from '../health/container-ledger.mjs';
+import {dietGoals,isMealPlan,mealDay} from '../health/meal-status.mjs';
 import {same} from '../health/sync-source.mjs';
 
-export const isMealPlan=row=>!actualFood(row)&&/^(?:plan|计划)/i.test(row.status??'');
+export {isMealPlan};
 const brief=row=>({id:row.id,date:row.date,meal:row.meal,name:row.name,foodId:row.foodId,
  containerId:row.containerId??null,amount:row.amount,unit:row.amountUnit??null,portion:row.portion,nutrition:row.nutrition,cost:row.cost});
-const sum=(records,base=null)=>Object.fromEntries(NUTRIENTS.map(key=>{
- const values=[...(base?[base[key]]:[]),...records.map(row=>row.nutrition[key])];
+const sum=records=>Object.fromEntries(NUTRIENTS.map(key=>{
+ const values=records.map(row=>row.nutrition[key]);
  return [key,values.every(Number.isFinite)?round(values.reduce((a,b)=>a+b,0),2):null];
 }));
 const byMeal=foods=>Object.fromEntries([...new Set(foods.map(row=>row.meal))].map(meal=>{
@@ -28,16 +29,15 @@ export function planningFacts(state,dates,today,habits){
    containers:packagesFor(state,sku.id).filter(onShelf).map(row=>({id:row.id,kind:row.kind,status:row.status,netGrams:row.net,
     nominal:row.nominal??null,estimated:row.estimated===true,latestGross:row.gross,costCents:row.costCents??null}))};
  });
- const {calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget}=state.settings;
  const datesSet=[...new Set(dates)];
- return {revision:state.revision??0,inventory,habits,settingsPreferences:state.settings.preferences??null,goals:{kcal:calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget,
-  carbs:carbReference(state.settings)},days:datesSet.map(date=>{
+ return {revision:state.revision??0,inventory,habits,settingsPreferences:state.settings.preferences??null,goals:dietGoals(state),days:datesSet.map(date=>{
   if(!validDate(date))throw Error('请指定日历日期 YYYY-MM-DD');
-  const foods=events(state,'foods').filter(row=>row.date===date);
-  const actual=date<=today?foods.filter(actualFood):[];
-  const completedMeals=new Set(actual.map(row=>row.meal));
-  return {date,actual:actual.map(brief),existingPlans:foods.filter(isMealPlan).map(row=>({...brief(row),covered:completedMeals.has(row.meal)})),
-   actualTotals:date<=today?dayIntake(state,date).totals:null,energy:date<=today?energyForDay(state,date,today):null,
+  const {actual,actualRows,plans,planned,projected}=mealDay(state,date,{today});
+  return {date,actual:actualRows.map(brief),existingPlans:plans.map(({row,remaining,status,actualIds,fulfilledAmount})=>
+   ({...brief(row),covered:status==='executed',status,actualIds,fulfilledAmount,remaining:remaining?brief(remaining):null})),
+   actualTotals:actual.totals,actualReported:actual.reported,actualIncomplete:actual.incomplete,
+   actualCost:actual.cost,actualCostPartial:actual.costPartial,remainingPlanTotals:planned,currentProjection:projected,
+   energy:date<=today?energyForDay(state,date,today):null,
    activity:events(state,'activities').filter(row=>row.date===date).map(({name,kcal,minutes,km,energyKind,includedInBase})=>
     ({name,kcal,minutes,km,energyKind,includedInBase}))};
  })};
@@ -48,10 +48,26 @@ function measured(amount,unit,container){
  return {amount,unit};
 }
 
-export function evaluateMealPlan(state,{items,replaceIds=[]},today,habits=[]){
- const facts=planningFacts(state,items.map(row=>row.date),today,habits);
+function targetChecks(projected,goals){
+ const bounds={kcal:[goals.kcal-goals.kcalTolerance,goals.kcal+goals.kcalTolerance],
+  protein:[goals.proteinMin,goals.proteinMax],fat:[goals.fatMin,null],carbs:[goals.carbs?.low??null,goals.carbs?.high??null],
+  sodium:[null,goals.sodiumTarget]};
+ return Object.fromEntries(Object.entries(bounds).map(([key,[min,max]])=>{
+  const value=projected[key];
+  const status=min==null&&max==null?'no_target':value==null?'unknown':min!=null&&value<min?'below':max!=null&&value>max?'above':'within';
+  const difference=status==='below'?round(min-value,2):status==='above'?round(value-max,2):status==='within'?0:null;
+  return [key,{status,value,min,max,difference}];
+ }));
+}
+
+export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]},today,habits=[]){
+ const activePlans=events(state,'foods').filter(isMealPlan);
+ const selected=[...replaceIds,...appendTo];
+ const selectedPlans=activePlans.filter(row=>selected.includes(row.id));
+ const facts=planningFacts(state,[...dates,...items.map(row=>row.date),...selectedPlans.map(row=>row.date)],today,habits);
  const inventory=new Map(inventoryWithMoves(state).map(sku=>[sku.id,sku]));
  const stockUsed=new Map(),packagesUsed=new Map(),violations=[];
+ if(selectedPlans.length!==new Set(selected).size)violations.push({reason:'修改或追加前请查询并指定有效的原计划 ID。'});
  const identify=(row,sku)=>{
   if(!sku||!isOnHand(sku)||sku.grossStockOnly&& !row.containerId)throw Error('食品 '+(sku?.name??row.foodId)+' 缺少可用库存或可核实的净重');
   const container=row.containerId?packagesFor(state,sku.id).find(item=>item.id===row.containerId&&onShelf(item)):null;
@@ -90,10 +106,9 @@ export function evaluateMealPlan(state,{items,replaceIds=[]},today,habits=[]){
  const proposed=[];
  // Reserve existing plans before evaluating additions. Existing plans stay visible
  // even when the catalog lacks a quantity that can be reserved.
- const existing=facts.days.flatMap(day=>day.existingPlans.filter(row=>!row.covered&&!replaceIds.includes(row.id)));
- const originalMeals=new Set(existing.map(row=>row.date+'|'+row.meal));
- const replacedMeals=new Set(facts.days.flatMap(day=>day.existingPlans.filter(row=>replaceIds.includes(row.id))
-  .map(row=>row.date+'|'+row.meal)));
+ const existing=facts.days.flatMap(day=>day.existingPlans.flatMap(row=>row.remaining&&!replaceIds.includes(row.id)?[row.remaining]:[]));
+ const originalMeals=new Set(facts.days.flatMap(day=>day.existingPlans.map(row=>row.date+'|'+row.meal)));
+ const amendedMeals=new Set(selectedPlans.map(row=>row.date+'|'+row.meal));
  for(const row of existing){
   const samePack=items.some(part=>part.containerId&&part.containerId===row.containerId);
   if(!row.foodId||!row.amount||!row.unit)continue;
@@ -102,8 +117,8 @@ export function evaluateMealPlan(state,{items,replaceIds=[]},today,habits=[]){
  }
  for(const [index,row] of items.entries()){
   const mealKey=row.date+'|'+row.meal;
-  if(originalMeals.has(mealKey)&&!replacedMeals.has(mealKey)){
-   violations.push({index,date:row.date,meal:row.meal,reason:'该餐已有保存计划，请保留。只有用户要求更改这餐时才传 replaceIds。'});
+  if(originalMeals.has(mealKey)&&!amendedMeals.has(mealKey)){
+   violations.push({index,date:row.date,meal:row.meal,reason:'该餐已有保存计划。追加用 appendTo，替换个别项目用 replaceIds，请以用户要求为准。'});
    continue;
   }
   try{proposed.push(identify(row,inventory.get(row.foodId)));}
@@ -111,7 +126,9 @@ export function evaluateMealPlan(state,{items,replaceIds=[]},today,habits=[]){
  }
  const days=facts.days.map(day=>{
   const accepted=proposed.filter(row=>row.date===day.date);
-  const plans=[...existing.filter(row=>row.date===day.date),...accepted];
+  const originals=activePlans.filter(row=>row.date===day.date&&!replaceIds.includes(row.id));
+  const {remaining:plans,planned,projected}=mealDay(state,day.date,{today,foods:[...foodsForDay(state,day.date),...originals,
+   ...accepted.map((row,index)=>({...row,status:'plan',id:'proposed:'+index,amountUnit:row.unit}))]});
   const all=[...day.actual,...plans];
   for(const habit of habits){
    const constraint=habit.constraint;
@@ -120,18 +137,23 @@ export function evaluateMealPlan(state,{items,replaceIds=[]},today,habits=[]){
    const meals=new Set(all.filter(row=>label(row.name).includes(label(constraint.food))).map(row=>row.meal));
    if(meals.size>limit)violations.push({date:day.date,habitId:habit.id,reason:constraint.food+' 出现在 '+meals.size+' 餐，当前偏好上限 '+limit+' 餐'});
   }
-  const planned=sum(plans),projected=sum(plans,day.actual.length||NUTRIENTS.some(key=>day.actualTotals?.[key]!=null)?day.actualTotals:null);
   const gap=(key,target)=>projected[key]==null||target==null?null:round(target-projected[key],2);
   const gaps={kcal:gap('kcal',facts.goals.kcal),proteinMin:gap('protein',facts.goals.proteinMin),
    proteinMax:gap('protein',facts.goals.proteinMax),fatMin:gap('fat',facts.goals.fatMin),
    carbMin:gap('carbs',facts.goals.carbs?.low),carbMax:gap('carbs',facts.goals.carbs?.high),sodiumLimit:gap('sodium',facts.goals.sodiumTarget)};
+  const checks=targetChecks(projected,facts.goals);
+  const outside=Object.keys(checks).filter(key=>['below','above'].includes(checks[key].status));
+  const unknown=Object.keys(checks).filter(key=>checks[key].status==='unknown');
+  const priced=plans.filter(row=>row.cost!=null),knownPlannedCost=priced.length?round(priced.reduce((sum,row)=>sum+row.cost,0),2):null;
+  const knownDayCost=knownPlannedCost==null&&day.actualCost==null?null:round((knownPlannedCost??0)+(day.actualCost??0),2);
   return {...day,proposed:accepted,meals:byMeal(plans),planned,projected,gaps,
-   targetsMet:{protein:projected.protein===null?null:gaps.proteinMin<=0&&gaps.proteinMax>=0,
-    fat:projected.fat===null?null:gaps.fatMin<=0,sodium:projected.sodium===null?null:gaps.sodiumLimit>=0}};
-
+   targetsMet:Object.fromEntries(Object.entries(checks).map(([key,{status}])=>[key,
+    ['unknown','no_target'].includes(status)?null:status==='within'])),
+   nutritionCheck:{status:outside.length?'outside':unknown.length?'unknown':'within',checks,outside,unknown},
+   cost:{knownPlannedCost,knownDayCost,complete:!day.actualCostPartial&&priced.length===plans.length}};
  });
- return {feasible:violations.length===0,violations,goals:facts.goals,days,
-  usedHabitIds:habits.map(row=>row.id),assumptions:'试算共用当前库存及目标日期已保存计划，未知营养和成本保留为空。'};
+ return {feasible:violations.length===0,violations,goals:facts.goals,days,usedHabitIds:habits.map(row=>row.id),
+  assumptions:'feasible 仅检查库存和硬约束。全天目标看 nutritionCheck；未知营养与成本不会视为零。'};
 }
 
 export function planOperation(state,args,{id,today,habits}){

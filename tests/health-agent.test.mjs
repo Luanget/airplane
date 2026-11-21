@@ -141,8 +141,8 @@ test('daily reports distinguish pending meals, missing nutrients, measured weigh
  const missing=addDays(date,-2);
  state.settings.cycleAnchor=addDays(date,-5);
  for(let i=1;i<=4;i++)if(i!==2)mix('餐次 '+i,addDays(date,-i),'晚餐','actual',1600);
- mix('实际午餐',date,'午餐','actual',550);
- mix('已被实际覆盖',date,'午餐','plan',450);
+ mix('合成午餐',date,'午餐','actual',550);
+ mix('合成午餐',date,'午餐','plan',450);
  mix('晚餐方案',date,'晚餐','plan',600);
  for(let i=0;i<8;i++)recordEvent(state,'weights',{date:addDays(date,-i),kg:78+i/10,isMorning:true});
  const full=healthReport(state,date,date);

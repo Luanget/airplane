@@ -3,11 +3,13 @@ import {test} from 'node:test';
 import {evaluateMealPlan,planOperation,undoMealPlan,planningFacts} from '../ai/meal-planning.mjs';
 import {assistantFixture,action,proposal} from './health-action-fixture.mjs';
 import {packagesFor} from '../health/containers.mjs';
-import {dayIntake,events} from '../health/core.mjs';
+import {addFood,dayIntake,deleteEvent,events} from '../health/core.mjs';
+import {mealDay} from '../health/meal-status.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {memoryLibrary} from '../ai/memory.mjs';
 import {createAgentTools} from '../ai/agent-tools.mjs';
 import {setHealthAuto} from '../ai/health-actions.mjs';
+import {readChatModel,saveChatModel} from '../ai/models.mjs';
 
 const today='2035-04-22',tomorrow='2035-04-23';
 const memoryStore=()=>{
@@ -78,4 +80,88 @@ test('native tool access is independent of workflows, an unknown SKU can retain 
  assert.equal(health.local.foods.at(-1).stockAssociation,'pending');
  assert.deepEqual(health.local.stockMoves,before);
  await assert.rejects(tools('write_health',args,{...context,run:{...run,allowRead:false}}),/权限/);
+});
+
+test('natural schedule and follow-up can save and append to the selected meal, with unchanged stock',async()=>{
+ const finance=memoryStore(),memory=memoryLibrary(finance);
+ let state=assistantFixture(today);
+ saveSku(state,{id:'egg',name:'合成鸡蛋',unit:'个',basisAmount:1,basisUnit:'个',kcal:75,protein:6,carbs:1,fat:5,sodium:70}).qty=6;
+ const before=structuredClone(state.local.stockMoves);
+ const workspace={finance,memory,readHealth:async()=>structuredClone(state),saveHealth:async(next,revision,guard)=>{
+  assert.equal(state.revision??0,revision);guard?.();state={...structuredClone(next),revision:revision+1};
+ }};
+ const tool=createAgentTools(workspace),noodles={...row('fixture-noodles',1,'午餐'),unit:'包'};
+ const write=(id,evidence,fields,messages=[evidence])=>tool('write_meal_plan',{evidence,replaceIds:[],appendTo:[],...fields},
+  {run:{date:today,allowRead:true,messages,attachments:[]},operationId:id});
+ const request='安排明天午餐，荞麦面一包';
+ assert.equal((await write('preview',request,{items:[noodles]})).status,'review');
+ assert.equal(events(state,'foods').filter(row=>row.date===tomorrow).length,0);
+ setHealthAuto(finance,true);
+ const saved=await write('lunch',request,{items:[noodles]});
+ assert.equal(saved.status,'saved');
+ assert.equal((await write('lunch',request,{items:[noodles]})).receipt.revision,saved.receipt.revision);
+ const lunch=saved.receipt.createdIds[0];
+ const dinner=await write('dinner','就按刚才方案执行',{items:[{...row('fixture-greens',200,'晚餐')}]});
+ assert.equal(dinner.status,'saved');
+ const amendment='把午餐再加个鸡蛋';
+ const egg={...row('egg',1,'午餐'),unit:'个'};
+ assert.equal((await write('old-context',request,{items:[egg],appendTo:[lunch]},[request,amendment])).status,'conflict');
+ assert.equal((await write('add-egg',amendment,{items:[egg],appendTo:[lunch]})).status,'saved');
+ const active=events(state,'foods').filter(row=>row.date===tomorrow);
+ assert.equal(active.length,3);assert.equal(active.find(row=>row.id===lunch).nutrition.kcal,220);
+ assert.equal(active.find(row=>row.id===dinner.receipt.createdIds[0]).meal,'晚餐');
+ assert.equal(dayIntake(state,tomorrow).totals.kcal,null);
+ assert.deepEqual(state.local.stockMoves,before);
+});
+
+test('a saved meal keeps other food and unused portions in projection even after actual food and cancellation',()=>{
+ const state=assistantFixture(today);
+ const log=(foodId,name,amount,amountUnit,kcal,status)=>addFood(state,{date:today,meal:'晚餐',foodId,name,
+  amount,amountUnit,kcal,protein:10,carbs:12,fat:3,sodium:40,status});
+ const noodles=log('fixture-noodles','荞麦面',2,'包',440,'plan');
+ const egg=log('egg','鸡蛋',1,'个',75,'plan');
+ const greens=log('fixture-greens','蔬菜',200,'g',40,'plan');
+ const eaten=log('egg','鸡蛋',1,'个',75,'actual');
+ log('distinct-egg','鸡蛋',1,'个',60,'cancelled');
+ let day=mealDay(state,today);
+ assert.equal(day.actual.totals.kcal,75);assert.equal(day.planned.kcal,480);assert.equal(day.projected.kcal,555);
+ assert.deepEqual(day.plans.find(item=>item.row.id===egg.id).actualIds,[eaten.id]);
+ const facts=planningFacts(state,[today],today,[]).days[0];
+ assert.equal(facts.existingPlans.find(item=>item.id===egg.id).status,'executed');
+ assert.equal(evaluateMealPlan(state,{items:[],dates:[today]},today).days[0].projected.kcal,555);
+ const firstServing=log('fixture-noodles','荞麦面',1,'包',220,'actual');
+ day=mealDay(state,today);
+ assert.equal(day.plans.find(item=>item.row.id===noodles.id).remaining.amount,1);
+ assert.equal(day.planned.kcal,260);assert.equal(day.projected.kcal,555);
+ deleteEvent(state,'foods',firstServing.id);deleteEvent(state,'foods',greens.id);
+ day=mealDay(state,today);
+ assert.equal(day.planned.kcal,440);assert.equal(day.projected.kcal,515);
+ const corrected=log('distinct-egg','鸡蛋',1,'个',60,'actual');
+ deleteEvent(state,'foods',eaten.id);
+ day=mealDay(state,today);
+ assert.equal(day.plans.find(item=>item.row.id===egg.id).status,'pending');
+ assert.ok(day.actualRows.some(item=>item.id===corrected.id));
+ log('fixture-noodles','荞麦面',null,null,100,'actual');
+ assert.equal(mealDay(state,today).plans.find(item=>item.row.id===noodles.id).remaining.amount,2);
+});
+
+test('stock feasibility is separate from all five nutrition targets and evidence-based cost',()=>{
+ const state=assistantFixture(today);
+ Object.assign(state.settings,{calorieTarget:1700,proteinMin:150,proteinMax:170,fatMin:45});
+ const {feasible,days:[day]}=evaluateMealPlan(state,{items:[{...row('fixture-noodles',1,'晚餐'),unit:'包'}]},today);
+ assert.equal(feasible,true);assert.equal(day.projected.kcal,220);
+ assert.equal(day.nutritionCheck.status,'outside');
+ assert.deepEqual(day.nutritionCheck.outside,['kcal','protein','fat','carbs']);
+ assert.deepEqual(day.nutritionCheck.checks.kcal,{status:'below',value:220,min:1615,max:1785,difference:1395});
+ assert.equal(day.nutritionCheck.checks.sodium.status,'within');
+ assert.deepEqual(day.cost,{knownPlannedCost:null,knownDayCost:null,complete:false});
+});
+
+test('default is explicitly Terra and the selected model always takes precedence',()=>{
+ const store=memoryStore();
+ assert.equal(readChatModel(store).name,'Terra');
+ for(const [id,name] of [['gpt-6-luna','Luna'],['gpt-6.2-sol','Sol'],['gpt-6.1-terra','Terra']]){
+  saveChatModel(store,id);assert.equal(readChatModel(store).name,name);
+ }
+ saveChatModel(store,'auto');assert.equal(readChatModel(store).name,'Terra');
 });

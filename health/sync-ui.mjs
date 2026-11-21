@@ -2,7 +2,7 @@ import {inventoryWithMoves} from './core.mjs';
 import {localDate} from '../calendar.mjs';
 import {readFinance} from '../finance-storage.mjs';
 import {APP_VERSION} from '../shell.mjs';
-import {readRestoreSnapshot,readState} from './storage.mjs';
+import {readState} from './storage.mjs';
 import {importSource} from './sync-source.mjs';
 import {planHealthMerge} from './sync.mjs';
 import {commitHealthMerge,createSyncPackage,financeStamp,HEALTH_FILE_STATUS_KEY} from './sync-io.mjs';
@@ -30,25 +30,27 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
   const {plan,source,choices}=job;
   preview.hidden=false;
   info.textContent=source.label+' · '+source.version+' · '+source.id;
-  const counter=Object.fromEntries(Object.keys(states).map(key=>[key,0]));
-  for(const record of plan.rows)counter[record.status]++;
-  summary.textContent=Object.entries(counter).filter(([,count])=>count).map(([key,n])=>states[key]+' '+n).join(' · ')||'该文件没有可合并的健康数据。';
+  const groups={review:[],change:[],kept:[]};
+  let unchanged=0;
+  for(const record of plan.rows){
+   if(['same','existing'].includes(record.status)){unchanged++;continue;}
+   const group=record.options.length&&!record.chosen?'review':(['keep','skip'].includes(record.chosen)?'kept':'change');
+   groups[group].push(record);
+  }
+  summary.textContent=[groups.change.length&&'改动 '+groups.change.length,groups.review.length&&'待核对 '+groups.review.length,
+   unchanged&&'相同或已导入 '+unchanged,groups.kept.length&&'保留本机 '+groups.kept.length].filter(Boolean).join(' · ')||'该文件没有可合并的健康数据。';
   if(source.finance)summary.textContent+='。文件含财务数据，本次仅处理健康账。';
+  const expanded=new Set([...changes.querySelectorAll('.sync-change[open]')].map(node=>node.dataset.record));
+  const previousGroups=new Map([...changes.querySelectorAll('[data-sync-group]')].map(node=>[node.dataset.syncGroup,node.open]));
   changes.replaceChildren();
   for(const problem of plan.problems)changes.append(element('p',problem,'sync-problem'));
-  const cards={};
-  for(const record of plan.rows.filter(item=>!['same','existing'].includes(item.status))){
-   const conflict=record.options.length>0;
-   const section=cards[conflict]??=element('details');
-   if(!section.firstChild){
-    section.append(element('summary',conflict?'待核对':'将合并的改动'));
-    section.open=true;changes.append(section);
-   }
+  function changeCard(record){
    const name=record.after?.name??record.before?.name??record.after?.date??record.before?.date??record.after?.key??record.before?.key??'';
    const card=element('details',undefined,'sync-change');
+   card.dataset.record=record.id;
+   card.open=expanded.has(record.id)||record.options.length>0&&!record.chosen;
    card.append(element('summary',[states[record.status],record.label,name].filter(Boolean).join(' · ')));
    if(record.options.length){
-    card.open=true;
     const label=element('label','处理方式');
     const select=element('select');
     select.dataset.syncChoice=record.id;
@@ -75,7 +77,24 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
     }
     values.append(comparison);
    };
-   card.append(values);section.append(card);
+   card.append(values);return card;
+  }
+  for(const [id,title] of [['review','待核对'],['change','将合并的改动'],['kept','已核对并保留本机']]){
+   const records=groups[id];
+   if(!records.length)continue;
+   const section=element('details'),list=element('div'),more=element('button','显示更多','text-button');
+   section.dataset.syncGroup=id;more.type='button';
+   section.open=previousGroups.get(id)??id!=='kept';
+   section.append(element('summary',title+' · '+records.length),list,more);changes.append(section);
+   function show(count){
+    const end=Math.min(records.length,count);
+    for(const record of records.slice(list.childElementCount,end))list.append(changeCard(record));
+    job.pages[id]=count;more.hidden=end>=records.length;
+   }
+   more.onclick=()=>show(list.childElementCount+12);
+   section.ontoggle=()=>{if(section.open&&!list.childElementCount)show(job.pages[id]??12);};
+   if(section.open)show(job.pages[id]??12);
+   else more.hidden=true;
   }
   impact.replaceChildren();
   impact.hidden=plan.impact.length===0;
@@ -91,7 +110,9 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
   if(!job)return;
   try{
    job.plan=planHealthMerge(job.current,job.source,{choices:job.choices,finance:job.finance.payload});
+   const body=panel.closest('.settings-modal-body'),scroll=body?.scrollTop;
    render();
+   if(body)body.scrollTop=scroll;
    if(focus)changes.querySelector('[data-sync-choice="'+CSS.escape(focus)+'"]')?.focus({preventScroll:true});
   }catch(error){apply.disabled=true;notify(error.message);}
  }
@@ -105,7 +126,7 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
    const source=importSource(input,{label,identity:sourceInput.value.trim()||undefined});
    const [current,finance]=await Promise.all([readState(account),Promise.resolve().then(()=>readFinance(account.finance))]);
    if(token!==sequence)return;
-   job={current,finance,source,choices:{},input,label};recalculate();
+   job={current,finance,source,choices:{},pages:{},input,label};recalculate();
   }catch(error){
    if(token!==sequence)return;
    clear();notify(error.message);
@@ -140,13 +161,6 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
    setState(saved);clear();notify('已合并到本机，已保留合并前完整快照。');
   }catch(error){notify(error.message);}
   finally{busy=false;if(job)render();}
- };
- find('[data-sync-snapshot]').onclick=async()=>{
-  try{
-   const snapshot=await readRestoreSnapshot(account);
-   if(!snapshot)throw Error('暂无恢复前快照');
-   download('airplane-before-merge-backup.json',stringify(snapshot));
-  }catch(error){notify(error.message);}
  };
  find('[data-sync-export]').onclick=async()=>{
   try{

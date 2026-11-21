@@ -10,7 +10,7 @@ import {eatingState} from '../health/presentation.mjs';
 import {setShoppingItem} from '../health/shopping.mjs';
 import {appDataEditSchema,matches} from '../health/contract.mjs';
 import {HISTORY_OPTIONS,readHistoryOption,saveHistoryOption} from './context.mjs';
-import {readChatModel,saveChatModel} from './models.mjs';
+import {manualChatModel,saveChatModel} from './models.mjs';
 import {APP_VERSION} from '../shell.mjs';
 import {totalUsage} from './usage.mjs';
 import {dataGuide} from './data-guide.mjs';
@@ -88,7 +88,7 @@ function checkFields(dataset,fields){
 }
 const rows=(values,key='id')=>values.map(value=>({...value,id:value[key]}));
 const entries=(values,field)=>Object.entries(values??{}).map(([id,value])=>({...(field?{[field]:value}:value),id}));
-const currentSettings=store=>({model:readChatModel(store).id,history:readHistoryOption(store).id});
+const currentSettings=store=>({model:manualChatModel(store)?.id??'auto',history:readHistoryOption(store).id});
 
 function healthRows(state,dataset){
  switch(dataset){
@@ -394,7 +394,7 @@ export async function dataEdit(workspace,book,result,today){
  }else{
   previous=currentSettings(workspace.finance);validate(previous);
   if(fields.history)check(HISTORY_OPTIONS.some(option=>option.id===fields.history),'历史档位为 current、rolling 或 extended');
-  if(fields.model)check(['gpt-6-luna','gpt-6.1-terra','gpt-6.2-sol'].includes(fields.model),'请使用支持的模型 ID');
+  if(fields.model)check(['auto','gpt-6-luna','gpt-6.1-terra','gpt-6.2-sol'].includes(fields.model),'请使用支持的模型 ID');
   updated={...previous,...fields};
   commit=()=>{
    check(JSON.stringify(currentSettings(workspace.finance))===JSON.stringify(previous),'助手设置已变更，请重新核对');

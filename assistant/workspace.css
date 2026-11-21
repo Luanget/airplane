@@ -151,3 +151,4 @@
 .agent-live{white-space:pre-wrap;align-self:flex-start}
 .chat-archived-media{display:flex;gap:6px;flex-wrap:wrap;padding:5px 0}
 .chat-archived-media img{max-width:128px;max-height:128px;object-fit:contain;border-radius:8px}
+.chat-queued-label { display:block; margin-top:.25rem; color:var(--muted); font-size:.75rem; }

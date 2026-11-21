@@ -34,8 +34,8 @@
     </header>
     <main>
       <section class="view" id="view-overview" aria-label="健康概览">
-        <section class="card hero health-hero" aria-label="今日能量">
-          <div class="hero-label">已记录热量 <span id="today-status" class="hero-tag">—</span></div>
+        <section class="card hero health-hero" aria-label="当日能量">
+          <div class="hero-label"><span id="hero-calorie-label">已记录热量</span> <span id="today-status" class="hero-tag">—</span></div>
           <div class="big-money hero-count"><span id="hero-calories">—</span><span class="unit">kcal</span></div>
           <div class="progress-track"><div class="progress-fill" id="cal-progress"></div></div>
           <div class="hero-foot"><span id="hero-goal">—</span><span id="hero-remaining">—</span></div>
@@ -46,6 +46,9 @@
           <article class="metric stat"><span class="stat-label">碳水</span><strong id="carbs-stat">—</strong><small id="carbs-goal">—</small></article>
           <article class="metric stat"><span class="stat-label">钠</span><strong id="sodium-stat">—</strong><small><span id="sodium-goal">—</span></small></article>
         </div>
+        <details class="diet-day-plan" id="overview-plan-totals" hidden>
+          <summary id="overview-plan-label"></summary><dl id="overview-plan-values"></dl>
+        </details>
         <div class="metric-grid stat-grid weight-grid">
           <article class="metric stat"><span class="stat-label">最新晨重</span><strong id="weight-stat">—</strong><small id="weight-date">暂无记录</small></article>
           <article class="metric stat"><span class="stat-label">最近7次均重</span><strong id="weight-average">—</strong><small id="weight-trend">—</small></article>
@@ -248,16 +251,15 @@
         <section class="health-data-management" aria-labelledby="health-data-title">
           <h2 id="health-data-title">数据管理</h2>
         <details class="card form-panel" id="health-merge">
-          <summary class="setting-row"><span class="mini-icon" data-shell-icon="download"></span><span class="setting-copy"><span class="setting-title">合并导入与文件同步</span><span class="setting-sub">保留原账，先核对差异</span></span><span class="chevron" data-shell-icon="chevron"></span></summary>
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="download"></span><span class="setting-copy"><span class="setting-title">合并与同步</span><span class="setting-sub">保留本机记录，先预览差异</span></span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="backup-options">
-            <p class="form-hint">用 JSON 文件手动往返。合并只写健康账，提交时同时保留原健康与财务完整快照。</p>
+            <p class="form-hint">用 JSON 文件手动往返。合并健康记录前会保存快照。</p>
             <label>固定来源名称（可选）<input type="text" data-sync-source placeholder="文件未标出来源时，给同一主账填写同一个名称"></label>
             <div class="button-row">
               <button class="btn btn-primary" type="button" data-sync-choose>选择文件并预览</button>
               <button class="btn btn-secondary" type="button" data-sync-export>导出健康同步包</button>
             </div>
             <label class="checkbox"><input type="checkbox" data-sync-attachments> 随同步包导出体检原件</label>
-            <button class="text-button" type="button" data-sync-snapshot>导出最近一次写入前的完整快照</button>
             <input type="file" accept=".json,application/json" data-sync-file hidden>
           </div>
           <section class="backup-preview" data-sync-preview hidden>
@@ -283,10 +285,10 @@
             </div>
             <div class="button-row">
               <button class="btn btn-secondary" type="button" data-export>导出备份</button>
-              <button class="btn btn-primary" type="button" id="choose-import">导入文件</button>
+              <button class="btn btn-primary" type="button" id="choose-import">预览恢复</button>
             </div>
             <p class="form-hint">支持 Airplane 备份和健康主账 JSON。</p>
-            <button class="text-button" type="button" data-snapshot>导出恢复前快照</button>
+            <button class="text-button" type="button" data-snapshot>导出最近一次恢复或合并前快照</button>
             <input type="file" id="import-file" accept=".json,application/json" hidden>
           </div>
           <section id="import-preview" class="backup-preview" hidden aria-labelledby="import-preview-title">

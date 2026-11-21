@@ -306,7 +306,8 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
  const scroll=thread.scrollTop;
  const follow=thread.scrollHeight-scroll-thread.clientHeight<48;
  const node=messageNode(role,text);
- transcript.append(node);
+ const insert=element=>transcript.insertBefore(element,transcript.querySelector('[data-queued-job]'));
+ insert(node);
  if(healthActionId){
   const undo=document.createElement('button');
   undo.type='button';undo.className='text-button health-write-undo';undo.textContent='撤销这次记录';
@@ -321,7 +322,7 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
  if(typeof source?.label==='string'&&typeof source.text==='string'){
   const details=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');
   details.className='chat-source';title.textContent=source.label;body.textContent=source.text;
-  details.append(title,body);transcript.append(details);
+  details.append(title,body);insert(details);
   if(agentUndo.length){
    const actions=document.createElement('div');actions.className='chat-actions';
    for(const token of agentUndo){
@@ -342,7 +343,7 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
  if(media){
   const details=document.createElement('details'),title=document.createElement('summary');
   details.className='chat-source';title.textContent='本轮附件 · '+media.count+' 个';
-  details.append(title);transcript.append(details);
+  details.append(title);insert(details);
   details.ontoggle=async()=>{
    if(!details.open||details.childElementCount>1)return;
    try{
@@ -362,6 +363,20 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
   };
  }
  thread.scrollTop=!preserveScroll||follow?thread.scrollHeight:scroll;
+}
+function renderQueue(jobs){
+ const nearEnd=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
+ const nodes=new Map([...transcript.querySelectorAll('[data-queued-job]')].map(node=>[node.dataset.queuedJob,node]));
+ const ids=new Set(jobs.map(job=>job.id));
+ for(const [id,node] of nodes)if(!ids.has(id))node.remove();
+ for(const job of jobs){
+  if(nodes.has(job.id))continue;
+  const node=messageNode('user',job.label);
+  const badge=document.createElement('small');badge.className='chat-queued-label';badge.textContent='待处理';
+  node.querySelector('.chat-bubble').append(badge);node.dataset.queuedJob=job.id;transcript.append(node);
+ }
+ if(jobs.length)start.hidden=true;
+ if(nearEnd)thread.scrollTop=thread.scrollHeight;
 }
 function remember(role,text,carry,source){
  try{book.append(role,text,carry,source);}
@@ -421,6 +436,7 @@ function renderTranscript(){
   if(index===current?.photos?.summaryIndex)continue;
   if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source,m.healthActionId,false,m.agentUndo,m.media);
  }
+ renderQueue(current?.agentQueue??[]);
 }
 function showPending(){
  const pending=book.current?.pending;
@@ -1400,7 +1416,7 @@ composer.onsubmit=async e=>{
 if(nativeAgentEnabled){
  nativeUi=mountAgentChat({book,journal,workspace,composer,review,stop,retry:retryRequest,replyRetry:$('[data-retry-agent-reply]'),
   steerLabel:$('[data-agent-steer]'),transcript,thread,context:updateContext,trace,status:tell,onError:report,
-  onQueue:count=>{if(count)tell('等待处理 '+count+' 条消息');},
+  onQueue:jobs=>{renderQueue(jobs);if(jobs.length)tell('等待处理 '+jobs.length+' 条消息');},
   onUser:label=>{start.hidden=true;bubble('user',label,null,null,true);syncThreads();},
   onFinal:(reply,source,undo,media)=>{bubble('assistant',reply,source,null,true,undo,media);syncThreads();updateContext();},
   onKey:revealKeySettings,resetPhoto});

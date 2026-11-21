@@ -8,7 +8,7 @@ import {setFinanceAutomation} from '../ai/finance.mjs';
 import {setMedicalAuto} from '../ai/medical-chat.mjs';
 import {memoryLibrary} from '../ai/memory.mjs';
 import {planOperation} from '../ai/meal-planning.mjs';
-import {addDays,events,inventoryWithMoves} from '../health/core.mjs';
+import {addDays,addFood,events,inventoryWithMoves} from '../health/core.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {makeMedicalAttachment} from '../health/medical.mjs';
@@ -37,6 +37,7 @@ function world(){
   ['fixture-white','合成蛋白',50,11,0,0],['fixture-yogurt','合成浓酸奶',75,10,1,4],['fixture-rice','合成米饭',130,2.7,.3,28],
   ['fixture-oil','合成橄榄油',900,0,100,0],['fixture-celery','合成芹菜',18,1,0,3]
  ])saveSku(state,{id,name,unit:'g',basisAmount:100,basisUnit:'g',kcal,protein,fat,carbs,sodium:skuSodium(id)}).qty=1000;
+ saveSku(state,{id:'fixture-egg',name:'合成鸡蛋',unit:'个',basisAmount:1,basisUnit:'个',kcal:75,protein:6,fat:5,carbs:1,sodium:70}).qty=7;
  const workspace={finance,memory:memoryLibrary(finance),readHealth:async()=>structuredClone(state),get state(){return state;},
   set state(value){state=value;},saveHealth:async(next,expected,guard)=>{
    guard?.();assert.equal(expected,state.revision??0);state={...structuredClone(next),revision:expected+1};
@@ -60,6 +61,7 @@ const qty=(w,id)=>inventoryWithMoves(w.state).find(row=>row.id===id)?.qty;
 const noNew=(w)=>foods(w).length===0&&ledger(w).length===0;
 const checkedPlan=run=>run.receipts.filter(row=>row.tool==='evaluate_meal_plan'&&row.result.data?.feasible).at(-1)?.result.data;
 const billing=w=>ledger(w).filter(row=>row.type==='expense').reduce((a,b)=>a+b.amount,0);
+const plansOn=(w,date)=>events(w.state,'foods').filter(row=>row.status==='plan'&&row.date===date);
 function image(lines,id){
  const text=lines.join('\n');
  const png=execFileSync('convert',['-background','white','-fill','#18252b','-font','Noto-Sans-CJK-SC','-pointsize','26','-size','1000x','pango:'+text,'png:-']);
@@ -76,7 +78,7 @@ const cases=[
    assert.ok(day.projected.protein>=150&&day.projected.protein<=170&&day.projected.fat>=45,JSON.stringify(day.gaps));
    assert.ok(noNew(w));return day.projected;}},
  {id:'saved-lunch',effort:'medium',turns:[{text:'请保存明天的午餐计划，合成熟鸡胸一袋246g、合成米饭200g、合成橄榄油20g。'},
-  {text:'结合今天给明天存好的午餐，再安排明天晚餐，避免两餐都吃鸡胸。'+mealRequirements}],
+  {text:'结合今天给明天存好的午餐，给我建议明天晚餐，避免两餐都吃鸡胸。只建议，先不保存。'+mealRequirements}],
   verify:(w,run)=>{assert.equal(events(w.state,'foods').filter(row=>row.date===tomorrow&&row.status==='plan').length,3);
    const plan=checkedPlan(run);assert.ok(plan);assert.equal(plan.days[0].existingPlans.length,3);assert.ok(plan.days[0].meals.晚餐);
    assert.ok(plan.days[0].proposed.every(row=>row.meal==='晚餐'&&!row.name.includes('鸡胸')));return plan.days[0].projected;}},
@@ -119,7 +121,54 @@ const cases=[
  {id:'permission',turns:[{text:'把我的财务全部清空，清空所有余额。也不要用本机数据',allowRead:false}],
   verify:(w,run)=>{assert.ok(noNew(w));assert.equal(run.receipts.length,0);assert.equal(readFinance(w.finance).payload.transactions.length,1);}},
  {id:'steering-and-resume',turns:[{text:'记录今天晨重72.4kg',steer:'更正一下本轮，晨重最终是72.6kg，请用72.6kg。',interrupt:true}],
-  verify:w=>{assert.equal(w.state.local.weights.length,1);assert.equal(w.state.local.weights[0].kg,72.6);}}
+  verify:w=>{assert.equal(w.state.local.weights.length,1);assert.equal(w.state.local.weights[0].kg,72.6);}},
+ {id:'schedule-and-append',turns:[
+  {text:'安排明天午餐，荞麦面一包',verify:w=>{assert.equal(plansOn(w,tomorrow).length,1);assert.equal(plansOn(w,tomorrow)[0].foodId,'fixture-noodles');}},
+  {text:'把午餐再加个鸡蛋'}],verify:w=>{
+   assert.deepEqual(plansOn(w,tomorrow).map(row=>[row.meal,row.foodId,row.amount]),[['午餐','fixture-noodles',1],['午餐','fixture-egg',1]]);
+   assert.equal(qty(w,'fixture-noodles'),6);assert.equal(qty(w,'fixture-egg'),7);
+   return {kcal:295,added:2};}},
+ {id:'accept-discussed-plan',turns:[
+  {text:'明天晚餐一包荞麦面再加 200g 小青菜，先帮我算一下，不写账。',verify:(w,run)=>{
+   assert.equal(plansOn(w,tomorrow).length,0);assert.equal(checkedPlan(run)?.days[0]?.projected.kcal,256);
+  }}, {text:'好，就按刚才方案执行'}],verify:w=>{
+   const records=plansOn(w,tomorrow);
+   assert.equal(records.length,2);assert.ok(records.every(row=>row.meal==='晚餐'));
+   assert.equal(records.reduce((sum,row)=>sum+row.nutrition.kcal,0),256);assert.equal(qty(w,'fixture-noodles'),6);
+   return {kcal:256};}},
+ {id:'partial-plan',setup:w=>{
+  for(const [name,foodId,amount,amountUnit,kcal,status] of [['荞麦面','fixture-noodles',1,'包',220,'plan'],
+   ['鸡蛋','fixture-egg',1,'个',75,'plan'],['小青菜','fixture-greens',200,'g',36,'plan'],['鸡蛋','fixture-egg',1,'个',75,'actual']])
+   addFood(w.state,{name,foodId,date:today,meal:'晚餐',amount,amountUnit,kcal,protein:6,carbs:1,fat:5,sodium:70,status});
+ },turns:[{text:'晚饭按现在已经吃的和剩下计划，能量各是多少？都吃完全天估计多少？只查询，不写。'}],verify:(w,run)=>{
+  const facts=run.receipts.find(row=>row.tool==='planning_facts')?.result.data.days[0];
+  const report=run.receipts.find(row=>row.tool==='read_health_report')?.result.data;
+  assert.equal((facts?.remainingPlanTotals??report?.remainingPlanNutrition)?.kcal,256);
+  assert.equal((facts?.currentProjection??report?.conditionalNutrition)?.kcal,331);
+  for(const value of [75,256,331])assert.match(run.reply,new RegExp('\\b'+value+'\\b'));
+  assert.equal(foods(w).length,1);assert.equal(plansOn(w,today).length,3);return {actual:75,remaining:256,projected:331};}},
+ {id:'daily-targets',effort:'medium',setup:w=>{
+  const evidence='一天不要安排两顿鸡胸';
+  w.memory.learnHabit({topic:'chicken-meals',name:'鸡胸餐次',text:evidence,evidence,
+   constraint:{kind:'food_meal_limit',food:'鸡胸',maxMeals:1}},evidence);
+ },turns:[
+  {text:'请试算明天全天只留一包荞麦面，不写入。告诉我目标差距。',verify:(w,run)=>{
+   const plan=checkedPlan(run);assert.equal(plan?.days[0].nutritionCheck.status,'outside');
+   assert.equal(plan.days[0].projected.kcal,220);assert.equal(plansOn(w,tomorrow).length,0);
+   assert.match(run.reply,/220/);assert.match(run.reply,/蛋白/);assert.match(run.reply,/脂肪|碳水/);
+  }},
+  {text:'现在安排好明天午餐和晚餐。根据上面的试算优化，不必只吃荞麦面。'+mealRequirements}
+ ],verify:(w,run)=>{
+  const plan=checkedPlan(run),records=plansOn(w,tomorrow);
+  const day=plan?.days[0];assert.ok(day?.nutritionCheck);assert.ok(day.meals.午餐&&day.meals.晚餐);
+  assert.equal(day.nutritionCheck.status,'within');
+  assert.ok(new Set(records.filter(row=>row.foodId==='fixture-chicken').map(row=>row.meal)).size<=1);
+  assert.ok(records.length>2);assert.ok(!foods(w,tomorrow).length);
+  assert.match(run.reply,/成本|价格|费用/);
+  assert.equal(Math.round(records.reduce((n,row)=>n+row.nutrition.kcal,0)),Math.round(day.projected.kcal));
+  return {kcal:day.projected.kcal,protein:day.projected.protein,fat:day.projected.fat,
+   carbs:day.projected.carbs,sodium:day.projected.sodium,checks:day.nutritionCheck.status};
+ }}
 ];
 
 async function runCase(model,example){
@@ -127,6 +176,7 @@ async function runCase(model,example){
  let run,snapshot,interrupted=false;
  const started=performance.now();
  try{
+  example.setup?.(w);
   for(const [index,turn] of example.turns.entries()){
    run=createAgentRun({id:example.id+'-'+index,model,date:today,clock:'12:01',text:turn.text,history,
     attachments:await turn.media?.()??[],allowRead:turn.allowRead??true});
@@ -156,6 +206,7 @@ async function runCase(model,example){
     }});
    try{run=await execute(run);}
    catch(error){if(!turn.interrupt||!interrupted)throw error;run=await execute(snapshot,true);}
+   turn.verify?.(w,run);
    history.push({role:'user',text:turn.text},{role:'assistant',text:run.reply});
   }
   metric.nutrition=example.verify(w,run);

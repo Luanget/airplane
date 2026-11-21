@@ -159,8 +159,11 @@ try {
   const weightChart=page.getByRole('slider',{name:'查看近期晨重'});
   await weightChart.waitFor();
   assert.match(await weightChart.getAttribute('aria-valuetext'),/1月4日.*79\.7 kg/);
-  await weightChart.scrollIntoViewIfNeeded();
+  // The floating navigation can cover a visible SVG edge. Center the pointer target.
+  await weightChart.evaluate(chart=>chart.scrollIntoView({block:'center',behavior:'instant'}));
   const plot=await weightChart.boundingBox();
+  assert.equal(await weightChart.evaluate((chart,{x,y})=>chart.contains(document.elementFromPoint(x,y)),
+   {x:plot.x+plot.width*.92,y:plot.y+plot.height*.5}),true);
   await page.mouse.move(plot.x+plot.width*.92,plot.y+plot.height*.5);
   await page.mouse.down();
   await page.mouse.move(plot.x+plot.width*.12,plot.y+plot.height*.5,{steps:5});
@@ -788,7 +791,8 @@ try {
   await openAssistantSettings();
   const modelPanel=assistantSettings.locator('#assistant-model-panel');
   await modelPanel.getByText('模型',{exact:true}).click();
-  assert.equal(await modelPanel.getByRole('button',{name:'自动',exact:true}).getAttribute('aria-pressed'),'true');
+  assert.equal(await modelPanel.getByRole('button',{name:'默认',exact:true}).getAttribute('aria-pressed'),'true');
+  await modelPanel.getByText('默认使用 Terra',{exact:true}).waitFor();
   assert.equal(await assistantSettings.getByRole('link',{name:/API 余额|用量明细/}).count(),0);
   await modelPanel.getByRole('button',{name:'Terra',exact:true}).click();
   expectedModel='gpt-6.1-terra';
@@ -1460,7 +1464,10 @@ try {
    await importFile();
    await mergePanel.locator('[data-sync-keep]').waitFor();
    assert.equal(await submit.isEnabled(),false);
+   assert.equal(await mergePanel.locator('[data-sync-group="review"] .sync-change').count()>0,true);
+   assert.equal(await mergePanel.locator('.sync-change').filter({hasText:'合成历史午餐'}).count(),0);
    await mergePanel.locator('[data-sync-keep]').click();
+   assert.equal(await mergePanel.locator('[data-sync-group="kept"]').evaluate(node=>node.open),false);
    await submit.waitFor();
    assert.equal((await read()).state.revision,1);
    assert.equal((await read()).snapshot,null);
@@ -1502,6 +1509,11 @@ try {
    assert.equal(exported.format,'airplane-health-sync-v1');
    assert.equal(exported.anchor.revision,2);
    assert.ok(exported.health.legacy.foods.some(row=>row.name==='合成晚餐'));
+   const backup=mergePage.locator('#combined-backup');
+   await backup.locator(':scope > summary').click();
+   const snapshotDownload=mergePage.waitForEvent('download');
+   await backup.getByRole('button',{name:'导出最近一次恢复或合并前快照'}).click();
+   assert.deepEqual(JSON.parse(readFileSync(await (await snapshotDownload).path(),'utf8')),merged.snapshot);
    console.log('PASS shared history, read-only merge preview, atomic recovery on abort, unchanged finance, repeat import and sync export');
   }finally{await mergeContext.close();}
   assert.deepEqual(errors,[]);

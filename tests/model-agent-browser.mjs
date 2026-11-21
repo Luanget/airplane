@@ -42,6 +42,7 @@ try{
   requested++;
   let reply;
   const last=body.input.at(-1);
+  assert.equal(body.model,/review|73\.0|客户端跳过/.test(JSON.stringify(last))?'gpt-6-luna':'gpt-6.1-terra');
   if(requested===1){
    firstStarted();await releaseFirst;
    reply=output({type:'reasoning',id:'rs_first',summary:[],encrypted_content:'opaque-begin'},
@@ -94,17 +95,25 @@ try{
  const png=await page.evaluate(()=>document.createElement('canvas').toDataURL('image/png').split(',')[1]);
  await page.locator('[name=image]').setInputFiles({name:'合成附件.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});
  await say(independent);await page.getByText('等待处理 1 条消息',{exact:true}).waitFor();
+ const queued=page.locator('[data-queued-job]').filter({hasText:independent});
+ await queued.waitFor();await queued.getByText('待处理',{exact:true}).waitFor();
  release();
  await page.getByRole('button',{name:'仅重试回复'}).waitFor();
  const weights=()=>page.evaluate(async()=> (await (await import('/health/storage.mjs')).readState()).local.weights.map(row=>row.kg));
  assert.deepEqual(await weights(),[72.6]);
  await page.reload();
+ await queued.getByText('待处理',{exact:true}).waitFor();
  await page.getByRole('button',{name:'仅重试回复'}).click();
  await page.getByText('晨重已按你的补充记录为72.6公斤。',{exact:true}).waitFor();
  await page.getByText('查询的本机余额是0元。',{exact:true}).waitFor();
  assert.deepEqual(await weights(),[72.6]);
  assert.equal(requested,6);
- await page.evaluate(async()=>(await import('/ai/health-actions.mjs')).setHealthAuto(localStorage,false));
+ assert.equal(await page.locator('[data-queued-job]').count(),0);
+ assert.equal(await page.locator('.chat-bubble.user').filter({hasText:independent}).count(),1);
+ await page.evaluate(async()=>{
+  (await import('/ai/health-actions.mjs')).setHealthAuto(localStorage,false);
+  (await import('/ai/models.mjs')).saveChatModel(localStorage,'gpt-6-luna');
+ });
  await say(needsReview);
  await page.getByRole('button',{name:'跳过此项'}).click();
  await page.getByText('已跳过73.0公斤这项，未新增记录。',{exact:true}).waitFor();
@@ -112,7 +121,7 @@ try{
  await page.reload();
  await page.getByText('本轮附件 · 1 个',{exact:true}).click();
  await page.getByRole('img',{name:'附件 1',exact:true}).waitFor();
- console.log('PASS native tool response, steering queue, durable answer-only retry and no duplicate weight');
+ console.log('PASS visible queue before execution, persisted attachments, steering, default Terra and manual Luna, durable retry');
 
  const tomorrow=addDays(today,1);
  await page.evaluate(async({tomorrow})=>{
@@ -130,8 +139,26 @@ try{
  await page.getByText('已删除 2 项计划',{exact:true}).waitFor();
  await page.getByRole('button',{name:'撤销计划删除',exact:true}).click();
  await page.getByText('已撤销计划删除',{exact:true}).waitFor();
- await page.getByText('实际、计划与预计全天',{exact:true}).click();
+ await page.locator('[data-plan-day="'+tomorrow+'"]').locator('summary').click();
  await page.getByText(/热量 356\.0 kcal.*蛋白 40\.0 g/).first().waitFor();
+ await page.getByRole('button',{name:'后一天',exact:true}).click();
+ assert.equal(await page.locator('#hero-calorie-label').textContent(),'计划热量');
+ for(const [id,value] of Object.entries({'hero-calories':'356.0','protein-stat':'40.0 g','fat-stat':'30.0 g','carbs-stat':'60.0 g','sodium-stat':'120.0 mg'}))
+  assert.equal(await page.locator('#'+id).textContent(),value);
  assert.deepEqual(errors,[]);
- console.log('PASS full plan nutrition, per-day projection and batch plan deletion with undo');
+ console.log('PASS future top-level nutrition with all five fields and batch plan deletion with undo');
+ await page.evaluate(async today=>{
+  const {readState,saveState}=await import('/health/storage.mjs'),{addFood}=await import('/health/core.mjs');
+  const state=await readState();
+  for(const [name,kcal,status] of [['荞麦面',220,'plan'],['鸡蛋',75,'plan'],['青菜',36,'plan'],['鸡蛋',75,'actual']])
+   addFood(state,{date:today,name,meal:'晚餐',status,amount:1,amountUnit:'份',kcal,protein:10,carbs:20,fat:3,sodium:60});
+  await saveState(state,state.revision);
+ },today);
+ await page.reload();
+ await page.locator('#hero-calories').filter({hasText:'75.0'}).waitFor();
+ await page.getByText('剩余计划 256.0 kcal · 预计全天 331.0 kcal',{exact:true}).click();
+ await page.locator('#overview-plan-values').getByText(/热量 331\.0 kcal.*蛋白 30\.0 g/).waitFor();
+ await page.getByRole('button',{name:/鸡蛋 已执行/}).waitFor();
+ assert.deepEqual(errors,[]);
+ console.log('PASS today shows actual 75, remaining 256 and projected 331 kcal after one item is eaten');
 }finally{await browser?.close();server.close();}

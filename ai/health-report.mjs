@@ -1,7 +1,8 @@
 import {displayDay} from '../calendar.mjs';
-import {NUTRIENTS,actualFood,cycleForDate,dayIntake,energyForDay,events,foodCost,inventoryWithMoves,round,
+import {NUTRIENTS,actualFood,cycleForDate,energyForDay,events,foodCost,inventoryWithMoves,round,
  sampleNutrientSum,validDate,weightTrend} from '../health/core.mjs';
 import {packagesFor} from '../health/containers.mjs';
+import {dietGoals,isMealPlan,mealDay} from '../health/meal-status.mjs';
 import {same} from '../health/sync-source.mjs';
 
 const labels=['热量','蛋白','碳水','脂肪','钠'],units=['kcal','g','g','g','mg'];
@@ -25,10 +26,6 @@ function mealRows(rows){
    totals:sampleNutrientSum(items),cost:cost(items)}]:[];
  });
 }
-function conditional(actual,plans){
- return Object.fromEntries(NUTRIENTS.map(key=>[key,actual[key]==null||plans.some(row=>row.nutrition[key]==null)?null:
-  round(actual[key]+plans.reduce((n,row)=>n+row.nutrition[key],0),2)]));
-}
 export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}){
  if(!validDate(date)||!validDate(today))throw Error('请选择有效的报告日期');
  const future=date>today;
@@ -36,17 +33,16 @@ export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}
   const cost=foodCost(state,row);
   return {...row,cost,costEstimated:row.costSource==='estimated_package'||row.cost==null&&cost!==null};
  });
- const savedPlans=all.filter(row=>!actualFood(row)&&/^(plan|计划)/i.test(row.status??''));
- const candidates=[...savedPlans,...proposed];
  const actualMeals=new Set(actual.map(row=>row.meal));
  const newestMeals=new Set(proposed.map(row=>row.meal));
- // Plans already represented by an actual meal cannot contribute to a projected daily total.
- const pending=candidates.filter(row=>!actualMeals.has(row.meal)&&(proposed.includes(row)||!newestMeals.has(row.meal)));
- const {calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget}=state.settings;
- const targets={kcal:calorieTarget,proteinMin,proteinMax,fatMin,sodium:sodiumTarget};
+ const {remaining:pending,planned,projected,actual:intake}=mealDay(state,date,{today,foods:[...actual,
+  ...all.filter(row=>isMealPlan(row)&&!newestMeals.has(row.meal)),
+  ...proposed.map((row,index)=>({...row,id:'report-proposed:'+index,amountUnit:row.amountUnit??row.unit,status:'plan'}))]});
+ const {kcal:calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget,carbs}=dietGoals(state);
+ const targets={kcal:calorieTarget,proteinMin,proteinMax,fatMin,sodium:sodiumTarget,carbs};
  if(future)return {date,future,plans:includeMeals?mealRows(pending):undefined,targets,
-  conditionalNutrition:pending.length?conditional(Object.fromEntries(NUTRIENTS.map(key=>[key,0])),pending):null};
- const intake=dayIntake(state,date),day=energyForDay(state,date,today);
+  remainingPlanNutrition:planned,conditionalNutrition:pending.length?planned:null};
+ const day=energyForDay(state,date,today);
  const cycle=cycleForDate(state,date,today),trend=weightTrend(state,date);
  const latest=trend.points.at(-1),previous=trend.points.at(-2);
  const difference={kcal:intake.totals.kcal==null?null:round(calorieTarget-intake.totals.kcal,1),
@@ -56,7 +52,7 @@ export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}
  return {date,...(includeMeals?{meals:mealRows(actual),plans:mealRows(pending)}:{}),actual:intake.totals,
   cost:{known:intake.cost,partial:intake.costPartial,estimated:intake.costEstimated},targets,difference,quality:{status:!intake.reported?'缺报':intake.incomplete.length?'部分营养数据待补':day.completeness.status==='complete'?'全天记录已确认':'摄入可能未记全',
    missingMeals:['午餐','晚餐'].filter(meal=>!actualMeals.has(meal)),
-   unknown:intake.incomplete},conditionalNutrition:pending.length?conditional(intake.totals,pending):null,
+   unknown:intake.incomplete},remainingPlanNutrition:planned,conditionalNutrition:pending.length?projected:null,
   energy:{tdee:day.tdee,source:day.source,possibleOverestimate:day.possibleOverestimate,completeness:day.completeness,deficit:day.deficit},
   cycle:{start:cycle.start,end:cycle.end,days:cycle.days,reportedDays:cycle.reportedDays,unreported:cycle.unreported,
    deficit:cycle.deficit,goal:cycle.goal,possibleOverestimate:cycle.possibleOverestimate,
