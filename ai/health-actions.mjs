@@ -74,7 +74,10 @@ function plausible(text,sku){
 function hasWriteLanguage(text){
  return /吃|喝|毛重|剩.*(?:克|g)|现在.{0,18}(?:克|g)|记|称|克|丢|扔|分装|晨重|体重|跑|骑|走|运动|消耗|手表|更正|改|错|少算|多算|公斤|封账|全天|缺报|待补|kg/i.test(text);
 }
-function statedDate(text,today){
+export function statedDate(text,today){
+ if(/大后天/.test(text))return addDays(today,3);
+ if(/后天|后日/.test(text))return addDays(today,2);
+ if(/明天|明日|明早|明晚/.test(text))return addDays(today,1);
  if(/前天/.test(text))return addDays(today,-2);
  if(/昨天|昨日/.test(text))return addDays(today,-1);
  if(/今天|今日/.test(text))return today;
@@ -108,7 +111,8 @@ function dateFor(step,today,reference){
  const {evidence}=step;
  const explicit=statedDate(evidence,today);
  const date=explicit??step.date??(step.kind.startsWith('correct')?reference?.date:null)??today;
- if(!validDate(date)||date>today)throw Error('请提供今天或更早的有效记录日期。');
+ if(!validDate(date))throw Error('请提供有效日期。');
+ if(date>today&&step.kind!=='next_meal')throw Error('实际记录请使用今天或更早的日期。');
  return date;
 }
 function chooseContainer(state,sku,step,reference,{whole=false}={}){
@@ -269,7 +273,7 @@ export function buildMealPlan(state,step,today,habits={},reserved=[]){
   const nutrition=Object.fromEntries(['kcal','protein','carbs','fat','sodium'].map(key=>[key,nutritionFor(sku,amount,unit)[key]??null]));
   return {id:'recommend:'+sku.id,foodId:sku.id,name:sku.name,amount,unit,meal,portion:amount+' '+unit,
    nutrition,cost:cents==null?null:cents/100,status:'plan',stockAmount:quantity??0,containerId:portion?.id??sealed?.id??null,
-   uncertainty:[portion?.estimated?'分装重量为估算':sealed?'按包装标称规格':null,partial?'此份芹菜余量优先安排在今天另一餐':null].filter(Boolean).join('；'),
+   uncertainty:[portion?.estimated?'分装重量为估算':sealed?'按包装标称规格':null,partial?'此份芹菜余量优先安排在当天另一餐':null].filter(Boolean).join('；'),
    score:Number(preferences.some(term=>names(sku).some(name=>name.includes(term))))*4+Number(!!portion)*2+
     Number(vegetable&&habits.wholeVegetable)*2+Number(/鸡胸/.test(sku.name)&&habits.chickenLimit!=null)*2+
     Number(sku.nutrition.protein>5),group:/鸡|牛肉|鱼|蛋|虾|豆腐/.test(sku.name)?'protein':vegetable?'vegetable':'other'};
@@ -286,14 +290,15 @@ export function buildMealPlan(state,step,today,habits={},reserved=[]){
   groups.add(row.group);chosen.push(row);energy+=row.nutrition.kcal??0;
   if(chosen.length===3)break;
  }
- const actualGap=gap===null?'今日热量数据待补':gap<0?'当前已超过日参考 '+Math.abs(gap)+' kcal':'距日参考 '+gap+' kcal';
+ const actualGap=gap===null?'当天暂无实际摄入热量':gap<0?'当前已超过日参考 '+Math.abs(gap)+' kcal':'距日参考 '+gap+' kcal';
  const list=chosen.map(row=>row.name+' '+row.portion+(row.nutrition.kcal===null?'（热量待补）':'')).join('、');
  return {items:chosen,reply:'下一餐建议'+(list?'：'+list:'：现有库存缺少合适搭配')+'。'+actualGap+
   (gap!==null&&gap<0?'。下一餐正常吃，按日常口径饮水和活动':'')+'，仅为计划。'};
 }
 
 function planRequest(state,step,date,habits){
- if(!/午晚餐|午餐.{0,10}晚餐|两餐|全天/.test(step.evidence))return buildMealPlan(state,step,date,habits);
+ const fullDay=/午晚餐|午餐.{0,10}晚餐|两餐|全天/.test(step.evidence)||!step.meal&&/的饮食/.test(step.evidence);
+ if(!fullDay)return buildMealPlan(state,step,date,habits);
  const done=new Set(events(state,'foods').filter(row=>row.date===date&&actualFood(row)).map(row=>row.meal));
  const meals=['午餐','晚餐'].filter(meal=>!done.has(meal));
  const items=[],lines=[];
@@ -315,12 +320,15 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
   if(plan.steps.filter(interpretedWrite).length===1&&['eat','correct','weigh'].includes(step.kind)&&
    plausible(text,{name:step.name})&&statedDate(step.evidence,today)===null&&statedDate(text,today)!==null)
    step={...step,date:statedDate(text,today)};
+  if(step.kind==='next_meal'&&plan.steps.length===1&&!step.date)
+   step={...step,date:statedDate(text,today)};
   const date=dateFor(step,today,{date:reference.date??foodDate});
   const time=normalizeClock(step.time)||clock;
-  const meal=step.meal||(/早餐|早饭/.test(step.evidence)?'早餐':/午餐|午饭/.test(step.evidence)?'午餐':
-   /晚餐|晚饭/.test(step.evidence)?'晚餐':/加餐/.test(step.evidence)?'加餐':mealAt(time));
+  const saidMeal=/早餐|早饭|明早/.test(step.evidence)?'早餐':/午餐|午饭|中午/.test(step.evidence)?'午餐':
+   /晚餐|晚饭|明晚/.test(step.evidence)?'晚餐':/加餐/.test(step.evidence)?'加餐':null;
+  const meal=step.meal??saidMeal??mealAt(time);
   if(step.kind==='cycle'||step.kind==='next_meal'){
-   queryMessages.push({step,date});continue;
+   queryMessages.push({step:{...step,meal:step.meal??saidMeal},date});continue;
   }
   touched.add(date);
   const ref=resultReference??reference;
@@ -461,7 +469,10 @@ function changesFrom(before,after){
 function summarize(prepared,state){
  const {messages,queryMessages,today,touched}=prepared;
  const reads=queryMessages.map(({step,date})=>{
-  if(step.kind==='next_meal')return planRequest(state,step,date,prepared.habits).reply;
+  if(step.kind==='next_meal'){
+   const reply=planRequest(state,step,date,prepared.habits).reply;
+   return date>today?displayDay(date,true)+' · '+reply:reply;
+  }
   const cycle=cycleForDate(state,date,today);
   return '周期 '+displayDay(cycle.start)+'至'+displayDay(cycle.end)+' · 有摄入 '+cycle.reportedDays+' 天 · 缺口 '+(cycle.deficit??'未知')+' kcal'+(cycle.possibleOverestimate?'（可能高估）':'')+'。';
  });

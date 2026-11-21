@@ -25,7 +25,7 @@ import {hasDocumentAccess,prepareDocumentEdit,readAppDocument,setDocumentAccess}
 import {deleteReview} from './deletion.mjs';
 import {displayUsage,modelRates,totalUsage} from './usage.mjs';
 import {executeHealthAction,healthActionReceipt,healthActionPreview,healthContext,hasHealthAuto,readPackages,READ_LIMIT,
- setHealthAuto,undoHealthAction} from './health-actions.mjs';
+ setHealthAuto,statedDate,undoHealthAction} from './health-actions.mjs';
 import {mountAgentSettings} from './agent-settings.mjs';
 import {assertSkillAction,selectSkills,skillCatalog} from './skills.mjs';
 import {habitPolicy} from './health-profile.mjs';
@@ -483,6 +483,7 @@ async function makeReview(proposal,flow,photoJob,direct=false){
   label.className='photo-review-title';label.textContent=photoJob.label;panel.append(label);
  }
  const {mode,result}=proposal,today=flow.input.date;
+ if(mode==='plan'&&!proposal.date)proposal={...proposal,date:statedDate(flow.input.text,today)};
  const traceId=flow.options.traceId;
  const reviewId=photoJob?'photo-'+photoJob.index:'review';
  const reviewStep=(status,receipt=null,error)=>traceStep(traceId,{id:reviewId,kind:mode,dependsOn:[],

@@ -240,3 +240,26 @@ test('a readable label and one stated eaten weight are enough to save the same n
  assert.equal(grouped.plan.steps[0].meal,'午餐');
  assert.equal(groupMealPhotos(proposal,'中午吃完合成鸡蛋150g，请按标签记录',1).plan.steps.length,0);
 });
+
+test('future meal recommendations use the requested local date without writing consumption',()=>{
+ const today='2030-12-31',tomorrow='2031-01-01',later='2031-01-03',state=assistantFixture(today);
+ const before=structuredClone(state);
+ const options={id:'future-plan',today,clock:'20:15'};
+ const first=healthActionPreview(state,proposal(action('next_meal','早餐',{meal:null,preferences:[]})),
+  {...options,text:'安排明天的早餐'});
+ assert.equal(first.execute,false);
+ assert.match(first.preview,/2031年1月1日/);
+ assert.match(first.source.text,/2031年1月1日 · 饮食计划.*计划 · 早餐.*计划合计/s);
+ assert.doesNotMatch(first.source.text,/缺报|全天实际/);
+ const laterPreview=healthActionPreview(state,proposal(action('next_meal','晚餐',{date:later,meal:'晚餐',preferences:[]})),
+  {...options,text:'安排2031-01-03晚餐'});
+ assert.match(laterPreview.preview,/2031年1月3日/);
+ assert.throws(()=>healthActionPreview(state,proposal(action('eat','明天吃了20g牛肉酱',
+  {name:'牛肉酱',amount:20,unit:'g',whole:'no'})),{...options,text:'明天吃了20g牛肉酱'}),/今天或更早/);
+ assert.deepEqual(state,before);
+ addFood(state,{date:tomorrow,name:'合成明日午餐',meal:'午餐',status:'plan',kcal:350});
+ const report=healthReport(state,tomorrow,today);
+ assert.equal(report.conditionalNutrition.kcal,350);
+ assert.equal(dayIntake(state,tomorrow).totals.kcal,null);
+ assert.deepEqual(state.local.stockMoves,before.local.stockMoves);
+});

@@ -81,6 +81,7 @@ function openEntry(){
   if(editing[type])resetEditor(form,type);
   if(!dirtyEntries.has(type)){
    form.elements.date.value=selectedDate;form.elements.time.value=selectedDate===dateNow()?localClock():'';
+   if(type==='food')form.elements.status.value=selectedDate>dateNow()?'plan':'actual';
   }
  }
  rebuildFoodSelection();
@@ -541,7 +542,7 @@ function bindForm(type,update,message){
    if(inlineStock?.form===form)closeInlineStock();
    if(historyTypes[type])$('health-entry').close();
   }catch(err){toast(err.message);}
-  finally{button.disabled=selectedDate>dateNow()||!dayIntake(state,selectedDate).reported;}
+  finally{button.disabled=false;}
  };
 }
 function setHealthState(next){state=ensureContainers(recoverLegacyPortions(next));rebuildFoodSelection();render();}
@@ -659,6 +660,7 @@ function attach(){
   button.disabled=true;
   const {date,time,meal,status}=Object.fromEntries(new FormData(form)),next=structuredClone(state);
   try{
+   if(date>dateNow()&&status==='actual')throw Error('未来日期可保存为饮食计划。');
    for(const item of t.items)addFood(next,{...item,...item.nutrition,date,time,meal,status,batchId:null,cost:null});
    await commit(next,'已录入餐食模板');
    $('health-entry').close();
@@ -666,6 +668,7 @@ function attach(){
   finally{button.disabled=false;}
  };
  bindForm('food',(next,d,form)=>{
+  if(d.date>dateNow()&&d.status==='actual')throw Error('未来日期可保存为饮食计划。');
   const sku=stockSku(d.foodId);
   const stockQty=storedStockQuantity(sku,d.stockQty);
   if(d.foodId&&!editing.food&&(!sku||!isOnHand(sku)||!(stockQty>0)))throw Error('请选择仍有库存的食材并填写份量');

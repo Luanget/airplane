@@ -30,8 +30,9 @@ function conditional(actual,plans){
   round(actual[key]+plans.reduce((n,row)=>n+row.nutrition[key],0),2)]));
 }
 export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}){
- if(!validDate(date)||!validDate(today)||date>today)throw Error('请选择今天或更早的报告日期');
- const all=events(state,'foods').filter(row=>row.date===date),actual=all.filter(actualFood).map(row=>{
+ if(!validDate(date)||!validDate(today))throw Error('请选择有效的报告日期');
+ const future=date>today;
+ const all=events(state,'foods').filter(row=>row.date===date),actual=all.filter(row=>!future&&actualFood(row)).map(row=>{
   const cost=foodCost(state,row);
   return {...row,cost,costEstimated:row.costSource==='estimated_package'||row.cost==null&&cost!==null};
  });
@@ -41,11 +42,13 @@ export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}
  const newestMeals=new Set(proposed.map(row=>row.meal));
  // Plans already represented by an actual meal cannot contribute to a projected daily total.
  const pending=candidates.filter(row=>!actualMeals.has(row.meal)&&(proposed.includes(row)||!newestMeals.has(row.meal)));
+ const {calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget}=state.settings;
+ const targets={kcal:calorieTarget,proteinMin,proteinMax,fatMin,sodium:sodiumTarget};
+ if(future)return {date,future,plans:includeMeals?mealRows(pending):undefined,targets,
+  conditionalNutrition:pending.length?conditional(Object.fromEntries(NUTRIENTS.map(key=>[key,0])),pending):null};
  const intake=dayIntake(state,date),day=energyForDay(state,date,today);
  const cycle=cycleForDate(state,date,today),trend=weightTrend(state,date);
  const latest=trend.points.at(-1),previous=trend.points.at(-2);
- const {calorieTarget,proteinMin,proteinMax,fatMin,sodiumTarget}=state.settings;
- const targets={kcal:calorieTarget,proteinMin,proteinMax,fatMin,sodium:sodiumTarget};
  const difference={kcal:intake.totals.kcal==null?null:round(calorieTarget-intake.totals.kcal,1),
   protein:intake.totals.protein==null?null:round(proteinMin-intake.totals.protein,1),
   fat:intake.totals.fat==null?null:round(fatMin-intake.totals.fat,1),
@@ -68,6 +71,10 @@ export function renderHealthReport(report){
   (plan?'计划 · ':'实际 · ')+group.meal,...group.rows.map(foodLine),
   '餐次合计 '+fieldTotals(group.totals)+' · 成本 '+costText(group.cost)
  ]);
+ if(report.future)return [displayDay(report.date,true)+' · 饮食计划',...groups(plans??[],true),
+  conditionalNutrition?'计划合计 '+fieldTotals(conditionalNutrition):'暂无饮食计划',
+  '日参考 '+targets.kcal+' kcal · 蛋白 '+targets.proteinMin+'–'+targets.proteinMax+' g · 脂肪 ≥'+targets.fatMin+
+   ' g · 钠 '+targets.sodium+' mg'].join('\n');
  const lines=[displayDay(report.date,true)+' · '+quality.status,...groups(meals??[],false),
   '全天实际 '+fieldTotals(actual)+' · 成本 '+costText(cost),...groups(plans??[],true)];
  if(conditionalNutrition)lines.push('执行尚未实际记录的餐单后 '+fieldTotals(conditionalNutrition));

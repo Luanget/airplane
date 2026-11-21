@@ -1,6 +1,6 @@
 {
   "name": "airplane-pwa",
-  "version": "0.9.17",
+  "version": "0.9.18",
   "private": true,
   "engines": {
     "node": ">=22.13.0"

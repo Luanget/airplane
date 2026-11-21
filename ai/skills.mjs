@@ -31,7 +31,7 @@ export const HEALTH_SKILLS=Object.freeze([
  define('intake','饮食记录',/吃|喝|早餐|午餐|晚餐|营养|续粉|饮食|外食/,
   ['read_health_report','read_packages'],['eat'],'定位餐次和食品，区分实吃与计划，按证据匹配SKU和份量。','实际才入账；同一食物或照片不能重记。','逐项营养、餐次及全天。'),
  define('meals','餐单规划',/安排|配餐|计划|下一餐|吃什么|恢复|晚饭|食谱/,
-  ['read_health_report','read_packages'],['next_meal'],'读取当天实际和在库分装，应用启用的长期偏好。','计划只读，候选不能超出真实库存；高热量外食后正常用餐。','逐项、整餐和执行后的条件合计。'),
+  ['read_health_report','read_packages'],['next_meal'],'读取目标日期的实际记录及当前在库分装，支持为未来日期配餐，应用启用的长期偏好。','计划只读，候选不能超出真实库存；高热量外食后正常用餐。','逐项、整餐和执行后的条件合计。'),
  define('stock','库存、采购与分装',/库存|采购|入库|补货|分装|剩余|丢弃|扔掉|用了多少|还有多少/,
   ['read_packages','read_ledger'],['split','discard','purchase','inventory'],'匹配SKU和原批次；采购使用现有采购工具。','保留价格未知和原批次，联动财务按原权限。','数量、来源、损耗和成本。'),
  define('weighing','包装称重',/称重|毛重|空瓶|瓶重|现在.{0,18}(?:克|g)|剩.{0,18}(?:克|g)/i,

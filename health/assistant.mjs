@@ -70,6 +70,7 @@ const pairs = values => values.map(x=>[x,x]);
 function editRow(container, original, state, mode, onPlanChange) {
   const {stockSource,...c} = structuredClone(original);
   const plan=mode==='plan';
+  if(plan)c.action='plan';
   const block = document.createElement('fieldset');
   if(plan)block.className='assistant-plan-item';
   const legend = document.createElement('legend');
@@ -248,6 +249,7 @@ export function healthReview(container, proposal, state, today) {
         return next;
       }
       const items=rows.map(row=>row.read()).filter(Boolean);
+      if(date.value>today&&items.some(item=>item.action==='eat'))throw Error('未来日期可保存为饮食计划。');
       const purchase=mode==='purchase',total=purchase?numeric(totalField.value):null;
       if(!items.length||!matches(purchase?purchaseSchema:resultSchema,{items,note:'',...(purchase?{total}:{})}))
         throw Error('请勾选候选并核对份量和营养字段');

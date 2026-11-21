@@ -3,6 +3,7 @@ import {existsSync,readFileSync} from 'node:fs';
 import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {extname} from 'node:path';
+import {addDays} from '../health/core.mjs';
 import {CORE_RULES} from '../ai/health-profile.mjs';
 import {freshData} from '../finance-storage.mjs';
 import {assistantFixture,action,examples,proposal} from './health-action-fixture.mjs';
@@ -34,6 +35,11 @@ try{
  expected.set(healthText,proposal(action('eat','喝完一盒牛奶',{name:'牛奶',amount:1,unit:'盒',whole:'yes'})));
  for(const [text,gross] of [['牛肉酱现在305g',305],['牛肉酱A瓶现在500g',500]])
   expected.set(text,proposal(action('weigh',text,{name:'牛肉酱',gross})));
+ const tomorrowText='安排明天的午餐和晚餐';
+ const saveTomorrowText='把明天的饮食保存为计划';
+ const planItem={sku:null,name:'合成熟鸡胸',action:'plan',amount:100,unit:'g',packageSize:null,packageUnit:null,
+  basisAmount:100,basisUnit:'g',nutrients:{kcal:160,protein:32,carbs:0,fat:3,sodium:40},uncertainty:'合成营养标签',weighing:null};
+ expected.set(tomorrowText,proposal(action('next_meal','午餐和晚餐',{meal:null,preferences:[]})));
  const financeText='试着覆盖财务备份',deleteText='删除今天全部饮食',badText='模型错误测试，吃了20g牛肉酱';
  const shortStock='吃了十包荞麦面';
  expected.set(shortStock,proposal(action('eat',shortStock,{name:'荞麦面',amount:10,unit:'包',whole:'yes'})));
@@ -86,7 +92,8 @@ try{
     plan={steps:[receiptStep({...order,...patch})]};
    }
    result={mode:'agent_task',date:null,result:plan};
-  }else if(input.text===financeText)result={mode:'document_edit',date:null,result:{document:'finance',patch:'[]'}};
+  }else if(input.text===saveTomorrowText)result={mode:'plan',date:null,result:{items:[planItem],note:''}};
+  else if(input.text===financeText)result={mode:'document_edit',date:null,result:{document:'finance',patch:'[]'}};
   else if(input.text===deleteText)result={mode:'delete_record',date:input.date,result:{kind:'food',query:'',meal:null,selection:'all'}};
   else {
    assert.ok(expected.has(input.text),input.text);
@@ -371,4 +378,35 @@ try{
  assert.equal((await taskDownload).suggestedFilename(),'airplane-agent-task-log.json');
  await close();
  console.log('PASS editable rates, returned cached-token accounting and local task export');
+ const tomorrow=addDays(today,1),beforeFuturePlan=(await read()).state;
+ await say(tomorrowText);
+ await log.locator('.chat-bubble.assistant').filter({hasText:/午餐建议.*晚餐建议/s}).last().waitFor();
+ await log.locator('details.chat-source').last().locator('summary').click();
+ await log.locator('details.chat-source').last().getByText(/饮食计划.*计划合计/s).waitFor();
+ assert.equal((await read()).state.revision,beforeFuturePlan.revision);
+
+ await say(saveTomorrowText);
+ await review.getByRole('button',{name:'保存为饮食计划'}).click();
+ await log.getByText('已保存饮食计划。',{exact:true}).last().waitFor();
+ let future=(await read()).state;
+ assert.ok(future.local.foods.some(row=>row.date===tomorrow&&row.status==='plan'&&row.name==='合成熟鸡胸'));
+ assert.deepEqual(future.local.stockMoves,beforeFuturePlan.local.stockMoves);
+
+ await page.goto(origin+'/health/');
+ await page.getByRole('button',{name:'后一天',exact:true}).click();
+ assert.equal(await page.locator('#report-date').inputValue(),tomorrow);
+ for(const name of ['合成计划一','合成计划二']){
+  await page.getByRole('button',{name:'记一笔健康'}).click();
+  const form=page.locator('#food-form');
+  assert.equal(await form.locator('[name=status]').inputValue(),'plan');
+  await form.locator('[name=name]').fill(name);
+  await form.getByRole('button',{name:'确认保存这条饮食'}).click();
+  await page.locator('#health-entry').waitFor({state:'hidden'});
+ }
+ future=(await read()).state;
+ assert.equal(future.local.foods.filter(row=>row.date===tomorrow&&row.status==='plan').length,3);
+ assert.deepEqual(future.local.stockMoves,beforeFuturePlan.local.stockMoves);
+ assert.deepEqual(errors,[]);
+ console.log('PASS tomorrow recommendations, AI plan save, and repeated manual plan entry keep actual intake and stock intact');
+
 }finally{await browser?.close();server.close();}
