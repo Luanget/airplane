@@ -47,6 +47,7 @@ export function matches(s, x) {
   if (s.anyOf) return s.anyOf.some(part => matches(part,x));
   switch (s.type) {
     case 'null': return x === null;
+    case 'integer': return Number.isSafeInteger(x) && (s.minimum===undefined||x>=s.minimum) && (s.maximum===undefined||x<=s.maximum);
     case 'number': return Number.isFinite(x) && x >= s.minimum && x <= s.maximum;
     case 'string': return typeof x === 'string' && (s.enum ? s.enum.includes(x) : x.length >= s.minLength && (s.maxLength===undefined||x.length<=s.maxLength));
     case 'array': return Array.isArray(x) && x.length>=(s.minItems??0)

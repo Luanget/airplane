@@ -97,6 +97,34 @@ export function memoryLibrary(store,legacyKey){
   }
   return [...new Set(saved)];
  }
+ function activeHabits(){
+  const topics=new Set();
+  return read().rows.filter(row=>row.enabled&&!row.archivedProfile&&memoryKind(row)==='habit')
+   .sort((a,b)=>String(b.updatedAt??'').localeCompare(String(a.updatedAt??''))||(b.priority??0)-(a.priority??0))
+   .filter(row=>{
+    if(row.topic&&topics.has(row.topic))return false;
+    if(row.topic)topics.add(row.topic);return true;
+   }).map(({id,name,text,topic,updatedAt,constraint})=>({id,name,text,topic,updatedAt,
+    constraint:constraint??(topic==='chicken-one'?{kind:'food_meal_limit',food:'鸡胸',maxMeals:1}:null)}));
+ }
+ function learnHabit(update,source){
+  if(!automaticMemoryEnabled(store))throw Error('本机自动记忆已关闭');
+  const {name,text,evidence,constraint}=update;
+  if(!source.includes(evidence)||!evidence.trim()||memoryKind({name,text})!=='habit')throw Error('长期习惯需要本轮原话依据');
+  if(/sk-[\w-]{12,}|\b(?:api[ -]?key|password|bearer)\b|密码|密钥|验证码|身份证/i.test([name,text,evidence].join(' ')))
+   throw Error('敏感凭据不能写入记忆');
+  const {raw,rows}=read(),topic=preferenceTopic(text)??update.topic;
+  const previous=rows.find(row=>row.id!==PROFILE_ID&&row.topic===topic&&memoryKind(row)==='habit');
+  if(previous?.enabled===false)throw Error('此主题被手动停用，请使用本轮明确的偏好');
+  if(previous?.text===text&&JSON.stringify(previous.constraint??null)===JSON.stringify(constraint??null))return previous;
+  const priorHistory=previous?.history??[];
+  const record={...previous,id:previous?.id??crypto.randomUUID(),name,text,topic,enabled:true,kind:'habit',
+   origin:'conversation',constraint,priority:previous?.priority??50,updatedAt:new Date().toISOString(),evidence,
+   history:[...priorHistory,...(previous?[{text:previous.text,evidence:previous.evidence,updatedAt:previous.updatedAt}]:[])]};
+  if(store.getItem(MEMORY_KEY)!==raw)throw Error('记忆已在另一页面更新，请重新读取');
+  store.setItem(MEMORY_KEY,JSON.stringify(rows.filter(row=>row.id!==record.id).concat(record)));
+  return record;
+ }
  function importProfile(profile){
   const {raw,rows}=read();
   const previous=rows.find(row=>row.id===PROFILE_ID);
@@ -115,7 +143,7 @@ export function memoryLibrary(store,legacyKey){
  }
  return {
   list:()=>read().rows.filter(row=>row.id!==PROFILE_ID),profile:()=>read().rows.find(row=>row.id===PROFILE_ID)??null,
-  prepare,rememberFromTurn,importProfile,
+  prepare,rememberFromTurn,importProfile,activeHabits,learnHabit,
   relevant(text,{budget=1800,limit=8}={}){
    const terms=keywords(text);
    const ranked=read().rows.filter(row=>row.enabled&&!row.archivedProfile&&memoryKind(row)==='habit').map(({name,text,priority,updatedAt,topic})=>{

@@ -183,7 +183,8 @@ function recordEating(state,step,when,reference){
  const customary=when.habits?.buckwheatDefault&&/^(面|面条|一包面)$/.test(key(step.name))&&/一包面|1\s*包面/.test(step.evidence)?
   stock.filter(row=>row.qty>0&&/荞麦面/.test(row.name)):[];
  const matched=statedOff?null:customary.length===1&&!step.skuId?customary[0]:skuFor(stock,step);
- const oneOff=statedOff||!matched&&step.source==='one_off';
+ const unlinked=!matched&&!statedOff&&step.source!=='one_off'&&when.native;
+ const oneOff=statedOff||!matched&&step.source==='one_off'||unlinked;
  const sku=oneOff?null:matched;
  if(!oneOff&&!sku)throw Error('没有找到库存里的「'+step.name+'」。如果是外食或本次单买，请补充来源。');
  const {amount,unit}=step,whole=step.whole==='yes';
@@ -215,6 +216,7 @@ function recordEating(state,step,when,reference){
  const row=addFood(state,{name:sku?.name??step.name,date,meal,time,amount,amountUnit:unit,portion:amount+' '+unit,
   foodId:sku?.id,stockQty,...(sku?nutritionFor(sku,amount,unit):step.nutrition??{}),
   quality:sku?'label':'estimated',uncertainty:sku?'':'本次外食或单买；未提供的营养记为未知'},undefined,'food:'+id);
+ if(unlinked){row.stockAssociation='pending';row.uncertainty='实吃已记录，库存关联待核对。';}
  return {state,items:[{row,containerId:null}]};
 }
 
@@ -310,12 +312,12 @@ function planRequest(state,step,date,habits){
  return {items,reply:lines.join('\n')||'午餐和晚餐已有实际记录，可查看当天报告。'};
 }
 
-function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,habits,photoSteps={}}){
+function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,habits,native=false,photoSteps={}}){
  let next=ensureContainers(structuredClone(state));
  const messages=[],queryMessages=[],touched=new Set();
  let resultReference=null;
  for(let [index,step] of plan.steps.entries()){
-  if(skills)assertSkillAction(skills,step.kind);
+  if(skills&&!native)assertSkillAction(skills,step.kind);
   const operationId='health:'+id+':'+index;
   if(plan.steps.filter(interpretedWrite).length===1&&['eat','correct','weigh'].includes(step.kind)&&
    plausible(text,{name:step.name})&&statedDate(step.evidence,today)===null&&statedDate(text,today)!==null)
@@ -332,7 +334,7 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
   }
   touched.add(date);
   const ref=resultReference??reference;
-  if(['eat','weigh','discard','split','correct'].includes(step.kind)&&
+  if(!native&&['eat','weigh','discard','split','correct'].includes(step.kind)&&
    !photoSteps[index]&&!plausible(step.evidence,{name:step.name})&&
    !(plan.steps.filter(interpretedWrite).length===1&&plausible(text,{name:step.name}))&&
    !(/这[瓶条盒份道]|那[瓶条盒份道]|刚(?:才|记)|上面|上一条/.test(step.evidence)&&
@@ -341,7 +343,7 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
   if(step.kind==='eat'){
    const fullWeight=plan.steps.filter(interpretedWrite).length===1&&/(?:净重|实称)\s*\d+(?:\.\d+)?\s*(?:g|克)的?那(?:一)?[袋份]/i.test(text);
    if(fullWeight&&step.whole==='yes'&&plausible(text,{name:step.name}))step={...step,evidence:text};
-   const result=recordEating(next,step,{date,meal,time,id:operationId,fromPhoto:!!photoSteps[index],habits},ref);
+   const result=recordEating(next,step,{date,meal,time,id:operationId,fromPhoto:!!photoSteps[index],habits,native},ref);
    const photo=photoSteps[index];
    if(photo)for(const {row} of result.items){row.agentEvidence=photo;row.uncertainty=photo.uncertainty;row.quality='estimated';}
    next=result.state;
@@ -535,10 +537,10 @@ function verifyValues(step){
  }
 }
 const interpretedWrite=step=>!reads.has(step.kind);
-function validatePlan(plan,text,photoSteps={}){
+function validatePlan(plan,text,photoSteps={},native=false){
  if(!matches(healthActionSchema,plan)||!text.trim())throw Error('模型返回的健康操作格式无效，账本未更改。');
  const writes=plan.steps.filter(interpretedWrite);
- if(writes.length&&!Object.keys(photoSteps).length&&!hasWriteLanguage(text))throw Error('这条消息没有可核对的记录指令。');
+ if(!native&&writes.length&&!Object.keys(photoSteps).length&&!hasWriteLanguage(text))throw Error('这条消息没有可核对的记录指令。');
  const noSave=/不要(?:记录|记账|保存|扣库|写入|自动)|先(?:看看|预览|别记录|不要记录)|只(?:看看|问|算|预览)|假如|如果我|举个例子/.test(text);
  const quotation=value=>value.normalize('NFKC').replace(/\s/g,'');
  for(const [index,candidate] of plan.steps.entries()){
@@ -548,6 +550,7 @@ function validatePlan(plan,text,photoSteps={}){
   if(!step.evidence.trim()||!quotation(text).includes(quotation(step.evidence)))throw Error('有操作缺少本轮原话依据，账本未更改。');
   if(!photoSteps[index])verifyValues(step.kind==='weigh'&&step.initialGross!=null&&!statedNumber(step.evidence,step.initialGross)?
    {...step,initialGross:null}:step);
+  if(native)continue;
   if(step.kind==='day_status'){
    const partial=/待补|没记全|未记全|未完整|没有记全|没录全|未录全|缺报|不完整/;
    const complete=/已记录|已记全|记完|已报完|已齐|确认.*全天|全天.*完整|封账/;
@@ -562,11 +565,11 @@ function validatePlan(plan,text,photoSteps={}){
   if(step.kind.startsWith('correct')&&!/更正|少算|多算|改|纠正|错|补上/.test(step.evidence))
    throw Error('更正需要本轮明确指明。');
  }
- return plan.intent==='execute'&&writes.length>0&&!noSave;
+ return plan.intent==='execute'&&writes.length>0&&(native||!noSave);
 }
 
 export function healthActionPreview(state,plan,options){
- const execute=validatePlan(plan,options.text,options.photoSteps);
+ const execute=validatePlan(plan,options.text,options.photoSteps,options.native);
  const prepared=localPlan(state,plan,options);
  return {execute,prepared,preview:summarize(prepared,prepared.next),
   source:reportSource(prepared,state,prepared.next)};

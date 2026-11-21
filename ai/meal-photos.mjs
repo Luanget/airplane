@@ -8,7 +8,7 @@ const samePortion=(a,b)=>a.unit===b.unit&&a.amount===b.amount;
 const labels={measured:'实称',label:'包装标签',estimated:'照片估算'};
 const take=(rows,role)=>rows.filter(row=>row.role===role).sort((a,b)=>rank[b.confidence]-rank[a.confidence])[0];
 
-export function groupMealPhotos(result,text,count){
+export function groupMealPhotos(result,text,count,{native=false}={}){
  if(!matches(groupedMealSchema,result)||!Number.isSafeInteger(count)||count<1)throw Error('多图识别的结构无效，账本未更改。');
  const byDish=new Map(),nameKeys=new Map();
  const sameMealRefill=/续粉|加粉/.test(text);
@@ -29,7 +29,7 @@ export function groupMealPhotos(result,text,count){
  }
  const evidence=text.trim()||'同餐照片预览';
  const steps=[],photoSteps={},notes=[];
- const actual=/已经(?:吃|喝)|吃了|喝了|实吃|吃完|喝完|实报|实际|记(?:录|账|入账)|就记|保存/.test(text)&&
+ const actual=native?result.intent==='execute':/已经(?:吃|喝)|吃了|喝了|实吃|吃完|喝完|实报|实际|记(?:录|账|入账)|就记|保存/.test(text)&&
   !/不要(?:记录|写入|保存)|先(?:预览|看看)|只(?:看看|识别)|假如|如果我/.test(text);
  let requireReview=false,usedStatedLabel=false;
  const quantities=[...text.normalize('NFKC').matchAll(/(\d+(?:\.\d+)?)\s*(g|克|ml|毫升)(?![a-z])/gi)];
@@ -48,7 +48,7 @@ export function groupMealPhotos(result,text,count){
   }
   if(!served&&!extra)continue;
   const extras=rows.filter(row=>row.role==='extra');
-  const additions=extra&&/续粉|加粉|续(?:了|一|两|份)|又加|额外|再来一份|加了一份/.test(text)?[extra]:[];
+  const additions=extra&&(native||/续粉|加粉|续(?:了|一|两|份)|又加|额外|再来一份|加了一份/.test(text))?[extra]:[];
   if(extras.length>additions.length){
    notes.push('续份需有清楚依据，已隔开存疑的续份证据。');
    requireReview ||= !additions.length;

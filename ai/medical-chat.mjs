@@ -49,7 +49,7 @@ export function selectedMedicalIndicators(state,text,today){
 }
 const summaryLine=row=>[(row.date??'日期待核对'),row.name,row.value??row.result??'结果待补',row.unit,
  row.reference&&'参考 '+row.reference,flagText[referenceFlag(row)]].filter(value=>value!=null&&value!=='').join(' · ');
-function queryMedical(state,text,today){
+export function queryMedical(state,text,today){
  const data=medicalData(state),selected=selectedMedicalIndicators(state,text,today);
  if(selected.length){
   const details=selected.flatMap(group=>group.rows.map(summaryLine));
