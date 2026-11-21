@@ -7,6 +7,9 @@ import {managedFoodPackage,onShelf} from '../health/container-ledger.mjs';
 import {basis,quantityInUnit} from '../health/candidates.mjs';
 import {recordedPortion,reviseFoodPortion} from '../health/food-history.mjs';
 import {portionSources,registerPortions} from '../health/inventory.mjs';
+import {activityPolicy,duplicateActivity} from '../health/agent-rules.mjs';
+import {assertSkillAction} from './skills.mjs';
+import {healthReport,inventoryDiff,renderHealthReport,renderInventoryDiff} from './health-report.mjs';
 import {same} from '../health/sync-source.mjs';
 
 const ACCESS='airplane-ai-health-auto-v1';
@@ -67,7 +70,7 @@ function plausible(text,sku){
  return /包面/.test(raw)&&/(?:面条|荞麦面|方便面|面饼|拉面)/.test(sku.name);
 }
 function hasWriteLanguage(text){
- return /吃|喝|毛重|剩.*(?:克|g)|现在.{0,18}(?:克|g)|记|称|克|丢|扔|分装|晨重|体重|跑|骑|走|运动|更正|改|错|少算|多算|公斤|kg/i.test(text);
+ return /吃|喝|毛重|剩.*(?:克|g)|现在.{0,18}(?:克|g)|记|称|克|丢|扔|分装|晨重|体重|跑|骑|走|运动|消耗|手表|更正|改|错|少算|多算|公斤|kg/i.test(text);
 }
 function statedDate(text,today){
  if(/前天/.test(text))return addDays(today,-2);
@@ -160,8 +163,11 @@ function nutritionFor(sku,amount,unit){
 const itemText=row=>row.name+' '+row.portion;
 function recordEating(state,step,when,reference){
  const {date,meal,time,id}=when;
- const statedOff=/外食|外卖|餐厅|食堂|餐馆|外面吃|店里买|现买|单买|路上买|一次性|不是库存/.test(step.evidence);
- const matched=statedOff?null:skuFor(home(state),step);
+ const statedOff=when.fromPhoto||/外食|外卖|餐厅|食堂|餐馆|外面吃|店里买|现买|单买|路上买|一次性|不是库存/.test(step.evidence);
+ const stock=home(state);
+ const customary=when.habits?.buckwheatDefault&&/^(面|面条|一包面)$/.test(key(step.name))&&/一包面|1\s*包面/.test(step.evidence)?
+  stock.filter(row=>row.qty>0&&/荞麦面/.test(row.name)):[];
+ const matched=statedOff?null:customary.length===1&&!step.skuId?customary[0]:skuFor(stock,step);
  const oneOff=statedOff||!matched&&step.source==='one_off';
  const sku=oneOff?null:matched;
  if(!oneOff&&!sku)throw Error('没有找到库存里的「'+step.name+'」。如果是外食或本次单买，请补充来源。');
@@ -212,38 +218,85 @@ function findOriginal(state,step,date,reference){
  throw Error('在 '+displayDay(date)+' 找不到要更正的原饮食。');
 }
 
-function recommend(state,step,today){
- const {totals}=dayIntake(state,today),target=state.settings.calorieTarget;
+export function buildMealPlan(state,step,today,habits={},reserved=[]){
+ const {totals}=dayIntake(state,today),target=state.settings.calorieTarget,meal=step.meal??'晚餐';
  const gap=totals.kcal==null?null:round(target-totals.kcal,1);
  const preferences=step.preferences.map(key).filter(Boolean);
- const stock=home(state).filter(row=>row.qty>0&&!/酱|食用油|盐|饮料|料酒/.test(row.name));
+ const requested=term=>preferences.some(value=>value.includes(term))||step.evidence.includes(term);
+ const weekend=[0,6].includes(new Date(today+'T12:00:00Z').getUTCDay());
+ const eaten=events(state,'foods').filter(row=>row.date===today&&actualFood(row));
+ const chickenUsed=[...eaten,...reserved].filter(row=>/鸡胸/.test(row.name)).length;
+ const stock=home(state).filter(row=>row.qty>0&&!/酱|食用油|盐|饮料|料酒/.test(row.name)&&
+  !(habits.avoidTurkey&&!weekend&&!requested('火鸡')&&/火鸡/.test(row.name))&&
+  !(habits.optionalNuts&&!requested('坚果')&&/坚果|腰果|核桃|杏仁/.test(row.name))&&
+  !(habits.chickenLimit!=null&&chickenUsed>=habits.chickenLimit&&!requested('鸡胸')&&/鸡胸/.test(row.name)));
  const plan=stock.map(sku=>{
-  const portion=packagesFor(state,sku.id).find(row=>onShelf(row)&&row.net>0&&!row.estimated);
-  const g=sku.unit==='g';
-  const amount=portion?.net??(g?Math.min(sku.qty,150):Math.min(sku.qty,1));
-  const unit=portion?'g':sku.unit;
-  return {name:sku.name,amount,unit,kcal:nutritionFor(sku,amount,unit).kcal??null,
+  const vegetable=/菜|瓜|笋|番茄|西兰花/.test(sku.name),celery=/芹菜/.test(sku.name);
+  const skuReserved=reserved.filter(row=>row.foodId===sku.id);
+  const allocated=skuReserved.reduce((sum,row)=>sum+row.stockAmount,0);
+  const free=round(sku.qty-allocated,6);
+  if(free<=0)return null;
+  const shelf=packagesFor(state,sku.id).filter(onShelf);
+  const usedIn=container=>skuReserved.filter(row=>row.containerId===container.id).reduce((sum,row)=>sum+row.amount,0);
+  const portion=shelf.find(row=>row.net>usedIn(row)&&(!row.estimated||vegetable));
+  const sealed=shelf.find(row=>row.status==='sealed'&&row.nominal&&!usedIn(row));
+  const left=portion?round(portion.net-usedIn(portion),3):null;
+  const partial=celery&&habits.celerySameDay&&portion&&!usedIn(portion)&&
+   (portion.status==='sealed'||!eaten.some(row=>row.meal==='午餐'&&row.foodId===sku.id));
+  const amount=portion?(partial?round(left/2,1):vegetable&&!habits.wholeVegetable&&!usedIn(portion)?Math.min(left,250):left):
+   sealed?sealed.nominal.value:sku.unit==='g'?Math.min(free,150):sku.unit==='mL'?Math.min(free,200):Math.min(free,1);
+  const unit=portion?'g':sealed?sealed.nominal.unit:sku.unit;
+  const quantity=sealed?sealed.stockAmount:quantityInUnit(sku,amount,unit,sku.unit);
+  if(!(amount>0)||quantity!=null&&quantity>free+1e-6)return null;
+  let cents=null;
+  if(portion?.costCents!=null&&portion.net>0)cents=Math.min(portion.costCents,Math.round(portion.costCents*amount/(portion.actualNetGrams??portion.net)));
+  else if(sealed?.costCents!=null)cents=sealed.costCents;
+  else if(quantity>0&&sku.priceBasis===sku.unit&&sku.pricePerUnit!=null)cents=Math.round(quantity*sku.pricePerUnit*100);
+  const nutrition=Object.fromEntries(['kcal','protein','carbs','fat','sodium'].map(key=>[key,nutritionFor(sku,amount,unit)[key]??null]));
+  return {id:'recommend:'+sku.id,foodId:sku.id,name:sku.name,amount,unit,meal,portion:amount+' '+unit,
+   nutrition,cost:cents==null?null:cents/100,status:'plan',stockAmount:quantity??0,containerId:portion?.id??sealed?.id??null,
+   uncertainty:[portion?.estimated?'分装重量为估算':sealed?'按包装标称规格':null,partial?'此份芹菜余量优先安排在今天另一餐':null].filter(Boolean).join('；'),
    score:Number(preferences.some(term=>names(sku).some(name=>name.includes(term))))*4+Number(!!portion)*2+
-    Number(sku.nutrition.protein>5),group:/鸡|牛肉|鱼|蛋|虾|豆腐/.test(sku.name)?'protein':/菜|瓜|笋|番茄/.test(sku.name)?'vegetable':'other'};
- }).filter(row=>row.amount>0);
+    Number(vegetable&&habits.wholeVegetable)*2+Number(/鸡胸/.test(sku.name)&&habits.chickenLimit!=null)*2+
+    Number(sku.nutrition.protein>5),group:/鸡|牛肉|鱼|蛋|虾|豆腐/.test(sku.name)?'protein':vegetable?'vegetable':'other'};
+ }).filter(Boolean);
  const chosen=[],groups=new Set();
- const byScore=plan.sort((a,b)=>b.score-a.score);
  let energy=0;
- for(const row of byScore){
-  if(groups.has(row.group)||gap!==null&&gap>0&&row.kcal!==null&&energy+row.kcal>gap+75)continue;
-  groups.add(row.group);chosen.push(row);energy+=row.kcal??0;
+ // An already high intake does not turn the next meal into a skipped meal.
+  const training=/长骑|训练补给|运动恢复/.test(step.evidence);
+ const usualLimit=habits.lighterDinner?(meal==='晚餐'?.50:.62)*target:Infinity;
+ const mealBudget=training?Infinity:gap!==null&&gap>250?Math.min(gap+75,usualLimit):
+  gap!==null&&gap<=0?Math.max(450,target*.50):usualLimit;
+ for(const row of plan.sort((a,b)=>b.score-a.score)){
+  if(groups.has(row.group)||row.nutrition.kcal!==null&&energy+row.nutrition.kcal>mealBudget)continue;
+  groups.add(row.group);chosen.push(row);energy+=row.nutrition.kcal??0;
   if(chosen.length===3)break;
  }
  const actualGap=gap===null?'今日热量数据待补':gap<0?'当前已超过日参考 '+Math.abs(gap)+' kcal':'距日参考 '+gap+' kcal';
- const list=chosen.map(row=>row.name+' '+row.amount+' '+row.unit+(row.kcal===null?'（热量待补）':'')).join('、');
- return '下一餐建议'+(list?'：'+list:'：现有库存缺少合适搭配')+'。'+actualGap+'，仅为计划。';
+ const list=chosen.map(row=>row.name+' '+row.portion+(row.nutrition.kcal===null?'（热量待补）':'')).join('、');
+ return {items:chosen,reply:'下一餐建议'+(list?'：'+list:'：现有库存缺少合适搭配')+'。'+actualGap+
+  (gap!==null&&gap<0?'。下一餐正常吃，按日常口径饮水和活动':'')+'，仅为计划。'};
 }
 
-function localPlan(state,plan,{id,text,today,clock,reference={},foodDate}){
+function planRequest(state,step,date,habits){
+ if(!/午晚餐|午餐.{0,10}晚餐|两餐|全天/.test(step.evidence))return buildMealPlan(state,step,date,habits);
+ const done=new Set(events(state,'foods').filter(row=>row.date===date&&actualFood(row)).map(row=>row.meal));
+ const meals=['午餐','晚餐'].filter(meal=>!done.has(meal));
+ const items=[],lines=[];
+ for(const meal of meals){
+  const next=buildMealPlan(state,{...step,meal},date,habits,items);
+  items.push(...next.items);
+  lines.push(next.reply.replace('下一餐建议',meal+'建议'));
+ }
+ return {items,reply:lines.join('\n')||'午餐和晚餐已有实际记录，可查看当天报告。'};
+}
+
+function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,habits,photoSteps={}}){
  let next=ensureContainers(structuredClone(state));
  const messages=[],queryMessages=[],touched=new Set();
  let resultReference=null;
  for(let [index,step] of plan.steps.entries()){
+  if(skills)assertSkillAction(skills,step.kind);
   const operationId='health:'+id+':'+index;
   const date=dateFor(step,today,{date:reference.date??foodDate});
   const time=normalizeClock(step.time)||clock;
@@ -255,11 +308,13 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate}){
   touched.add(date);
   const ref=resultReference??reference;
   if(['eat','weigh','discard','split','correct'].includes(step.kind)&&
-   !plausible(step.evidence,{name:step.name})&&!(/这[瓶条盒份]|那[瓶条盒份]|刚才|上面/.test(step.evidence)&&
+   !photoSteps[index]&&!plausible(step.evidence,{name:step.name})&&!(/这[瓶条盒份]|那[瓶条盒份]|刚才|上面/.test(step.evidence)&&
    (step.recordId&&step.recordId===ref.recordId||ref.skuId&&home(next).some(sku=>sku.id===ref.skuId&&plausible(step.name,sku)))))
    throw Error('建议的食品和本轮原话对不上，账本未更改。');
   if(step.kind==='eat'){
-   const result=recordEating(next,step,{date,meal,time,id:operationId},ref);
+   const result=recordEating(next,step,{date,meal,time,id:operationId,fromPhoto:!!photoSteps[index],habits},ref);
+   const photo=photoSteps[index];
+   if(photo)for(const {row} of result.items){row.agentEvidence=photo;row.uncertainty=photo.uncertainty;row.quality='estimated';}
    next=result.state;
    for(const {row,containerId} of result.items){
     messages.push(itemText(row));
@@ -306,10 +361,15 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate}){
    messages.push((step.morning==='yes'?'晨重 ':'体重 ')+step.kg+' kg');
   }else if(step.kind==='activity'){
    if(step.energyKind==='total'&&!/全天|总消耗|每日总/.test(step.evidence))throw Error('需明确是设备全天总消耗，才能按总量记账。');
-   recordEvent(next,'activities',{date,time,name:step.name,km:step.km,minutes:step.minutes,kcal:step.kcal,
-    energyKind:step.energyKind,quality:step.quality,includedInBase:step.includedInBase==='yes'&&/计入|基础/.test(step.evidence),
-    uncertainty:step.uncertainty},undefined,operationId);
-   messages.push(step.name+(step.kcal==null?'':' '+step.kcal+' kcal'));
+   const raw={date,time,name:step.name,km:step.km,minutes:step.minutes,kcal:step.kcal,
+    energyKind:step.energyKind,quality:step.quality,uncertainty:step.uncertainty};
+   if(duplicateActivity(events(next,'activities'),raw,!!step.time)){
+    messages.push('同一日已有匹配的'+step.name+'，未重复累计');continue;
+   }
+   const flags=activityPolicy(next.settings,{...raw,evidence:step.evidence,includedInBase:step.includedInBase==='yes'&&/计入|基础/.test(step.evidence)});
+   recordEvent(next,'activities',{...raw,...flags},undefined,operationId);
+   messages.push(step.name+(step.kcal==null?'':' '+step.kcal+' kcal')+
+    (flags.excludedFromEnergy?'（设备读数保留为参考）':flags.includedInBase?'（已含在基础消耗）':''));
   }else if(step.kind==='correct_weight'||step.kind==='correct_activity'){
    const weight=step.kind==='correct_weight',kind=weight?'weights':'activities';
    const candidates=events(next,kind).filter(row=>row.date===date&&(!step.time||normalizeClock(row.time)===step.time)&&
@@ -349,7 +409,7 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate}){
    resultReference={date,recordId:after.id,containerId:link?.container?.id??null,skuId:after.foodId};
   }
  }
- return {next,messages,queryMessages,touched:[...touched],reference:resultReference, id,text,today};
+ return {next,messages,queryMessages,touched:[...touched],reference:resultReference, id,text,today,habits};
 }
 
 const patches=['foods','weights','activities','stockMoves','batches','containers','containerEvents'];
@@ -374,7 +434,7 @@ function changesFrom(before,after){
 function summarize(prepared,state){
  const {messages,queryMessages,today,touched}=prepared;
  const reads=queryMessages.map(({step,date})=>{
-  if(step.kind==='next_meal')return recommend(state,step,date);
+  if(step.kind==='next_meal')return planRequest(state,step,date,prepared.habits).reply;
   const cycle=cycleForDate(state,date,today);
   return '周期 '+displayDay(cycle.start)+'至'+displayDay(cycle.end)+' · 已结算 '+cycle.closedDays+' 天 · 缺口 '+cycle.deficit+' kcal。';
  });
@@ -385,6 +445,18 @@ function summarize(prepared,state){
   return displayDay(date)+'实际摄入 '+energy+' kcal'+(date<today&&cycle.closedDays?' · 本周期已结算缺口 '+cycle.deficit+' kcal':'');
  }).filter(Boolean);
  return [messages.length?messages.join('；')+'。':'',nutrition.length?nutrition.join(' · ')+'。':'',...reads].filter(Boolean).join('\n');
+}
+
+function reportSource(prepared,before,after){
+ const dates=new Set([...prepared.touched,...prepared.queryMessages.map(row=>row.date)]);
+ if(!dates.size)return null;
+ const reports=[...dates].map(date=>{
+  const menu=prepared.queryMessages.find(entry=>entry.date===date&&entry.step.kind==='next_meal');
+  const proposed=menu?planRequest(after,menu.step,date,prepared.habits).items:[];
+  return renderHealthReport(healthReport(after,date,prepared.today,{proposed}));
+ });
+ const stock=renderInventoryDiff(inventoryDiff(before,after));
+ return {label:'营养、库存与进度明细',text:[...reports,stock].filter(Boolean).join('\n\n')};
 }
 
 const chineseDigits='零一二三四五六七八九';
@@ -425,14 +497,14 @@ function verifyValues(step){
  }
 }
 const interpretedWrite=step=>!reads.has(step.kind);
-function validatePlan(plan,text){
+function validatePlan(plan,text,photoSteps={}){
  if(!matches(healthActionSchema,plan)||!text.trim())throw Error('模型返回的健康操作格式无效，账本未更改。');
  const writes=plan.steps.filter(interpretedWrite);
- if(writes.length&&!hasWriteLanguage(text))throw Error('这条消息没有可核对的记录指令。');
+ if(writes.length&&!Object.keys(photoSteps).length&&!hasWriteLanguage(text))throw Error('这条消息没有可核对的记录指令。');
  const noSave=/不要(?:记录|记账|保存|扣库|写入|自动)|先(?:看看|预览|别记录|不要记录)|只(?:看看|问|算|预览)|假如|如果我|举个例子/.test(text);
- for(const step of plan.steps){
+ for(const [index,step] of plan.steps.entries()){
   if(!step.evidence.trim()||!text.includes(step.evidence))throw Error('有操作缺少本轮原话依据，账本未更改。');
-  verifyValues(step);
+  if(!photoSteps[index])verifyValues(step);
   if(step.kind==='discard'&&!/丢弃|扔掉|扔了|倒掉|过期.*扔/.test(step.evidence))
    throw Error('丢弃操作需要本轮明确说要丢弃。');
   if(step.kind==='discard'&&/全部|所有|一并|都扔/.test(step.evidence))
@@ -444,33 +516,34 @@ function validatePlan(plan,text){
 }
 
 export function healthActionPreview(state,plan,options){
- const execute=validatePlan(plan,options.text);
+ const execute=validatePlan(plan,options.text,options.photoSteps);
  const prepared=localPlan(state,plan,options);
- return {execute,prepared,preview:summarize(prepared,prepared.next)};
+ return {execute,prepared,preview:summarize(prepared,prepared.next),
+  source:reportSource(prepared,state,prepared.next)};
 }
 
-export function healthActionReceipt(base,{id,text,today,now=Date.now()}){
+export function healthActionReceipt(base,{id,text,today,mediaKey='',now=Date.now()}){
  const own=operationList(base).find(row=>row.id===id);
- if(own)return {text:own.undone?'这条记录已撤销。':own.text,record:own,duplicate:true};
- const signature=today+'\n'+normal(text);
- const recent=!/又|再|另|重新|第二次|第三次/.test(text)&&operationList(base).findLast(record=>
-  !record.undone&&record.signature===signature&&now>=record.at&&now-record.at<=REPLAY_WINDOW);
+ if(own)return {text:own.undone?'这条记录已撤销。':own.text,source:own.undone?null:own.source,record:own,duplicate:true};
+ const signature=today+'\n'+normal(text)+'\n'+(mediaKey||'');
+ const recent=(!!mediaKey||!/又|再|另|重新|第二次|第三次/.test(text))&&operationList(base).findLast(record=>
+  !record.undone&&(record.signature===signature||!mediaKey&&record.signature===signature.slice(0,-1))&&now>=record.at&&now-record.at<=REPLAY_WINDOW);
  return recent?{text:'这条请求刚已保存，未重复入账。',record:recent,duplicate:true}:null;
 }
 export async function executeHealthAction(workspace,base,plan,options){
- const {id,text,today,clock,guard,confirmed=false,now=Date.now()}=options;
+ const {id,text,today,clock,guard,mediaKey='',confirmed=false,now=Date.now()}=options;
  if(typeof id!=='string'||!id)throw Error('缺少健康操作 ID，账本未更改。');
  const check=()=>{options.signal?.throwIfAborted();guard?.();};
  const expected=base.revision??0;
  const duplicate=healthActionReceipt(base,options);
  if(duplicate)return duplicate;
- const {execute,prepared,preview}=healthActionPreview(base,plan,{...options,id,text,today,clock});
- if(!execute||!confirmed&&!options.auto)return {text:preview,preview:execute?'confirm':'readonly'};
- if(!Object.keys(changesFrom(base,prepared.next)).length)return {text:preview};
- const signature=today+'\n'+normal(text);
+ const {execute,prepared,preview,source}=healthActionPreview(base,plan,{...options,id,text,today,clock});
+ if(!execute||!confirmed&&!options.auto)return {text:preview,source,preview:execute?'confirm':'readonly'};
+ if(!Object.keys(changesFrom(base,prepared.next)).length)return {text:preview,source};
+ const signature=today+'\n'+normal(text)+'\n'+(mediaKey||'');
  check();
  const record={id,signature,at:now,expectedRevision:expected,revision:expected+1,changes:changesFrom(base,prepared.next),
-  reference:prepared.reference,text:'已保存。'+preview};
+  reference:prepared.reference,text:'已保存。'+preview,source};
  prepared.next.local.assistantActions=[...operationList(prepared.next).slice(-(HISTORY_SIZE-1)),record];
  await workspace.saveHealth(prepared.next,expected,check);
  const stored=await workspace.readHealth();
@@ -486,7 +559,7 @@ export async function executeHealthAction(workspace,base,plan,options){
    throw Error('保存回执与当前记录不一致，请核对账本。');
  }
  const checked=summarize(prepared,stored);
- return {text:'已保存。'+checked,record:persisted};
+ return {text:'已保存。'+checked,record:persisted,source:reportSource(prepared,base,stored)};
 }
 export async function undoHealthAction(workspace,id){
  const state=await workspace.readHealth(),expected=state.revision??0;

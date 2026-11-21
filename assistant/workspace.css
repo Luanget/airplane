@@ -140,3 +140,5 @@
 #assistant-memory form { padding-block:10px }
 
 .health-write-undo { grid-column:2; justify-self:start; font-size:12px; min-height:32px; }
+
+.agent-profile-preview { white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; font:inherit; font-size:12px }

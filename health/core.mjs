@@ -1,3 +1,4 @@
+import {effectiveTdee} from './agent-rules.mjs';
 import {hasLaterPackageReading,managedFoodPackage,validContainerTables,voidPackageFood} from './container-ledger.mjs';
 import {normalizeClock} from '../calendar.mjs';
 /** Airplane Health — deterministic domain logic. No third-party libraries. */
@@ -125,9 +126,9 @@ export function normalizeLedger(raw){
  result.importedAt=new Date().toISOString();
  result.importInfo={sourceVersion:String(raw.handoff_version||raw.schema_version||'unknown'),canonicalSource:String(raw.canonical_source||''),originalCounts:Object.fromEntries(['food_events','weight_events','activity_events','daily_summaries','energy_balance','food_inventory'].map(k=>[k, t[k]?.length || 0]))};
  result.legacy.foods=(t.food_events || []).map((r,i)=>({ id:`legacy-food-${i}`,date:String(r['日期']||''),time:String(r['时间']||''),meal:String(r['餐次']||''),name:String(r['食物/饮品']||''),foodId:String(r['食品ID']||''),portion:String(r['份量/重量']||''),status:String(r['状态']||''),actual:isActualStatus(r['状态'])&&validDate(String(r['日期']||'')),nutrition:Object.fromEntries(Object.entries(NUTRIENT_KEYS).map(([k,v])=>[k,numeric(r[v])])),cost:numeric(r['饮食成本(CNY)']??r['成本(CNY)']??r['成本(元)']??r.cost),
-  ...(r.airplane_weighing?{weighing:r.airplane_weighing}:{}),source:'legacy',qualityFlag:validDate(String(r['日期']||''))?null:'missing_date' }));
+  ...(r.airplane_weighing?{weighing:r.airplane_weighing}:{}),...(r.airplane_evidence?{agentEvidence:r.airplane_evidence}:{}),source:'legacy',qualityFlag:validDate(String(r['日期']||''))?null:'missing_date' }));
  result.legacy.weights=(t.weight_events||[]).map((r,i)=>({id:`legacy-weight-${i}`,date:String(r['日期']||''),kg:numeric(r['数值']),time:String(r['时间']||''),trendStatus:String(r['纳入趋势']||''),source:'legacy'})).filter(r=>validDate(r.date));
- result.legacy.activities=(t.activity_events||[]).map((r,i)=>({id:`legacy-activity-${i}`,date:String(r['日期']||''),name:String(r['项目']||r['类别']||''),km:numeric(r['距离(km)']),minutes:numeric(r['时长(min)']),time:String(r['时间']||''),kcal:numeric(r['活动消耗估计(kcal)']),status:String(r['状态']||''),source:'legacy',energyKind:r.energyKind==='total'?'total':'activity',includedInBase:r.includedInBase??!/^(?:户外单车|夜骑|长骑)/.test(String(r['类别']||''))})).filter(r=>validDate(r.date));
+ result.legacy.activities=(t.activity_events||[]).map((r,i)=>({id:`legacy-activity-${i}`,date:String(r['日期']||''),name:String(r['项目']||r['类别']||''),km:numeric(r['距离(km)']),minutes:numeric(r['时长(min)']),time:String(r['时间']||''),kcal:numeric(r['活动消耗估计(kcal)']),status:String(r['状态']||''),source:'legacy',energyKind:r.energyKind==='total'?'total':'activity',...(r.excludedFromEnergy?{excludedFromEnergy:true}:{}),includedInBase:r.includedInBase??!/^(?:户外单车|夜骑|长骑)/.test(String(r['类别']||''))})).filter(r=>validDate(r.date));
  result.legacy.inventory=(t.food_inventory||[]).map(normalizeInventory).filter((item,index,items)=>items.findIndex(x=>x.id===item.id)===index);
  for (const r of t.daily_summaries||[]){const d=String(r['日期']||'');if (!validDate(d)) continue;result.legacy.daily[d]={
   date:d, nutrition:{kcal:numeric(r.kcal),protein:numeric(r['蛋白质(g)']),carbs:numeric(r['碳水(g)']),fat:numeric(r['脂肪(g)']),sodium:numeric(r['钠(mg)'])}, note:String(r['记录完整性']||'')
@@ -237,14 +238,14 @@ export function weightTrend(state,asOf){
 export function energyForDay(state,date,today){
  const legacy=state.legacy.energy[date];
  const food=dayIntake(state,date);
- const activities=events(state,'activities').filter(e=>e.date===date&&!/计划|取消|作废/.test(e.status ?? ''));
+ const activities=events(state,'activities').filter(e=>e.date===date&&!e.excludedFromEnergy&&!/计划|取消|作废/.test(e.status ?? ''));
  const totals=activities.filter(e=>e.energyKind==='total' && numeric(e.kcal)!==null);
  const deviceTotal=numeric(totals.at(-1)?.kcal);
- const extra=e=>!e.includedInBase && e.energyKind!=='total' && !/计划|取消|作废/.test(e.status ?? '')?zero(e.kcal):0;
+ const extra=e=>!e.excludedFromEnergy&&!e.includedInBase && e.energyKind!=='total' && !/计划|取消|作废/.test(e.status ?? '')?zero(e.kcal):0;
  const importedTotal=numeric(legacy?.tdee);
  const previouslyIncluded=state.legacy.activities.filter(e=>e.date===date).reduce((sum,e)=>sum+extra(e),0);
  const currentExtra=activities.reduce((sum,e)=>sum+extra(e),0);
- const tdee=deviceTotal ?? (importedTotal===null? state.settings.baselineTdee+currentExtra : importedTotal+currentExtra-previouslyIncluded);
+ const tdee=deviceTotal ?? (importedTotal===null? effectiveTdee(state.settings,date)+currentExtra : importedTotal+currentExtra-previouslyIncluded);
  const reported=food.totals.kcal!==null && !food.incomplete.includes('kcal') && !activities.some(e=>deviceTotal===null&&!e.includedInBase&&numeric(e.kcal)===null);
  const intake=food.totals.kcal;
  return {date,reported,closed:date<today&&reported,deficit:reported?round(tdee-intake,2):null,intake,tdee,

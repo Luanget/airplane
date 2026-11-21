@@ -140,9 +140,18 @@ export const healthSteps={
 export const healthActionSchema=object({intent:choice('execute','preview'),
  steps:{...list({anyOf:Object.values(healthSteps)},HEALTH_STEP_LIMIT),minItems:1}});
 export const packageReadSchema=object({query:string(160),skuId:optional(string(240,1)),containerId:optional(string(300,1)),includeClosed:choice('yes','no')});
-export function selectChatSchema({documentAccess,autoMemory,healthActions=false}){
+const imageIndices={...list(number(200,1),200),minItems:1};
+const photoObservation=object({dishKey:string(80,1),name:string(120,1),role:choice('served','extra','leftover','label','weight'),
+ images:imageIndices,amount:optional(number(100000)),unit:optional(unit),confidence:choice('measured','label','estimated'),
+ basisAmount:optional(number(100000,0.001)),basisUnit:optional(unit),nutrition:optional(nutrients),uncertainty:string(300,1)});
+export const groupedMealSchema=object({intent:choice('execute','preview'),date:optional(string(10,10)),meal:mealType,
+ observations:list(photoObservation,48),steps:list({anyOf:Object.values(healthSteps)},HEALTH_STEP_LIMIT)});
+export const healthReportReadSchema=object({date:optional(string(10,10)),view:choice('summary','meals')});
+export const healthStatusReadSchema=object({});
+export function selectChatSchema({documentAccess,autoMemory,healthActions=false,groupedPhotos=false}){
  const base=documentAccess?documentChatSchema:chatSchema;
- const schema=healthActions?object({...base.properties,proposal:{anyOf:[...base.properties.proposal.anyOf,proposal('health_action',healthActionSchema)]}}):base;
+ const additions=[...(healthActions?[proposal('health_action',healthActionSchema)]:[]),...(groupedPhotos?[proposal('photo_meal',groupedMealSchema)]:[])];
+ const schema=additions.length?object({...base.properties,proposal:{anyOf:[...base.properties.proposal.anyOf,...additions]}}):base;
  return autoMemory?withAutomaticMemory(schema):schema;
 }
 export const ledgerReadSchema=object({scope:choice('stock','stock_alerts','meal','nutrition','expenses','balance','budget','weight','cycle'),query:string()});

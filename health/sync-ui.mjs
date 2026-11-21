@@ -4,7 +4,7 @@ import {APP_VERSION} from '../shell.mjs';
 import {readRestoreSnapshot,readState} from './storage.mjs';
 import {importSource} from './sync-source.mjs';
 import {planHealthMerge} from './sync.mjs';
-import {commitHealthMerge,createSyncPackage,financeStamp} from './sync-io.mjs';
+import {commitHealthMerge,createSyncPackage,financeStamp,HEALTH_FILE_STATUS_KEY} from './sync-io.mjs';
 
 const states={added:'新增',existing:'已导入',same:'相同',corrected:'已更正',suspect:'疑似重复或待核对',conflict:'冲突'};
 function element(tag,text,css){
@@ -148,8 +148,11 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
    const key='airplane-health-sync-device-v1';
    let id=account.finance.getItem(key);
    if(!id){id=crypto.randomUUID();account.finance.setItem(key,id);}
-   download('airplane-health-sync-'+localDate()+'.json',stringify(createSyncPackage(current,{id,version:APP_VERSION})));
-   notify('已导出同步包，请手动带回外部主账。');
+   const pack=createSyncPackage(current,{id,version:APP_VERSION});
+   download('airplane-health-sync-'+localDate()+'.json',stringify(pack));
+   try{account.finance.setItem(HEALTH_FILE_STATUS_KEY,JSON.stringify({issuedAt:pack.anchor.exportedAt,revision:current.revision??0}));}
+   catch{/* Download is independent of the device's status display. */}
+   notify('已生成同步包，请手动带回外部主账。');
   }catch(error){notify(error.message);}
  };
 }

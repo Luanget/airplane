@@ -1,3 +1,4 @@
+import {PROFILE_ID,compareProfileVersion,preferenceTopic} from './health-profile.mjs';
 import {migratedPreferences} from './skills.mjs';
 
 export const MEMORY_KEY='airplane-ai-memory-v1';
@@ -34,14 +35,17 @@ export function memoryLibrary(store,legacyKey){
  }
  function prepare(id,changes,action){
   const {raw,rows}=read();
-  const previous=rows.find(row=>row.id===id)??null;
+  const previous=id===PROFILE_ID?null:rows.find(row=>row.id===id)??null;
   if(action==='add'?id!==null:!previous)throw Error('找不到指定的记忆条目');
   const updated=action==='delete'?null:{...previous,...changes,
-   id:previous?.id??crypto.randomUUID(),enabled:changes.enabled??previous?.enabled??true};
+   id:previous?.id??crypto.randomUUID(),enabled:changes.enabled??previous?.enabled??true,
+   priority:Number(changes.priority??previous?.priority??50),origin:'manual',updatedAt:new Date().toISOString()};
   if(updated){
    updated.text=String(updated.text??'').trim();
    updated.name=String(updated.name??'').trim()||updated.text.slice(0,24);
    if(!updated.text)throw Error('请填写记忆内容');
+   if(!Number.isInteger(updated.priority)||updated.priority<0||updated.priority>100)throw Error('优先级请输入 0 至 100 的整数');
+   updated.topic=previous?.topic??preferenceTopic(updated.name+' '+updated.text);
    if(rows.some(row=>row.id!==id&&normalize(row.text)===normalize(updated.text)))throw Error('已经记住这条内容');
   }
   const next=action==='add'?[...rows,updated]:rows.flatMap(row=>row.id!==id?[row]:updated?[updated]:[]);
@@ -59,14 +63,18 @@ export function memoryLibrary(store,legacyKey){
    const {name,text,evidence}=update;
    if(typeof name!=='string'||typeof text!=='string'||typeof evidence!=='string'||
     !name.trim()||!text.trim()||!evidence.trim()||!source.includes(evidence))continue;
+   if(!/平时|通常|常常|总是|以后|习惯|长期|喜欢|偏好|默认|记住|一直|不再|优先|每[天周月]|归为/.test(evidence)||
+    /如果|假如|假设|例如|比如|举例|这次|仅今天|光这次|[？?]/.test(evidence))continue;
    if(/sk-[\w-]{12,}|\b(?:api[ -]?key|password|bearer)\b|密码|密钥|验证码|身份证/i.test([name,text,evidence].join(' ')))continue;
    const title=normalize(name).trim(),content=normalize(text).trim();
    if(rows.some(row=>normalize(row.text).trim()===content))continue;
-   const related=rows.filter(row=>normalize(row.name).trim()===title);
+   const topic=preferenceTopic([name,text,evidence].join(' '));
+   const related=rows.filter(row=>row.id!==PROFILE_ID&&(normalize(row.name).trim()===title||topic&&row.topic===topic));
    if(related.length>1||related[0]?.enabled===false)continue;
    const row=related[0];
-   if(row)row.text=text.trim();
-   else rows.push({id:crypto.randomUUID(),name:name.trim(),text:text.trim(),enabled:true});
+   const fields={text:text.trim(),topic:topic??row?.topic??null,updatedAt:new Date().toISOString(),origin:'conversation',priority:Math.max(45,row?.priority??0)};
+   if(row)Object.assign(row,fields);
+   else rows.push({id:crypto.randomUUID(),name:name.trim(),enabled:true,...fields});
    saved.push(row?.name??name.trim());
   }
   if(saved.length){
@@ -75,17 +83,36 @@ export function memoryLibrary(store,legacyKey){
   }
   return [...new Set(saved)];
  }
+ function importProfile(profile){
+  const {raw,rows}=read();
+  const previous=rows.find(row=>row.id===PROFILE_ID);
+  if(previous?.version&&compareProfileVersion(profile.version,previous.version)<0)throw Error('所选规则版本已过期');
+  const existing=new Map(rows.map(row=>[row.id,row]));
+  const added=profile.entries.filter(row=>!existing.has(row.id)||existing.get(row.id).origin==='health-profile')
+   .map(row=>({...row,enabled:existing.get(row.id)?.enabled??true}));
+  const ids=new Set(added.map(row=>row.id));
+  const next=rows.filter(row=>row.id!==PROFILE_ID&&!ids.has(row.id)&&row.origin!=='health-profile').map(row=>
+   row.origin!=='manual'&&row.origin!=='conversation'&&(/^l-(data|record|stock|progress|meals)$/.test(row.id)||
+   row.id==='legacy-preference'&&/主账|TDEE|封账|核心规则|历史规则/i.test(row.text))?
+   {...row,enabled:false,archivedProfile:true}:row);
+  next.push(...added,{id:PROFILE_ID,name:'健康规则版本',text:'现行核心规则及来源',enabled:false,
+    version:profile.version,ruleIds:profile.ruleIds});
+  return ()=>{if(store.getItem(MEMORY_KEY)!==raw)throw Error('记忆已变化，请重新预览');store.setItem(MEMORY_KEY,JSON.stringify(next));};
+ }
  return {
-  list:()=>read().rows,prepare,rememberFromTurn,
+  list:()=>read().rows.filter(row=>row.id!==PROFILE_ID),profile:()=>read().rows.find(row=>row.id===PROFILE_ID)??null,
+  prepare,rememberFromTurn,importProfile,
   relevant(text){
    const terms=keywords(text);
-   const ranked=read().rows.filter(row=>row.enabled).map(({name,text})=>{
+   const ranked=read().rows.filter(row=>row.enabled&&!row.archivedProfile).map(({name,text,priority,updatedAt,topic})=>{
     const title=keywords(name),body=keywords(text);
     const score=[...terms].reduce((n,term)=>n+(title.has(term)?2:body.has(term)?1:0),0);
-    return {name,text,score};
-   }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score);
-   let chars=0;
-   return ranked.flatMap(({name,text})=>{
+    return {name,text,score,priority,updatedAt,topic};
+   }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score||(b.priority??0)-(a.priority??0)||String(b.updatedAt??'').localeCompare(String(a.updatedAt??'')));
+   let chars=0;const topics=new Set();
+   return ranked.flatMap(({name,text,topic})=>{
+    if(topic&&topics.has(topic))return [];
+    if(topic)topics.add(topic);
     const remaining=1800-chars;
     if(remaining<=name.length)return [];
     const snippet=text.slice(0,remaining-name.length);
@@ -108,6 +135,7 @@ export function mountMemorySettings(panel,library,onChange){
   close();editing=row;
   form.elements.name.value=row?.name??'';
   form.elements.text.value=row?.text??'';
+  form.elements.priority.value=row?.priority??50;
   form.elements.enabled.checked=row?.enabled??true;
   status.textContent='';anchor.after(form);form.hidden=false;form.elements.text.focus();
  }
@@ -123,6 +151,8 @@ export function mountMemorySettings(panel,library,onChange){
    const edit=document.createElement('button'),remove=document.createElement('button');
    const text=document.createElement('p'),actions=document.createElement('div');
    item.className='assistant-memory-item';name.textContent=row.name+(row.enabled?'':' · 已停用');text.textContent=row.text;
+   item.append(name,text);
+   if(row.updatedAt){const when=document.createElement('small');when.textContent='优先级 '+(row.priority??50)+' · '+row.updatedAt.slice(0,10);item.append(when);}
    edit.type=remove.type='button';edit.className=remove.className='text-button';
    edit.textContent='编辑';edit.setAttribute('aria-label','编辑 '+row.name);
    remove.textContent='删除';remove.setAttribute('aria-label','删除 '+row.name);
@@ -131,7 +161,7 @@ export function mountMemorySettings(panel,library,onChange){
     try{library.prepare(row.id,{},'delete').commit();update();onChange();status.textContent='已删除记忆。';}
     catch(err){status.textContent=err.message;}
    };
-   actions.className='chat-actions';actions.append(edit,remove);item.append(name,text,actions);list.append(item);
+   actions.className='chat-actions';actions.append(edit,remove);item.append(actions);list.append(item);
   }
  }
  create.onclick=()=>editor(null,create);cancel.onclick=close;
@@ -139,7 +169,7 @@ export function mountMemorySettings(panel,library,onChange){
   event.preventDefault();
   try{
    library.prepare(editing?.id??null,{name:form.elements.name.value,text:form.elements.text.value,
-    enabled:form.elements.enabled.checked},editing?'update':'add').commit();
+    enabled:form.elements.enabled.checked,priority:form.elements.priority.value},editing?'update':'add').commit();
    update();onChange();status.textContent='已保存记忆。';
   }catch(err){status.textContent=err.message;}
  };

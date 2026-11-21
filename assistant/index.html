@@ -113,6 +113,7 @@
             <form class="assistant-fields" hidden>
               <label>名称<input name="name"></label>
               <label>记忆内容<textarea name="text" rows="3" required></textarea></label>
+              <label>优先级<input name="priority" type="number" min="0" max="100" step="1" value="50"></label>
               <label class="document-access"><input type="checkbox" name="enabled" checked>启用这条记忆</label>
               <div class="chat-actions">
                 <button type="button" class="text-button" data-cancel-memory>收起</button>
@@ -128,6 +129,20 @@
             <p>授权后，信息明确的饮食、包装消耗和少量更正会直接保存，可在结果中撤销。</p>
             <label class="document-access"><input type="checkbox" data-document-access>完整数据权限</label>
             <p>可按指令访问原始数据。覆盖、批量删除和修改关键设置需要核对。关闭「允许本轮查询本机数据」会暂停直接写入。</p>
+          </div>
+        </details>
+        <details class="card assistant-panel" id="assistant-agent">
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">健康 Skills 与规则</span><span class="chevron" data-shell-icon="chevron"></span></summary>
+          <div class="assistant-panel-body">
+            <p data-profile-summary></p>
+            <div class="chat-actions"><button type="button" class="text-button" data-profile-ledger>读取本机主账</button><button type="button" class="text-button" data-profile-choose>导入规范文件</button><input type="file" data-profile-file accept=".md,.json" multiple hidden></div>
+            <div data-profile-preview hidden>
+              <pre class="agent-profile-preview" data-profile-values></pre>
+              <label class="document-access"><input type="checkbox" data-profile-calculations>同时采用预览中的计算参数</label>
+              <div class="chat-actions"><button type="button" class="text-button" data-profile-cancel>取消</button><button type="button" class="primary-button" data-profile-apply>保存个人配置</button></div>
+            </div>
+            <output data-agent-status role="status"></output>
+            <div data-skill-list></div>
           </div>
         </details>
         <details class="card assistant-panel assistant-context">

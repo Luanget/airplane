@@ -1,13 +1,13 @@
-const SW_VERSION = '80';
+const SW_VERSION = '81';
 const scope = self.registration.scope;
 const prefix = 'airplane-shell:' + new URL(scope).pathname + ':';
 const CACHE = prefix + SW_VERSION;
 const SHELL = [
   './index.html','./styles.css','./app.js','./shared.css','./updates.mjs',
   './calendar.mjs','./boot.mjs','./legacy-export.mjs','./shell.mjs','./choice-picker.mjs','./field-picker.mjs','./account.mjs','./vendor/nacl-fast.min.js','./manifest.webmanifest',
-  './health/index.html','./health/app.css','./health/app.mjs','./health/core.mjs','./health/container-ledger.mjs','./health/containers.mjs','./health/package-ui.mjs','./health/presentation.mjs','./health/weight-chart.mjs',
+  './health/index.html','./health/app.css','./health/app.mjs','./health/core.mjs','./health/agent-rules.mjs','./health/container-ledger.mjs','./health/containers.mjs','./health/package-ui.mjs','./health/presentation.mjs','./health/weight-chart.mjs',
   './finance-storage.mjs','./finance-metrics.mjs','./health/backup.mjs','./health/sync-source.mjs','./health/sync.mjs','./health/sync-io.mjs','./health/sync-ui.mjs','./health/inventory.mjs','./health/purchases.mjs','./health/purchase-sync.mjs','./health/shopping.mjs','./health/purchase-ui.mjs','./health/storage.mjs','./health/assistant.mjs','./health/candidates.mjs',
-  './assistant/index.html','./assistant/workspace.css','./ai/workspace.mjs','./ai/health-actions.mjs','./ai/context.mjs','./ai/data.mjs','./ai/documents.mjs','./ai/memory.mjs','./ai/document-patch.mjs','./ai/data-guide.mjs','./ai/skills.mjs','./ai/operations.mjs','./ai/demo.mjs','./ai/threads.mjs','./ai/batch.mjs','./ai/deletion.mjs','./ai/usage.mjs',
+  './assistant/index.html','./assistant/workspace.css','./ai/workspace.mjs','./ai/health-actions.mjs','./ai/health-profile.mjs','./ai/health-report.mjs','./ai/agent-settings.mjs','./ai/meal-photos.mjs','./ai/context.mjs','./ai/data.mjs','./ai/documents.mjs','./ai/memory.mjs','./ai/document-patch.mjs','./ai/data-guide.mjs','./ai/skills.mjs','./ai/operations.mjs','./ai/demo.mjs','./ai/threads.mjs','./ai/batch.mjs','./ai/deletion.mjs','./ai/usage.mjs',
   './health/contract.mjs','./health/food-history.mjs','./ai/client.mjs','./ai/chat.mjs','./ai/finance.mjs','./ai/keys.mjs','./ai/models.mjs','./ai/responses.mjs','./ai/stream.mjs',
   './icons/icon-192.png','./icons/icon-512.png','./icons/icon-512-maskable.png','./icons/apple-touch-icon.png'
 ];

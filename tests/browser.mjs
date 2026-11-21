@@ -555,7 +555,7 @@ try {
         text:JSON.stringify({reply:'请核对分装数量。',proposal:{mode:'portions',date:null,
           result:{name:'合成计数食品',quantities:[3,7],unit:'个'}}})}]}]}});
     }
-    if(input.text==='识别合成两张照片'){
+    if(input.text==='分别识别合成两张照片'){
       assert.equal(content.length,2);
       assert.equal(content[1].type,'input_image');
       const photoIndex=Number(body.instructions.match(/照片中的第 (\d) 张/)?.[1]);
@@ -929,7 +929,7 @@ try {
   await form.locator('[type=file]').setInputFiles(twoImages.map((base64,i)=>({
    name:'image-'+i+'.png',mimeType:'image/png',buffer:Buffer.from(base64,'base64')
   })));
-  await say('识别合成两张照片');
+  await say('分别识别合成两张照片');
   const photos=chat.getByRole('region',{name:'照片识别结果'});
   await photos.getByRole('button',{name:'核对照片 2'}).click();
   assert.equal(await foodCount(),beforePhotos);
@@ -951,7 +951,7 @@ try {
   await photos.getByText(/已放弃候选/).waitFor();
   await chat.getByText(/^这组共 2 张照片，已识别 2 张/).waitFor();
   assert.equal(await photos.getByRole('button',{name:/核对照片/}).count(),0);
-  const photoCalls=calls.filter(call=>call.text==='识别合成两张照片');
+  const photoCalls=calls.filter(call=>call.text==='分别识别合成两张照片');
   assert.equal(photoCalls.length,3);
   assert.notEqual(photoCalls[0].photo,photoCalls[1].photo);
   assert.equal(photoCalls[0].photo,photoCalls[2].photo);

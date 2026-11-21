@@ -778,7 +778,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
  }
  chooseBaseline(current,next,baselineChoices,new Set([...newLegacyDates,...Object.keys(baselineChoices)]));
 
- const settingFields=['calorieTarget','proteinMin','proteinMax','fatMin','sodiumTarget','baselineTdee','cycleDays','cycleTarget','cycleAnchor','preferences'];
+ const settingFields=['calorieTarget','proteinMin','proteinMax','fatMin','sodiumTarget','baselineTdee','cycleDays','cycleTarget','cycleAnchor','preferences','agentEnergy','energyBaselineChanges'];
  for(const field of settingFields){
   const value=incoming.settings[field],before=current.settings[field];
   if(value===undefined||same(value,before))continue;

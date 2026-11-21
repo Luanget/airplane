@@ -183,7 +183,7 @@ export function eventData(type,row){
  }
  if(type==='weights')return {...base,kg:numeric(row.kg),isMorning:row.isMorning??/^(?:是|暂定纳入|纳入)/.test(row.trendStatus??'')};
  return {...base,name:normalized(row.name),km:numeric(row.km),minutes:numeric(row.minutes),kcal:numeric(row.kcal),
-  energyKind:row.energyKind??'activity',includedInBase:!!row.includedInBase,status:row.status??''};
+  energyKind:row.energyKind??'activity',includedInBase:!!row.includedInBase,...(row.excludedFromEnergy?{excludedFromEnergy:true}:{}),status:row.status??''};
 }
 
 export function baselines(state){

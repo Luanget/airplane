@@ -3,6 +3,7 @@ import {existsSync,readFileSync} from 'node:fs';
 import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {extname} from 'node:path';
+import {CORE_RULES} from '../ai/health-profile.mjs';
 import {freshData} from '../finance-storage.mjs';
 import {assistantFixture,action,examples,proposal} from './health-action-fixture.mjs';
 
@@ -36,6 +37,14 @@ try{
  const shortStock='吃了十包荞麦面';
  expected.set(shortStock,proposal(action('eat',shortStock,{name:'荞麦面',amount:10,unit:'包',whole:'yes'})));
  expected.set(badText,proposal(action('eat','吃了20g牛肉酱',{name:'牛肉酱',amount:200,unit:'g',whole:'no'})));
+ const photoText='午餐吃了这餐，请记账，另外续粉一份，记录晨重72.4kg';
+ const photoBase={dishKey:'synthetic-noodle',name:'合成米粉',role:'served',images:[1],amount:170,unit:'g',
+  confidence:'estimated',basisAmount:100,basisUnit:'g',nutrition:{kcal:100,protein:2,carbs:21,fat:3,sodium:90},uncertainty:'合成影像估量'};
+ const photoPlan={intent:'execute',date:null,meal:'午餐',observations:[
+  photoBase,{...photoBase,images:[2]},
+  {...photoBase,role:'label',images:[3],amount:null,confidence:'label'},
+  {...photoBase,role:'extra',images:[3],amount:80}
+ ],steps:[action('weight','记录晨重72.4kg',{kg:72.4,morning:'yes'})]};
  await ctx.route('https://api.openai.com/v1/responses',async route=>{
   const headers={'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'authorization,content-type','Access-Control-Allow-Methods':'POST'};
   if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
@@ -45,7 +54,12 @@ try{
   const full=body.tools.some(tool=>tool.name==='read_app_document');
   assert.equal(body.store,false);
   let result;
-  if(input.text===financeText)result={mode:'document_edit',date:null,result:{document:'finance',patch:'[]'}};
+  if(input.text===photoText){
+   assert.equal(body.input[0].content.filter(row=>row.type==='input_image').length,3);
+   assert.match(body.instructions,/同一菜不同角度/);
+   assert.match(body.instructions,/photos v1/);
+   result={mode:'photo_meal',date:null,result:photoPlan};
+  }else if(input.text===financeText)result={mode:'document_edit',date:null,result:{document:'finance',patch:'[]'}};
   else if(input.text===deleteText)result={mode:'delete_record',date:input.date,result:{kind:'food',query:'',meal:null,selection:'all'}};
   else {
    assert.ok(expected.has(input.text),input.text);
@@ -166,4 +180,51 @@ try{
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),390);
  assert.deepEqual(errors,[]);
  console.log('PASS F ambiguity, anomalous weight, model error, atomic failure, reload retry, undo and high-risk permission checks');
+ await open();
+ const agent=settings.locator('#assistant-agent');
+ await agent.getByText('健康 Skills 与规则',{exact:true}).click();
+ assert.equal(await agent.locator('[data-skill-list] input:checked').count(),9);
+ const content=['# 合成工作规范',...Object.keys(CORE_RULES),
+  '普通日参考约 1700 kcal。TDEE基线2900kcal，已包含日常通勤。',
+  '六天缺口7700 kcal。一天通常1袋鸡胸。芹菜在午餐与晚餐分两餐。'].join(String.fromCharCode(10));
+ await agent.locator('[data-profile-file]').setInputFiles({name:'HEALTH_WORKFLOW_AND_STORAGE_310101.1.md',
+  mimeType:'text/markdown',buffer:Buffer.from(content)});
+ await agent.locator('[data-profile-preview]').waitFor();
+ await agent.locator('[data-profile-calculations]').check();
+ await agent.getByRole('button',{name:'保存个人配置'}).click();
+ await agent.getByText('已保存个人配置 310101.1，计算参数已采用。').waitFor();
+ assert.equal((await read()).state.settings.baselineTdee,2900);
+ assert.equal((await read()).state.settings.cycleDays,6);
+ const weigh=agent.getByRole('checkbox',{name:'包装称重 · v1'});
+ await weigh.uncheck();
+ await close();
+ await page.locator('[data-new]').click();
+ await sent('牛肉酱现在305g',/包装称重.*已停用/);
+ await open();await weigh.check();await close();
+ console.log('PASS profile preview and explicit calculation adoption; Skill toggle gates writes');
+ await page.locator('[data-new]').click();
+ const assets=await page.evaluate(()=>['#aa2222','#228822','#2222aa'].map(color=>{
+  const canvas=document.createElement('canvas');canvas.width=24;canvas.height=24;
+  const drawing=canvas.getContext('2d');drawing.fillStyle=color;drawing.fillRect(0,0,24,24);
+  return canvas.toDataURL('image/png').split(',')[1];
+ }));
+ const attachments=assets.map((base64,index)=>({name:'meal-'+(index+1)+'.png',mimeType:'image/png',buffer:Buffer.from(base64,'base64')}));
+ const beforePhoto=await read();
+ await composer.locator('[name=image]').setInputFiles(attachments);
+ await sent(photoText,/已保存。.*170 g.*80 g.*72.4 kg/s);
+ const afterPhoto=await read();
+ assert.equal(afterPhoto.state.revision,beforePhoto.state.revision+1);
+ assert.equal(afterPhoto.state.local.foods.length,beforePhoto.state.local.foods.length+2);
+ assert.equal(afterPhoto.state.local.weights.length,beforePhoto.state.local.weights.length+1);
+ assert.equal(afterPhoto.state.local.foods.at(-1).agentEvidence.part,'extra');
+ assert.equal(afterPhoto.state.local.foods.at(-2).agentEvidence.part,'served');
+ await log.getByText('营养、库存与进度明细',{exact:true}).last().click();
+ await log.getByText(/续份独立计入.*正式累计缺口/s).waitFor();
+ await composer.locator('[name=image]').setInputFiles(attachments);
+ await sent(photoText,/刚已保存，未重复入账/,0);
+ assert.equal((await read()).state.revision,afterPhoto.state.revision);
+ await page.setViewportSize({width:375,height:500});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),375);
+ assert.deepEqual(errors,[]);
+ console.log('PASS same-meal three-photo grouping, additional serving, reporting, deduplicated retry and mixed execution');
 }finally{await browser?.close();server.close();}

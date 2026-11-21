@@ -7,6 +7,14 @@ import {saveState} from './storage.mjs';
 import {CATALOG_TABLES,EVENT_TABLES,EVENT_TYPES,SYNC_FORMAT,eventData,externalCatalogs,foodStatus,hash,importSource,inheritedKey,inheritedLineage,originalEventRefs,same,sourceId,stable} from './sync-source.mjs';
 import {planHealthMerge,verifyMergeConsistency} from './sync.mjs';
 
+export const HEALTH_FILE_STATUS_KEY='airplane-health-file-status-v1';
+export function readHealthFileStatus(store,state){
+ let issued=null;
+ try{issued=JSON.parse(store.getItem(HEALTH_FILE_STATUS_KEY));}catch{}
+ return {device:{revision:state.revision??0,sourceVersion:state.importInfo?.sourceVersion??null},
+  syncPackage:issued&&typeof issued.issuedAt==='string'?{issuedAt:issued.issuedAt,revision:issued.revision}:null,
+  external:{verified:false,message:'外部主账合并状态需在外部核对；本机无法验证。'}};
+}
 export const financeStamp=record=>stable([record.primary,record.payload]);
 export async function commitHealthMerge(current,plan,expectedFinance,account){
  if(plan.unresolved.length||plan.problems.length)throw Error('请先解决预览中的冲突或关联问题');
@@ -81,11 +89,11 @@ function toExternalEvent(type,row){
   const status=foodStatus(row);
   return {...raw,'餐次':row.meal,'食物/饮品':row.name,'食品ID':row.foodId,'份量/重量':row.portion,
    '状态':{actual:'实际',plan:'计划',cancelled:'取消'}[status],...rawNutrients(row.nutrition),
-   ...(row.cost!=null?{'饮食成本(CNY)':row.cost}:{}),...(row.weighing?{airplane_weighing:row.weighing}:{})};
+   ...(row.cost!=null?{'饮食成本(CNY)':row.cost}:{}),...(row.weighing?{airplane_weighing:row.weighing}:{}),...(row.agentEvidence?{airplane_evidence:row.agentEvidence}:{})};
  }
  if(type==='weights')return {...raw,'数值':row.kg,'纳入趋势':row.trendStatus??(row.isMorning?'是':'否')};
  return {...raw,'项目':row.name,'距离(km)':row.km,'时长(min)':row.minutes,'活动消耗估计(kcal)':row.kcal,
-  '状态':row.status??'实际',includedInBase:row.includedInBase,energyKind:row.energyKind};
+  '状态':row.status??'实际',includedInBase:row.includedInBase,energyKind:row.energyKind,...(row.excludedFromEnergy?{excludedFromEnergy:true}:{})};
 }
 
 export function externalBase(raw,{identity,choices}={}){

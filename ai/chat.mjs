@@ -20,6 +20,12 @@ import {deleteReview} from './deletion.mjs';
 import {displayUsage,totalUsage} from './usage.mjs';
 import {executeHealthAction,healthActionReceipt,healthActionPreview,healthContext,hasHealthAuto,readPackages,READ_LIMIT,
  setHealthAuto,undoHealthAction} from './health-actions.mjs';
+import {mountAgentSettings} from './agent-settings.mjs';
+import {assertSkillAction,selectSkills,skillCatalog} from './skills.mjs';
+import {habitPolicy} from './health-profile.mjs';
+import {healthReport,renderHealthReport} from './health-report.mjs';
+import {groupMealPhotos} from './meal-photos.mjs';
+import {readHealthFileStatus} from '../health/sync-io.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
 
 const demo=new URLSearchParams(location.search).get('demo')==='1';
@@ -62,7 +68,7 @@ $('#assistant-settings').onclick=()=>{settings.showModal();
  automaticMemory.checked=automaticMemoryEnabled(workspace.finance);
  healthAuto.checked=hasHealthAuto(workspace.finance);
  documentAccess.checked=hasDocumentAccess(workspace.finance);
- refreshModels();refreshMemory();void refreshUsage();};
+ refreshModels();refreshMemory();refreshAgent();void refreshUsage();};
 async function refreshUsage(){
  if(demo)return;
  const node=$('[data-local-usage]');
@@ -283,7 +289,7 @@ function append(role,text,carry=true,source){
 function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;delete review.dataset.syncPending;}
 function clearFollowUp(){followUp=null;retryFollowUp.hidden=true;}
 function sessionFlow({id,input,options}){
- return {id,input:{...input,history:[],photo:null},options:{...options,memory:undefined,contextSummary:undefined,healthContext:undefined,healthReference:undefined},steps:[]};
+ return {id,input:{...input,history:[],photo:null},options:{...options,memory:undefined,contextSummary:undefined,healthContext:undefined,healthReference:undefined,photos:undefined,skills:undefined},steps:[]};
 }
 function checkpoint(save){
  let text='',timer;
@@ -355,6 +361,7 @@ function renderThread(previousPhotos){
  syncThreads();updateContext();lock();
 }
 const refreshMemory=mountMemorySettings($('#assistant-memory'),workspace.memory,updateContext);
+const refreshAgent=mountAgentSettings($('#assistant-agent'),workspace,refreshMemory);
 renderThread();
 newChat.onclick=()=>{
  try{book.start();openHistory(false);tell('');renderThread();}
@@ -380,6 +387,10 @@ for(const button of document.querySelectorAll('[data-example]')){
 
 function requiresConfirmation(proposal){
  const {mode,result}=proposal;
+ const associated={entry:'eat',food_edit:'correct',activity:'activity',portions:'split',inventory:'inventory',purchase:'purchase',plan:'next_meal'}[mode];
+ if(associated){
+  try{assertSkillAction(skillCatalog(workspace.finance),associated);}catch{return true;}
+ }
  if(mode==='document_edit'){
   // Conversation-only metadata edits have a narrowly scoped shortcut.
   if(result.document!=='conversations')return true;
@@ -597,7 +608,8 @@ function rememberAutomatically(response,flow){
 function healthOptions(flow,ticket,confirmed=false){
  const options=flow.options,auto=!!options.healthAuto&&hasHealthAuto(workspace.finance);
  return {id:ticket.operationId??ticket.id,text:flow.input.text,today:flow.input.date,
-  clock:options.healthClock??localClock(),reference:options.healthReference??book.current?.healthReference,
+  clock:options.healthClock??localClock(),mediaKey:options.mediaKey,skills:skillCatalog(workspace.finance),
+  habits:habitPolicy(workspace.memory.list()),photoSteps:flow.photoSteps,reference:options.healthReference??book.current?.healthReference,
   foodDate:book.current?.foodDate,auto,confirmed,
   guard:()=>{
    if(!flow.options.allowRead||!composer.elements.allowRead.checked)throw Error('本轮本机数据权限已关闭，账本未更改。');
@@ -605,6 +617,7 @@ function healthOptions(flow,ticket,confirmed=false){
   }};
 }
 function echoHealth(ticket,result,source){
+ source=result.source??source;
  const record=result.record,id=record&&!record.undone?record.id:null;
  if(record?.reference&&!record.undone)book.setHealthReference(record.reference);
  if(!book.finish(ticket,result.text,source,null,id?{healthActionId:id}:undefined))return;
@@ -618,7 +631,12 @@ async function saveHealthProposal(plan,flow,ticket,source,confirmed=false){
  try{
   const options=healthOptions(flow,ticket,confirmed);
   const base=flow.healthBase??await workspace.readHealth();
-  return await executeHealthAction(workspace,base,plan,{...options,signal:controller.signal});
+  return await executeHealthAction(workspace,base,plan,{...options,signal:controller.signal,guard:()=>{
+   options.guard();
+   const currentSkills=skillCatalog(workspace.finance);
+   if(flow.photoSteps)assertSkillAction(currentSkills,'photo_meal');
+   for(const step of plan.steps)assertSkillAction(currentSkills,step.kind);
+  }});
  }finally{
   activeRequest=null;stop.hidden=true;
  }
@@ -631,11 +649,13 @@ async function completeHealth(plan,flow,source,ticket){
  let prepared;
  try{prepared=healthActionPreview(base,plan,options);}
  catch(err){echoHealth(ticket,{text:err.message},source);tell('');return;}
- if(!prepared.execute){echoHealth(ticket,{text:prepared.preview},source);tell('');return;}
- if(!book.stageHealth(ticket,plan))return;
- if(!options.auto){
-  if(flow.options.healthAuto){tell('健康自动执行权限已关闭，账本未更改。');showPending();return;}
-  const body=document.createElement('p');body.textContent='待保存 · '+prepared.preview;
+ if(!prepared.execute){
+  echoHealth(ticket,{text:[prepared.preview,...(flow.photoNotes??[])].filter(Boolean).join('\n'),source:prepared.source},source);tell('');return;}
+ const savedPlan=flow.photoSteps?{plan,photoSteps:flow.photoSteps,photoReview:flow.photoReview,photoNotes:flow.photoNotes}:plan;
+ if(!book.stageHealth(ticket,savedPlan))return;
+ if(!options.auto||flow.photoReview){
+  if(flow.options.healthAuto&&!flow.photoReview){tell('健康自动执行权限已关闭，账本未更改。');showPending();return;}
+  const body=document.createElement('p');body.textContent=['待保存 · '+prepared.preview,...(flow.photoNotes??[])].join('\n');
   const apply=document.createElement('button');apply.type='submit';apply.textContent='确认健康记录';apply.className='primary-button';
   const cancel=document.createElement('button');cancel.type='button';cancel.className='text-button';cancel.textContent='取消';
   cancel.onclick=()=>{echoHealth(ticket,{text:'已取消健康记录。'},source);clearReview();};
@@ -650,10 +670,25 @@ async function completeHealth(plan,flow,source,ticket){
   return;
  }
  const result=await saveHealthProposal(plan,flow,ticket,source);
+ if(flow.photoNotes?.length)result.text+='\n'+flow.photoNotes.join('\n');
  echoHealth(ticket,result,source);tell('');
 }
 async function complete(response,flow,source,ticket){
  clearReview();tell('');
+ if(ticket&&response.proposal?.mode==='photo_meal'){
+  try{
+   assertSkillAction(skillCatalog(workspace.finance),'photo_meal');
+   const grouped=groupMealPhotos(response.proposal.result,flow.input.text,flow.options.photos?.length??0);
+   if(!grouped.plan.steps.length){echoHealth(ticket,{text:grouped.notes.join('；')||'这组照片暂时没有可记录的食物。'},source);return;}
+   flow.photoSteps=grouped.photoSteps;flow.photoReview=grouped.review;flow.photoNotes=grouped.notes;
+   await completeHealth(grouped.plan,flow,source,ticket);
+  }catch(err){
+   if(book.current?.pending?.healthAction)throw err;
+   echoHealth(ticket,{text:err.message},source);tell('');
+  }
+  rememberAutomatically(response,flow);
+  return;
+ }
  if(ticket&&response.proposal?.mode==='health_action'){
   await completeHealth(response.proposal.result,flow,source,ticket);
   rememberAutomatically(response,flow);
@@ -679,6 +714,9 @@ async function complete(response,flow,source,ticket){
  rememberAutomatically(response,flow);
 }
 function describeSummary(scope,summary){
+ if(scope==='health_report')return renderHealthReport(summary);
+ if(scope==='health_status')return '本机账本修订 '+summary.device.revision+' · '+
+  (summary.syncPackage?'最近生成同步包 '+summary.syncPackage.issuedAt:'本机未记录同步包导出')+'。'+summary.external.message;
  if(scope==='app_data'||scope==='packages')return JSON.stringify(summary,null,2);
  if(scope==='balance')return '当前总余额 '+new Intl.NumberFormat('zh-CN',{style:'currency',currency:summary.currency}).format(summary.balance);
  if(scope==='budget')return [
@@ -762,13 +800,15 @@ async function resolveResponse(response,flow,savePartial){
    const key=JSON.stringify(Object.entries(args).sort(([a],[b])=>a.localeCompare(b)));
    if(queried.has(key))throw Error('助手重复查询同一范围，请重试或缩小问题。');
    queried.add(key);
-   tell(args.scope==='app_document'?'正在查询指定的原始数据…':'正在查询'+(args.scope==='packages'?'独立包装':readLabels[args.scope])+'…');
+   tell(args.scope==='app_document'?'正在查询指定的原始数据…':'正在查询'+(args.scope==='packages'?'独立包装':args.scope==='health_report'?'健康报告':args.scope==='health_status'?'文件状态':readLabels[args.scope])+'…');
    let summary;
    if(args.scope==='app_document'){
     if(!options.documentAccess)throw Error('本轮未开启完整数据权限');
     summary=await readAppDocument(workspace,args);
    }else if(args.scope==='app_data')summary=await readAppData(workspace,book,args);
    else if(args.scope==='packages')summary=readPackages(flow.healthBase??await workspace.readHealth(),args);
+   else if(args.scope==='health_report')summary=healthReport(flow.healthBase??await workspace.readHealth(),args.date??input.date,input.date,{includeMeals:args.view==='meals'});
+   else if(args.scope==='health_status')summary=readHealthFileStatus(workspace.finance,flow.healthBase??await workspace.readHealth());
    else summary=await readLedger(workspace,args,input.date);
    steps.push({item,summary,scope:args.scope});
    response=await requestReply(input,{...options,continuation:steps},savePartial);
@@ -955,13 +995,25 @@ async function sendPhotos(input,options,files){
 }
 async function sendMessage(input,options,files){
  clearFollowUp();book.setFollowUp(null);
- if(files.length>1){await sendPhotos(input,options,files);return;}
- const userText=[input.text,input.photo?'（附一张照片）':''].filter(Boolean).join(' ');
+ if(files.length>1&&!options.groupedPhotos){await sendPhotos(input,options,files);return;}
+ if(options.groupedPhotos&&files.length){
+  const encoded=new Set();
+  for(const file of files)encoded.add(await jpeg(file));
+  options.photos=[...encoded];input={...input,photo:options.photos[0]};
+  const keys=[];
+  for(const photo of options.photos){
+   const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(photo));
+   keys.push(Array.from(new Uint8Array(bytes),value=>value.toString(16).padStart(2,'0')).join(''));
+  }
+  options.mediaKey=keys.sort().join(':');
+ }
+ const userText=[input.text,input.photo?(options.groupedPhotos?'（同餐 '+files.length+' 张照片）':'（附一张照片）'):''].filter(Boolean).join(' ');
  const previous=book.current?.pending?.request;
- const hasPhoto=!!input.photo;
- const reuse=previous?.text===input.text&&previous.hasPhoto===hasPhoto;
+ const hasPhoto=!!input.photo||!!previous?.healthAction?.photoSteps&&previous.text===input.text;
+ if(!files.length&&previous?.healthAction?.photoSteps&&previous.text===input.text)options.mediaKey=previous.mediaKey;
+ const reuse=previous?.text===input.text&&previous.hasPhoto===hasPhoto&&(previous.mediaKey??null)===(options.mediaKey??null);
  const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto,
-  healthClock:options.healthClock},reuse);
+  healthClock:options.healthClock,mediaKey:options.mediaKey},reuse);
  const saved=checkpoint(text=>book.checkpoint(ticket,text));
  clearReview();restoreReview.hidden=true;retryRequest.hidden=true;photoResults.replaceChildren();
  renderTranscript();syncThreads();
@@ -981,7 +1033,8 @@ async function sendMessage(input,options,files){
    echoHealth(ticket,existing);tell('');
   }else if(staged){
    if(!options.healthActions)throw Error('本轮未允许本机健康数据操作。');
-   await completeHealth(staged,flow,null,ticket);
+   if(staged.plan){flow.photoSteps=staged.photoSteps;flow.photoReview=staged.photoReview;flow.photoNotes=staged.photoNotes;}
+   await completeHealth(staged.plan??staged,flow,null,ticket);
   }else{
    const response=await requestReply(input,options,saved.update);
    await showResponse(response,flow,ticket,saved.update);
@@ -1000,7 +1053,7 @@ retryRequest.onclick=()=>{
  if(!item||busy||saving)return;
  composer.elements.text.value=item.text;
  composer.elements.allowRead.checked=item.allowRead;
- if(item.hasPhoto){tell('请重新选中原照片后再发送。');return;}
+ if(item.hasPhoto&&!book.current?.pending?.healthAction){tell('请重新选中原照片后再发送。');return;}
  composer.requestSubmit();
 };
 restoreReview.onclick=async()=>{
@@ -1037,11 +1090,15 @@ composer.onsubmit=async e=>{
   const model=readChatModel(workspace.finance).id;
   const {turns,summary}=await prepareContext(date,model);
   const history=retry&&turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
-  const input={mode:'chat',text,photo,date,history};
+  const groupedPhotos=!demo&&files.length>1&&!/分别|逐张|每张|独立识别/.test(text)&&
+   skillCatalog(workspace.finance).some(skill=>skill.id==='photos'&&skill.enabled)&&composer.elements.allowRead.checked;
+  const input={mode:'chat',text:text||(groupedPhotos?'同餐照片预览':''),photo,date,history};
   const allowRead=composer.elements.allowRead.checked;
   const options={model,contextSummary:summary,allowRead,memory:memoriesFor(input,allowRead),
    documentAccess:hasDocumentAccess(workspace.finance),autoMemory:automaticMemoryEnabled(workspace.finance),
-   healthActions:!demo&&allowRead&&!files.length&&!!text,healthAuto:allowRead&&hasHealthAuto(workspace.finance),
+   skills:allowRead?selectSkills(skillCatalog(workspace.finance),{text,photos:groupedPhotos,
+    previousText:history.filter(row=>row.role==='user').at(-1)?.text}):[],groupedPhotos,
+   healthActions:!demo&&allowRead&&(!files.length||groupedPhotos)&&!!input.text,healthAuto:allowRead&&hasHealthAuto(workspace.finance),
    healthClock:(retry?pending.healthClock:null)??localClock(),healthReference:book.current?.healthReference};
   if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
