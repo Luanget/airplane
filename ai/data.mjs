@@ -126,6 +126,7 @@ const readableOnly={
  conversation_messages:'已保存对话的原文，用会话 ID 查询',
  local_usage:'本浏览器的美元费用估算',
  import_info:'已导入健康主账的来源、时间和记录数',
+ sync_catalog:'合并导入的食品别名、单价、外部采购和库存审计，可按名称、日期、ID 查询',
  app_info:'应用版本'
 };
 export async function readAppData(workspace,book,{dataset,id,date,query,fields=[]}){
@@ -153,6 +154,16 @@ export async function readAppData(workspace,book,{dataset,id,date,query,fields=[
  if(dataset==='import_info'){
   const {importInfo,importedAt}=await workspace.readHealth();
   return {dataset,importedAt,importInfo};
+ }
+ if(dataset==='sync_catalog'){
+  const {legacy}=await workspace.readHealth();
+  const catalog=legacy.catalogs??{};
+  const entries=Object.entries(catalog).filter(([,rows])=>Array.isArray(rows));
+  if(!term&&!id&&!date)return {dataset,tables:Object.fromEntries(entries.map(([kind,rows])=>[kind,rows.length]))};
+  const matches=entries.flatMap(([kind,rows])=>rows.filter(row=>
+   (!id||row.id===id)&&(!date||String(row.date??'').startsWith(date))&&
+   (!term||kind.toLowerCase()===term||JSON.stringify(row).toLowerCase().includes(term))).map(row=>({...row,kind})));
+  return {dataset,rows:projectFields(matches,fields)};
  }
  if(dataset==='app_info')return {dataset,version:APP_VERSION};
 

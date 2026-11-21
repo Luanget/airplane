@@ -98,7 +98,7 @@ export async function readLedger(workspace,args,today){
   return {date,...dietSummary(state,intake),cost:intake.cost,costPartial:intake.costPartial,
    tdee:energy.tdee,deficit:energy.deficit,closed:energy.closed,energySource:energy.source};
  }
- const inventory=inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s)&&(args.scope==='stock'||s.qty>0)&&(!query||s.name?.toLowerCase().includes(query)))
+ const inventory=inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s)&&(args.scope==='stock'||s.qty>0)&&(!query||s.name?.toLowerCase().includes(query)||s.aliases?.some(alias=>alias.toLowerCase().includes(query))))
   .sort((a,b)=>Number(b.name?.toLowerCase()===query)-Number(a.name?.toLowerCase()===query));
  const portions=new Map();
  for(const batch of batchBalances(state)){

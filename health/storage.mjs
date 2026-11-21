@@ -31,7 +31,7 @@ export async function readRestoreSnapshot(account=globalThis.airplaneAccount) {
 }
 
 // Check the revision and replace the entire batch in one IndexedDB transaction.
-export async function saveState(state, expected, account = globalThis.airplaneAccount, snapshot = null) {
+export async function saveState(state, expected, account = globalThis.airplaneAccount, snapshot = null, guard = null) {
   if (!validateAppState(state)) throw Error('健康数据格式无效');
   const db = await openDb();
   const next = {...state, revision: expected + 1};
@@ -48,13 +48,15 @@ export async function saveState(state, expected, account = globalThis.airplaneAc
           if(pending.result)throw Error('有待同步的账本更新，请先在库存页处理');
           if ((unpack(account, req.result)?.revision ?? 0) !== expected)
             throw Error('其他页面已修改账本，请刷新后重试');
+          guard?.();
           if(snapshot)store.put(account?.id ? account.seal('health', snapshot) : snapshot,key+':before-restore');
           store.put(account?.id ? account.seal('health', next) : next, key);
         } catch (err) { failure = err; tx.abort(); }
       };
       tx.oncomplete = resolve;
+      // A cancelled request can emit error before the transaction aborts.
+      // Use the definitive transaction result and retain the original reason.
       tx.onabort = () => reject(failure || tx.error || Error('写入中断'));
-      tx.onerror = () => reject(tx.error);
     });
     return next;
   } finally { db.close(); }

@@ -82,7 +82,7 @@ function editRow(container, original, state, mode, onPlanChange) {
   const stock = inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s));
   const eligible=()=>['eat','plan'].includes(c.action)?stock.filter(isOnHand):stock;
   if (!c.sku&&(c.action!=='eat'||stockSource==='inventory')) {
-    const exact=eligible().filter(s=>s.name.trim()===c.name.trim());
+    const exact=eligible().filter(s=>[s.name,...(s.aliases??[])].some(name=>name.trim()===c.name.trim()));
     if (exact.length===1) c.sku=exact[0].id;
   }
   const details = document.createElement('details');

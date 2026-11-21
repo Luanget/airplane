@@ -81,7 +81,7 @@ const dataset=choice('health_settings','foods','weights','activities','inventory
   'purchases','shopping','templates','legacy_days','legacy_energy','legacy_rules','transactions',
   'categories','budgets','balances','finance_settings','memory','conversations','assistant_settings');
 export const appDataReadSchema=object({
- dataset:choice(...dataset.enum,'guide','conversation_messages','local_usage','import_info','app_info'),
+ dataset:choice(...dataset.enum,'guide','conversation_messages','local_usage','import_info','app_info','sync_catalog'),
  id:optional(string(240,1)),date:optional(string(10,7)),query:string(),fields:list(string(60,1))
 });
 export const appDataEditSchema=object({dataset,id:optional(string(240,1)),action:choice('add','update','delete'),changes:string()});

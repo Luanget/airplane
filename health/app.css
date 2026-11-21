@@ -166,3 +166,11 @@ body[data-module="health"] [data-shell] .shopping-row input[type=number] { width
 }
 body[data-module="health"] [data-shell] .inline-inventory-editor :is(input,select,textarea):not([type=checkbox],[data-short-date]) { background:var(--surface) }
 .inline-inventory-editor [data-close-stock-editor],.inline-inventory-editor [data-close-edit] { min-height:44px }
+
+.sync-change { padding:6px 0; border-bottom:1px solid var(--line); }
+.sync-values { display:grid; gap:8px; margin-block:8px; }
+.sync-values pre, .sync-catalog pre, [data-sync-impact] pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:14rem; overflow:auto; font-size:12px; margin:4px 0; }
+.sync-problem { color:var(--red); }
+#health-merge summary { cursor:pointer; }
+#health-merge [data-sync-summary] { margin-block:6px; }
+@media (min-width:640px) { .sync-values { grid-template-columns:repeat(2,minmax(0,1fr)); } }

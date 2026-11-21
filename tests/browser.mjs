@@ -1276,6 +1276,7 @@ try {
   await chat.getByText('记录已保存。 合成牛肉酱 用了 37.8 g，剩余 322.2 g（含瓶）。',{exact:true}).waitFor();
   assert.equal(await review.isVisible(),false);
   await page.getByRole('link',{name:'健康',exact:true}).click();
+  await page.waitForFunction(()=>typeof document.getElementById('health-settings')?.onclick==='function');
   await page.locator('[data-tab="inventory"]').click();
   const sauceRow=page.locator('[data-stock-id="'+sauceId+'"]');
   await sauceRow.getByText('已开封 · 剩余 322.2 g（含瓶）',{exact:true}).waitFor();
@@ -1399,6 +1400,84 @@ try {
   assert.equal(await memorySettings.getByText('我晚餐优先配蔬菜',{exact:true}).count(),0);
   await closeAssistantSettings();
   console.log('PASS explicit memory writes persist across threads and reload, with local deletion');
+  const mergeContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+  try{
+   const mergePage=await mergeContext.newPage();
+   await mergePage.goto(base+'health/');
+   const openSettings=mergePage.locator('#health-settings');
+   await openSettings.waitFor();
+   await mergePage.waitForFunction(()=>typeof document.getElementById('health-settings')?.onclick==='function');
+   const fixture=await mergePage.evaluate(async()=>{
+    const {readState,saveState}=await import('./storage.mjs');
+    const {addFood}=await import('./core.mjs');
+    const {freshData,replaceFinance,STORAGE_KEY}=await import('../finance-storage.mjs');
+    const {localDate}=await import('../calendar.mjs');
+    const state=await readState(),date=localDate();
+    addFood(state,{date,meal:'午餐',name:'合成午餐',portion:'100 g',kcal:150});
+    await saveState(state,0);
+    const finance=freshData();
+    finance.budgets[date.slice(0,7)]=321;
+    finance.transactions.push({id:'merge-fixture-expense',type:'expense',amount:9,date,categoryId:'default-1'});
+    replaceFinance(localStorage,finance,null);
+    return {date,finance:localStorage.getItem(STORAGE_KEY)};
+   });
+   const dinner={日期:fixture.date,餐次:'晚餐','食物/饮品':'合成晚餐','份量/重量':'70g',状态:'实际',kcal:75};
+   const external={ledger_id:'browser-merge-fixture',handoff_version:'301120.1',tables:{
+    food_events:[{日期:fixture.date,餐次:'午餐','食物/饮品':'合成午餐','份量/重量':'110g',状态:'实际',kcal:175},dinner],
+    food_inventory:[],weight_events:[],daily_summaries:[{日期:fixture.date,kcal:250}]
+   }};
+   const json={name:'health_tracker_301120.1.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(external))};
+   await openSettings.click();
+   const mergePanel=mergePage.locator('#health-merge');
+   await mergePanel.locator(':scope > summary').click();
+   const submit=mergePanel.locator('[data-sync-apply]');
+   const importFile=()=>mergePanel.locator('[data-sync-file]').setInputFiles(json);
+   const read=()=>mergePage.evaluate(async()=>{
+    const {readState,readRestoreSnapshot}=await import('./storage.mjs');
+    return {state:await readState(),snapshot:await readRestoreSnapshot()??null,finance:localStorage.getItem('airplane-pwa-v1')};
+   });
+   await importFile();
+   await mergePanel.locator('[data-sync-keep]').waitFor();
+   assert.equal(await submit.isEnabled(),false);
+   await mergePanel.locator('[data-sync-keep]').click();
+   await submit.waitFor();
+   assert.equal((await read()).state.revision,1);
+   assert.equal((await read()).snapshot,null);
+   await mergePage.evaluate(()=>{
+    const put=IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put=function(value,key){
+     if(key==='main')throw Error('合并中断合成测试');
+     return put.call(this,value,key);
+    };
+    window.restoreFixturePut=()=>{IDBObjectStore.prototype.put=put;};
+   });
+   await submit.click();
+   await mergePage.getByText('合并中断合成测试',{exact:true}).waitFor();
+   const failed=await read();
+   assert.equal(failed.state.revision,1);
+   assert.equal(failed.snapshot,null);
+   assert.equal(failed.finance,fixture.finance);
+   await mergePage.evaluate(()=>window.restoreFixturePut());
+   await submit.click();
+   await mergePage.getByText('已合并到本机，已保留合并前完整快照。',{exact:true}).waitFor();
+   const merged=await read();
+   assert.equal(merged.state.revision,2);
+   assert.equal(merged.snapshot.health.local.foods[0].name,'合成午餐');
+   assert.equal(merged.snapshot.health.legacy.foods.length,0);
+   assert.deepEqual(merged.snapshot.finance.data,JSON.parse(fixture.finance));
+   assert.equal(merged.finance,fixture.finance);
+   assert.equal(merged.state.legacy.foods[0].name,'合成晚餐');
+   await importFile();
+   await mergePanel.locator('[data-sync-summary]').filter({hasText:'已导入'}).waitFor();
+   assert.equal(await submit.isEnabled(),false);
+   const downloaded=mergePage.waitForEvent('download');
+   await mergePanel.locator('[data-sync-export]').click();
+   const exported=JSON.parse(readFileSync(await (await downloaded).path(),'utf8'));
+   assert.equal(exported.format,'airplane-health-sync-v1');
+   assert.equal(exported.anchor.revision,2);
+   assert.ok(exported.health.legacy.foods.some(row=>row.name==='合成晚餐'));
+   console.log('PASS read-only merge preview, atomic recovery on abort, unchanged finance, repeat import and sync export');
+  }finally{await mergeContext.close();}
   assert.deepEqual(errors,[]);
   console.log('PASS dated food lookup, thread reload, confirmed in-place correction and health timeline');
   console.log('PASS damaged finance recovery and synthetic-only fixtures');

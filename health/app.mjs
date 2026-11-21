@@ -1,3 +1,4 @@
+import {attachHealthMerge,renderSyncCatalog} from './sync-ui.mjs';
 import {remainingGrossWeights} from './food-history.mjs';
 import {bindDayPicker,displayDay,localDate as dateNow,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
 import {attachShopping} from './shopping.mjs';
@@ -43,6 +44,7 @@ function switchTab(next){
  render();window.scrollTo({top:0,behavior:'instant'});
 }
 function render(){
+ renderSyncCatalog($('sync-catalog'),state);
  if(tab==='overview')renderOverview();
  if(tab==='inventory'){updatePurchases();updateShopping();renderInventory();}
  if(tab==='trends')renderTrends();
@@ -244,7 +246,7 @@ function placeInlineStock(){
 function renderInventory(){
  if(inlineStock)inlineStock.home.append(inlineStock.form);
  const filter=$('inventory-search').value.trim().toLowerCase(),stock=inventoryWithMoves(state);
- const list=stock.filter(i=>i.active&&i.qty!==0&&!isStockReference(i)&&(i.name.toLowerCase().includes(filter)||i.id.toLowerCase().includes(filter)));
+ const list=stock.filter(i=>i.active&&i.qty!==0&&!isStockReference(i)&&(i.name.toLowerCase().includes(filter)||i.id.toLowerCase().includes(filter)||i.aliases?.some(alias=>alias.toLowerCase().includes(filter))));
  const gross=remainingGrossWeights(state);
  const groups=stockGroups(list),known=groups.filter(g=>g.rows.some(i=>i.qty!==null)),unknown=groups.filter(g=>g.rows.every(i=>i.qty===null));
  const batches=batchBalances(state), byId=new Map(stock.map(s=>[s.id,s]));
@@ -692,6 +694,7 @@ function attach(){
   next.settings.preferences=fields.preferences.trim();
   try{await commit(next,'参数已更新');}catch(err){toast(err.message);}
  };
+ attachHealthMerge($('health-merge'),{account:globalThis.airplaneAccount,notify:toast,download,setState:setHealthState});
  $('choose-import').onclick=()=>$('import-file').click();
  $('import-file').onchange=e=>{
   const file=e.target.files[0];e.target.value='';

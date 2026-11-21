@@ -41,7 +41,7 @@ export function normalizeInventory(row,index){
  const is100g = /(?:^|每|[^\d.])100\s*(?:g|克)(?!\s*\/包)/i.test(standard);
  const is100ml = /(?:^|每|[^\d.])100\s*(?:ml|毫升)/i.test(standard);
  const per100 = is100g || is100ml;
- const normalizedUnit = /^(?:g|克)/.test(unitText) ? 'g' : /^(?:mL|ml|毫升)/i.test(unitText) ? 'mL' : /^(?:个)/.test(unitText) ? '个' : /^(?:盒)/.test(unitText) ? '盒' : /^(?:完整袋|包)/.test(unitText) ? '包' : /^(?:份)/.test(unitText) ? '份' : '';
+ const normalizedUnit = /^(?:g|克)/.test(unitText) ? 'g' : /^(?:mL|ml|毫升)/i.test(unitText) ? 'mL' : /^(?:个)/.test(unitText) ? '个' : /^(?:瓶)/.test(unitText) ? '瓶' : /^(?:盒)/.test(unitText) ? '盒' : /^(?:完整袋|包)/.test(unitText) ? '包' : /^(?:份)/.test(unitText) ? '份' : '';
  return {id:String(row['食品ID']||`legacy-inventory-${index}`), name:String(row['名称']||'未命名食物'),
    unit:normalizedUnit || unitText || '单位未定', unitDescription:unitText,
    standard, nutritionBasis:per100?(is100ml?'per100ml':'per100g'):'perServing',
@@ -123,9 +123,10 @@ export function normalizeLedger(raw){
  result.legacy.sourceSnapshot = raw;
  result.importedAt=new Date().toISOString();
  result.importInfo={sourceVersion:String(raw.handoff_version||raw.schema_version||'unknown'),canonicalSource:String(raw.canonical_source||''),originalCounts:Object.fromEntries(['food_events','weight_events','activity_events','daily_summaries','energy_balance','food_inventory'].map(k=>[k, t[k]?.length || 0]))};
- result.legacy.foods=(t.food_events || []).map((r,i)=>({ id:`legacy-food-${i}`,date:String(r['日期']||''),time:String(r['时间']||''),meal:String(r['餐次']||''),name:String(r['食物/饮品']||''),foodId:String(r['食品ID']||''),portion:String(r['份量/重量']||''),status:String(r['状态']||''),actual:isActualStatus(r['状态'])&&validDate(String(r['日期']||'')),nutrition:Object.fromEntries(Object.entries(NUTRIENT_KEYS).map(([k,v])=>[k,numeric(r[v])])),cost:null,source:'legacy',qualityFlag:validDate(String(r['日期']||''))?null:'missing_date' }));
+ result.legacy.foods=(t.food_events || []).map((r,i)=>({ id:`legacy-food-${i}`,date:String(r['日期']||''),time:String(r['时间']||''),meal:String(r['餐次']||''),name:String(r['食物/饮品']||''),foodId:String(r['食品ID']||''),portion:String(r['份量/重量']||''),status:String(r['状态']||''),actual:isActualStatus(r['状态'])&&validDate(String(r['日期']||'')),nutrition:Object.fromEntries(Object.entries(NUTRIENT_KEYS).map(([k,v])=>[k,numeric(r[v])])),cost:numeric(r['饮食成本(CNY)']??r['成本(CNY)']??r['成本(元)']??r.cost),
+  ...(r.airplane_weighing?{weighing:r.airplane_weighing}:{}),source:'legacy',qualityFlag:validDate(String(r['日期']||''))?null:'missing_date' }));
  result.legacy.weights=(t.weight_events||[]).map((r,i)=>({id:`legacy-weight-${i}`,date:String(r['日期']||''),kg:numeric(r['数值']),time:String(r['时间']||''),trendStatus:String(r['纳入趋势']||''),source:'legacy'})).filter(r=>validDate(r.date));
- result.legacy.activities=(t.activity_events||[]).map((r,i)=>({id:`legacy-activity-${i}`,date:String(r['日期']||''),name:String(r['项目']||r['类别']||''),km:numeric(r['距离(km)']),minutes:numeric(r['时长(min)']),kcal:numeric(r['活动消耗估计(kcal)']),status:String(r['状态']||''),source:'legacy',includedInBase:!/^(?:户外单车|夜骑|长骑)/.test(String(r['类别']||''))})).filter(r=>validDate(r.date));
+ result.legacy.activities=(t.activity_events||[]).map((r,i)=>({id:`legacy-activity-${i}`,date:String(r['日期']||''),name:String(r['项目']||r['类别']||''),km:numeric(r['距离(km)']),minutes:numeric(r['时长(min)']),time:String(r['时间']||''),kcal:numeric(r['活动消耗估计(kcal)']),status:String(r['状态']||''),source:'legacy',energyKind:r.energyKind==='total'?'total':'activity',includedInBase:r.includedInBase??!/^(?:户外单车|夜骑|长骑)/.test(String(r['类别']||''))})).filter(r=>validDate(r.date));
  result.legacy.inventory=(t.food_inventory||[]).map(normalizeInventory).filter((item,index,items)=>items.findIndex(x=>x.id===item.id)===index);
  for (const r of t.daily_summaries||[]){const d=String(r['日期']||'');if (!validDate(d)) continue;result.legacy.daily[d]={
   date:d, nutrition:{kcal:numeric(r.kcal),protein:numeric(r['蛋白质(g)']),carbs:numeric(r['碳水(g)']),fat:numeric(r['脂肪(g)']),sodium:numeric(r['钠(mg)'])}, note:String(r['记录完整性']||'')
@@ -188,7 +189,7 @@ export function events(state,key){
  const edits=state.local.edits?.[key] ?? {};
  return [...state.legacy[key].map(e=>Object.hasOwn(edits,e.id)?edits[e.id]:e).filter(Boolean),...state.local[key]];
 }
-const actualFood=e=>e.status==='actual' || (e.source==='legacy' && e.actual);
+export const actualFood=e=>e.status==='actual' || (e.source==='legacy' && e.actual);
 export function foodsForDay(state,date){return events(state,'foods').filter(e=>e.date===date&&actualFood(e));}
 export function dayIntake(state,date){
  const legacy=state.legacy.foods.filter(e=>e.date===date&&e.actual);
@@ -263,9 +264,16 @@ export function inventoryWithMoves(state){
   if(move.opening)opened.add(move.foodId);
   adjusted.set(move.foodId,(adjusted.get(move.foodId)??0)+move.delta);
  }
- return [...state.legacy.inventory,...(state.local.inventory??[])].map(item=>({
-  ...item,qty:item.qty===null&&!opened.has(item.id)?null:round(zero(item.qty)+(adjusted.get(item.id)??0),6)
- }));
+ const normalize=value=>String(value??'').normalize('NFKC').trim().toLowerCase();
+ const catalog=state.legacy.catalogs??{};
+ return [...state.legacy.inventory,...(state.local.inventory??[])].map(item=>{
+  const applies=row=>row.foodId===item.id||row.name&&normalize(row.name)===normalize(item.name);
+  const aliases=(catalog.aliases??[]).filter(applies).map(row=>row.alias).filter(Boolean);
+  const price=item.pricePerUnit==null?(catalog.prices??[]).filter(row=>applies(row)&&normalize(row.unit)===normalize(item.unit)&&
+   numeric(row.unitPrice)>=0&&numeric(row.unitPrice)!==null).sort((a,b)=>b.date.localeCompare(a.date))[0]:null;
+  return {...item,...(aliases.length?{aliases}:{}),...(price?{pricePerUnit:price.unitPrice,priceBasis:item.unit}:{}),
+   qty:item.qty===null&&!opened.has(item.id)?null:round(zero(item.qty)+(adjusted.get(item.id)??0),6)};
+ });
 }
 export function batchBalances(state,foodId){
  const balances=new Map();
@@ -346,7 +354,7 @@ export function addFood(state,fields,id) {
   }
   for(const affectedId of affected)assertBalances(state,affectedId);
  }catch(err){state.local.stockMoves=oldMoves;throw err;}
- if(previous?.id.startsWith('legacy-food-'))saveLegacyEdit(state,'foods',previous.id,entry);
+ if(id&&state.legacy.foods.some(row=>row.id===id))saveLegacyEdit(state,'foods',previous.id,entry);
  else state.local.foods=[...state.local.foods.filter(e=>e.id!==entry.id),entry];
  return entry;
 }
@@ -367,11 +375,16 @@ export function recordEvent(state,key,item,id) {
  return entry;
 }
 export function deleteEvent(state,key,id) {
+ const previousEvent=events(state,key).find(row=>row.id===id);
  const moves=state.local.stockMoves.filter(m=>m.linkedFoodId===id);
  if(key==='foods'){
   const previous=state.local.stockMoves;
   state.local.stockMoves=previous.filter(m=>m.linkedFoodId!==id);
   try {for(const m of moves)assertBalances(state,m.foodId);}catch(err){state.local.stockMoves=previous;throw err;}
+ }
+ if(previousEvent&&['foods','weights','activities'].includes(key)){
+  const tombstones=(state.sync??={}).tombstones??=[];
+  if(!tombstones.some(row=>row.type===key&&row.id===id))tombstones.push({type:key,id,before:previousEvent});
  }
  if(state.legacy[key].some(e=>e.id===id))saveLegacyEdit(state,key,id,null);
  else state.local[key]=state.local[key].filter(e=>e.id!==id);

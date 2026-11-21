@@ -190,9 +190,32 @@
             <span class="mini-icon" data-shell-icon="sparkles"></span><span class="setting-copy"><span class="setting-title">管理 API Key</span></span><span class="chevron" data-shell-icon="chevron"></span>
           </a>
         </section>
+        <details class="card form-panel" id="health-merge">
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="download"></span><span class="setting-copy"><span class="setting-title">合并导入与文件同步</span><span class="setting-sub">保留原账，先核对差异</span></span><span class="chevron" data-shell-icon="chevron"></span></summary>
+          <div class="backup-options">
+            <p class="form-hint">用 JSON 文件手动往返。合并只写健康账，提交时同时保留原健康与财务完整快照。</p>
+            <label>固定来源名称（可选）<input type="text" data-sync-source placeholder="文件未标出来源时，给同一主账填写同一个名称"></label>
+            <div class="button-row">
+              <button class="btn btn-primary" type="button" data-sync-choose>选择文件并预览</button>
+              <button class="btn btn-secondary" type="button" data-sync-export>导出健康同步包</button>
+            </div>
+            <button class="text-button" type="button" data-sync-snapshot>导出最近一次写入前的完整快照</button>
+            <input type="file" accept=".json,application/json" data-sync-file hidden>
+          </div>
+          <section class="backup-preview" data-sync-preview hidden>
+            <h2>合并预览</h2><p data-sync-info></p><p data-sync-summary></p>
+            <button type="button" class="text-button" data-sync-keep hidden>其余待核对项保留本机</button>
+            <div data-sync-changes></div><details data-sync-impact hidden></details>
+            <div class="button-row">
+              <button class="btn btn-secondary" type="button" data-sync-cancel>关闭预览</button>
+              <button class="btn btn-primary" type="button" data-sync-apply disabled>保存快照并合并</button>
+            </div>
+          </section>
+          <div class="backup-options sync-catalog" id="sync-catalog" hidden></div>
+        </details>
         <details class="card form-panel" id="combined-backup">
           <summary class="setting-row">
-            <span class="mini-icon" data-shell-icon="download"></span><span class="setting-copy"><span class="setting-title">数据与备份</span><span class="setting-sub" id="import-status">本机账本</span></span><span class="chevron" data-shell-icon="chevron"></span>
+            <span class="mini-icon" data-shell-icon="download"></span><span class="setting-copy"><span class="setting-title">完整备份与恢复</span><span class="setting-sub" id="import-status">本机账本</span></span><span class="chevron" data-shell-icon="chevron"></span>
           </summary>
           <div class="backup-options">
             <div class="backup-scopes" role="group" aria-label="备份与导入范围">
