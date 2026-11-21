@@ -60,7 +60,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   const select=form.elements.financeId,selected=select.value;
   select.replaceChildren(new Option('先保存采购', ''));
   try{
-   for(const tx of finance().filter(t=>!purchaseForTransaction(getState(),t.id)).slice().reverse())
+   for(const tx of finance().filter(t=>!t.receiptKey&&!purchaseForTransaction(getState(),t.id)).slice().reverse())
     select.add(new Option(displayDay(tx.date)+' · '+tx.amount+' 元 · '+(tx.note||tx.categoryName||'支出'),tx.id));
   }catch(err){notify(err.message);}
   if([...select.options].some(o=>o.value===selected))select.value=selected;
@@ -82,8 +82,16 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   const els=(getState().local.purchases??[]).slice().reverse().map(order=>{
    const tx=transactions.find(t=>t.id===purchaseTransactionId(order));
    const p=document.createElement('p');p.dataset.purchaseId=order.id;
-   p.textContent=displayDay(order.date)+(normalizeClock(order.time)?' '+normalizeClock(order.time):'')+' · ¥'+(order.totalCents/100).toFixed(2)+' · '+order.items.length+' 项 · '+(order.note||'采购');
+   const amount='¥'+(order.totalCents/100).toFixed(2);
+   const name=order.receiptId?(order.items.every(row=>row.costCents==null)?'食品成本未知':'食品已核实 '+amount):amount;
+   p.textContent=displayDay(order.date)+(normalizeClock(order.time)?' '+normalizeClock(order.time):'')+' · '+name+' · '+order.items.length+' 项 · '+(order.note||'采购');
    if(order.status==='cancelled'){p.append(' · 已撤销');return p;}
+   if(order.receiptId){
+    const count=order.financeIds.filter(id=>transactions.some(row=>row.id===id)).length;
+    p.append(' · 截图采购 · '+count+'/'+order.financeIds.length+' 笔关联支出');
+    if(order.items.some(row=>row.costCents==null)&&order.items.some(row=>row.costCents!=null))p.append(' · 部分食品成本未知');
+    return p;
+   }
    if(tx){
     p.append(cents(tx.amount)===order.totalCents?' · 已关联支出':' · 关联支出金额待核对');
    } else if(!order.financeId&&order.totalCents>0){
@@ -108,6 +116,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   switchTab('inventory');details.open=true;details.scrollIntoView({block:'start'});
  }
  function openEdit(order,fromFinance=false){
+  if(order.receiptId){notify('截图采购关联整单支出，请在原对话核对或撤销。');return;}
   form.reset();editing=order;shopping=new Set();
   button.textContent='保存采购更正';cancelEdit.hidden=false;
   form.elements.financeId.disabled=true;form.elements.createExpense.disabled=true;

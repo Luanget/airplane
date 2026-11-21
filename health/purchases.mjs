@@ -3,9 +3,10 @@ import {inventoryWithMoves,makeId,numeric,validDate,round,assertBalances} from '
 import {addBatch} from './inventory.mjs';
 import {packageJournal} from './container-ledger.mjs';
 
-export const purchaseTransactionId=p=>p.financeId || 'expense-'+p.id;
+export const purchaseTransactionIds=p=>p.financeIds?.length?p.financeIds:[p.financeId||'expense-'+p.id];
+export const purchaseTransactionId=p=>purchaseTransactionIds(p)[0];
 export function purchaseForTransaction(state,id) {
- return (state.local.purchases??[]).find(p=>p.status!=='cancelled'&&purchaseTransactionId(p)===id);
+ return (state.local.purchases??[]).find(p=>p.status!=='cancelled'&&purchaseTransactionIds(p).includes(id));
 }
 export function cents(value) {
  const n=numeric(value);
@@ -14,17 +15,26 @@ export function cents(value) {
  return Math.round(n*100);
 }
 export function recordPurchase(state,order,transaction) {
- const {id,date,items,totalCents,financeId=null,note='',time}=order;
+ const {id,date,items,totalCents,financeId=null,note='',time,financeIds,receiptId}=order;
  const all=state.local.purchases??=[];
  const clock=normalizeClock(time);
- const saved={id,date,items,totalCents,financeId,note,...(clock?{time:clock}:{})};
+ const saved={id,date,items,totalCents,financeId,note,...(clock?{time:clock}:{}),
+  ...(receiptId?{receiptId,financeIds}: {})};
  const existing=all.find(o=>o.id===id);
  if(existing) {
   if(JSON.stringify(existing)!==JSON.stringify(saved))throw Error('该订单已保存，请打开已有采购');
   return existing;
  }
  validateOrder(state,saved);
- if(financeId&&(!transaction || transaction.id!==financeId || transaction.type!=='expense' || cents(transaction.amount)!==totalCents))
+ if(receiptId){
+  const ids=Array.isArray(transaction)?transaction.map(row=>row.id):[];
+  if(!financeIds?.length||new Set(financeIds).size!==financeIds.length||
+   financeIds.length!==ids.length||financeIds.some(id=>!ids.includes(id)||purchaseForTransaction(state,id))||
+   transaction.some(tx=>tx.type!=='expense'||tx.receiptKey!==receiptId)||
+   transaction.reduce((sum,row)=>sum+cents(row.amount),0)<totalCents)
+   throw Error('截图采购与关联支出不一致');
+ }
+ if(financeId&&(!transaction || transaction.receiptKey || transaction.id!==financeId || transaction.type!=='expense' || cents(transaction.amount)!==totalCents))
   throw Error('关联支出与订单总额不符');
  if(financeId&&purchaseForTransaction(state,financeId))throw Error('这笔支出已关联采购');
  items.forEach((r,i)=>addBatch(state,{...r,id:orderBatchId(saved,r,i),date,time:clock,reason:'订单采购'}));
@@ -104,10 +114,11 @@ function removeUnusedTree(state,batchId) {
 }
 
 // Work on a copy so a failed correction cannot partially change the ledger.
-export function revisePurchase(current,id,fields) {
+export function revisePurchase(current,id,fields,{receiptUndo=false}={}) {
  const next=structuredClone(current),orders=next.local.purchases??[];
  const order=orders.find(x=>x.id===id);
  if(!order||order.status==='cancelled')throw Error('采购已撤销或不在此账本');
+ if(order.receiptId&&(!receiptUndo||fields))throw Error('截图采购关联整单支出，请通过原对话撤销或核对后更正');
  const updated=fields?{...order,...fields,time:normalizeClock(fields.time??order.time),id,financeId:order.financeId}:null;
  if(updated)validateOrder(next,updated);
  const originals=new Map(order.items.map((r,i)=>[orderBatchId(order,r,i),r]));

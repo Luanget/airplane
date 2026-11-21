@@ -134,6 +134,7 @@ export const healthSteps={
  correct_weight:step('correct_weight',{...healthWhen,recordId:optional(string(300,1)),kg:number(650,1)}),
  correct_activity:step('correct_activity',{...healthWhen,recordId:optional(string(300,1)),name:string(80,1),
   km:optional(number(1000)),minutes:optional(number(1440)),kcal:optional(number(20000))}),
+ day_status:step('day_status',{date:healthWhen.date,status:choice('complete','partial')}),
  cycle:step('cycle',{date:healthWhen.date}),
  next_meal:step('next_meal',{...healthWhen,preferences:list(string(120,1),6)})
 };
@@ -148,9 +149,30 @@ export const groupedMealSchema=object({intent:choice('execute','preview'),date:o
  observations:list(photoObservation,48),steps:list({anyOf:Object.values(healthSteps)},HEALTH_STEP_LIMIT)});
 export const healthReportReadSchema=object({date:optional(string(10,10)),view:choice('summary','meals')});
 export const healthStatusReadSchema=object({});
-export function selectChatSchema({documentAccess,autoMemory,healthActions=false,groupedPhotos=false}){
+const receiptLine=object({
+ name:string(180,1),kind:choice('food','nonfood','unknown'),quantity:optional(positive),unit:optional(unit),
+ packAmount:optional(positive),packUnit:optional(choice('g','mL')),gross:optional(number(1e8)),net:optional(number(1e8)),
+ skuId:optional(string(220,1)),category:optional(string(120,1)),specification:optional(string(220,1))
+});
+export const orderReceiptSchema=object({
+ merchant:optional(string(160,1)),orderNo:optional(string(120,1)),date:optional(string(10,10)),
+ state:choice('paid','unpaid','refunded','partial_refund','unknown'),currency:optional(choice('CNY','other')),
+ paid:optional(number(1e8)),discount:optional(number(1e8)),shipping:optional(number(1e8)),
+ paymentEvidence:optional(string(220,1)),totalEvidence:optional(string(220,1)),
+ refund:optional(number(1e8)),refundNo:optional(string(120,1)),images:imageIndices,lines:list(receiptLine,80)
+});
+const taskFields={id:string(28,1),dependsOn:list(string(28,1),8)};
+const taskKind=(kind,fields)=>object({...taskFields,kind:choice(kind),...fields});
+export const agentTaskSchema=object({
+ steps:{...list({anyOf:[
+  taskKind('health',{action:healthActionSchema}),
+  taskKind('finance',{entry:financeSchema.properties.entry.anyOf[0],evidence:string(1600,1)}),
+  taskKind('receipt',{receipt:orderReceiptSchema})
+ ]},8),minItems:1}
+});
+export function selectChatSchema({documentAccess,autoMemory,healthActions=false,groupedPhotos=false,agentTasks=false}){
  const base=documentAccess?documentChatSchema:chatSchema;
- const additions=[...(healthActions?[proposal('health_action',healthActionSchema)]:[]),...(groupedPhotos?[proposal('photo_meal',groupedMealSchema)]:[])];
+ const additions=[...(healthActions?[proposal('health_action',healthActionSchema)]:[]),...(groupedPhotos?[proposal('photo_meal',groupedMealSchema)]:[]),...(agentTasks?[proposal('agent_task',agentTaskSchema)]:[])];
  const schema=additions.length?object({...base.properties,proposal:{anyOf:[...base.properties.proposal.anyOf,...additions]}}):base;
  return autoMemory?withAutomaticMemory(schema):schema;
 }

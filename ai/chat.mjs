@@ -5,7 +5,8 @@ import {AssistantSyncPending,resumePurchaseUpdate} from '../health/purchase-sync
 import {validInput} from '../health/contract.mjs';
 import {healthReview,jpeg} from '../health/assistant.mjs';
 import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
-import {financeReview} from './finance.mjs';
+import {financeAutomation,financeReview,setFinanceAutomation} from './finance.mjs';
+import {executeAgentTask,orderAgentTasks,undoAgentTask} from './agent-executor.mjs';
 import {localWorkspace,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
 import {foodEditReview,inventoryReview,portionReview} from './operations.mjs';
 import {automaticMemoryEnabled,mountMemorySettings,setAutomaticMemory} from './memory.mjs';
@@ -57,6 +58,18 @@ healthAuto.onchange=()=>{
  try{setHealthAuto(workspace.finance,healthAuto.checked);}
  catch(err){healthAuto.checked=hasHealthAuto(workspace.finance);report(err);}
 };
+const financeAuto=$('[data-finance-auto]'),financeLimit=$('[data-finance-limit]');
+function refreshFinanceAccess(){
+ const grant=financeAutomation(workspace.finance);
+ financeAuto.checked=grant.enabled;financeLimit.value=String(grant.limitCents/100);
+}
+refreshFinanceAccess();
+financeAuto.onchange=financeLimit.onchange=()=>{
+ try{
+  if(!financeLimit.reportValidity())throw Error('请填写财务单笔上限。');
+  setFinanceAutomation(workspace.finance,financeAuto.checked,Math.round(financeLimit.valueAsNumber*100));
+ }catch(err){report(err);refreshFinanceAccess();}
+};
 const documentAccess=$('[data-document-access]');
 documentAccess.checked=hasDocumentAccess(workspace.finance);
 documentAccess.onchange=()=>{
@@ -68,7 +81,7 @@ $('#assistant-settings').onclick=()=>{settings.showModal();
  automaticMemory.checked=automaticMemoryEnabled(workspace.finance);
  healthAuto.checked=hasHealthAuto(workspace.finance);
  documentAccess.checked=hasDocumentAccess(workspace.finance);
- refreshModels();refreshMemory();refreshAgent();void refreshUsage();};
+ refreshFinanceAccess();refreshModels();refreshMemory();refreshAgent();void refreshUsage();};
 async function refreshUsage(){
  if(demo)return;
  const node=$('[data-local-usage]');
@@ -127,6 +140,7 @@ async function requestReply(input,options,savePartial=()=>{}){
  start.hidden=true;
  transcript.append(answer);thread.scrollTop=thread.scrollHeight;
  const onReply=text=>{
+  if(options.agentQuiet){tell('正在识别操作与凭据…');return;}
   const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
   if(answer.hidden)tell(demo?'正在接收演示回复…':'正在接收 OpenAI 回复…');
   answer.hidden=false;reply.textContent=text;savePartial(text);
@@ -255,7 +269,7 @@ function messageNode(role,text){
  row.append(mark,body);
  return row;
 }
-function bubble(role,text,source,healthActionId,preserveScroll=false){
+function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[]){
  const scroll=thread.scrollTop;
  const follow=thread.scrollHeight-scroll-thread.clientHeight<48;
  const node=messageNode(role,text);
@@ -275,6 +289,22 @@ function bubble(role,text,source,healthActionId,preserveScroll=false){
   const details=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');
   details.className='chat-source';title.textContent=source.label;body.textContent=source.text;
   details.append(title,body);transcript.append(details);
+  if(agentUndo.length){
+   const actions=document.createElement('div');actions.className='chat-actions';
+   for(const token of agentUndo){
+    const undo=document.createElement('button');
+    undo.type='button';undo.className='text-button health-write-undo';undo.textContent='撤销'+token.label;
+    undo.onclick=async()=>{
+     if(busy||saving||undo.disabled)return;
+     saving=true;undo.disabled=true;lock();
+     try{undo.textContent=await undoAgentTask(workspace,token);}
+     catch(err){report(err);undo.disabled=false;}
+     finally{saving=false;lock();}
+    };
+    actions.append(undo);
+   }
+   details.append(actions);
+  }
  }
  thread.scrollTop=!preserveScroll||follow?thread.scrollHeight:scroll;
 }
@@ -332,11 +362,12 @@ function renderTranscript(){
  start.hidden=messages.length>0;
  for(const [index,m] of messages.entries()){
   if(index===current?.photos?.summaryIndex)continue;
-  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source,m.healthActionId);
+  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source,m.healthActionId,false,m.agentUndo);
  }
 }
 function showPending(){
  const pending=book.current?.pending;
+ retryRequest.textContent=pending?.healthAction?.agentTask?'重试未完成步骤':'重试这条消息';
  retryRequest.hidden=!pending;
  if(!pending)return;
  if(pending.partial)bubble('assistant',pending.partial);
@@ -407,6 +438,7 @@ function requiresConfirmation(proposal){
  return false;
 }
 function directWrite(response,flow){
+ if(flow.input.photo&&['purchase','finance','batch'].includes(response.proposal?.mode))return false;
  return response.saveMode==='save'&&!!response.proposal&&!!flow.input.text.trim()&&
   flow.options.allowRead&&flow.options.documentAccess&&!requiresConfirmation(response.proposal);
 }
@@ -673,8 +705,63 @@ async function completeHealth(plan,flow,source,ticket){
  if(flow.photoNotes?.length)result.text+='\n'+flow.photoNotes.join('\n');
  echoHealth(ticket,result,source);tell('');
 }
+function echoAgent(ticket,result){
+ const source={label:'执行详情',text:result.detail};
+ if(result.reference)book.setHealthReference(result.reference);
+ if(!book.finish(ticket,result.text,source,null,{agentUndo:result.undo}))return;
+ clearReview();retryRequest.hidden=true;restoreReview.hidden=true;
+ bubble('assistant',result.text,source,null,true,result.undo);syncThreads();updateContext();tell('');
+}
+async function completeAgent(plan,flow,ticket,staged={},approved=staged.approved??[]){
+ if(!flow.options.allowRead)throw Error('请先允许本轮访问本机数据。');
+ try{orderAgentTasks(plan);}
+ catch(err){echoAgent(ticket,{text:err.message,detail:err.message,undo:[]});return;}
+ const state={agentTask:plan,prior:staged.prior,approved,attachmentKeys:staged.attachmentKeys??flow.options.attachmentKeys,
+  mediaKey:staged.mediaKey??flow.options.mediaKey};
+ if(!book.stageHealth(ticket,state))return;
+ const controller=new AbortController();
+ activeRequest=controller;stop.hidden=false;stop.disabled=false;
+ let result;
+ try{
+  result=await executeAgentTask(workspace,plan,{id:ticket.operationId??ticket.id,
+   today:flow.input.date,text:flow.input.text,clock:flow.options.healthClock,mediaKey:state.mediaKey,
+   attachmentKeys:state.attachmentKeys,approved,prior:state.prior,healthOptions:healthOptions(flow,ticket),signal:controller.signal,
+   guard:()=>{if(!composer.elements.allowRead.checked)throw Error('本轮本机数据权限已关闭。');},
+   onStep:label=>tell('正在处理'+label+'并核对本机回执…'),
+   progress:prior=>{book.stageHealth(ticket,{...state,prior});}});
+ }finally{activeRequest=null;stop.hidden=true;}
+ const ready=result.rows.filter(row=>row.state==='review');
+ const pending=result.rows.some(row=>row.state==='pending');
+ if(!ready.length&&!pending){echoAgent(ticket,result);return;}
+ const body=document.createElement('p');body.textContent=result.text;
+ const detail=document.createElement('details'),title=document.createElement('summary'),description=document.createElement('p');
+ title.textContent='执行详情';description.textContent=result.detail;detail.append(title,description);
+ review.replaceChildren(body,detail);review.hidden=false;
+ if(ready.length){
+  const apply=document.createElement('button');apply.type='submit';apply.textContent='确认待保存项';apply.className='primary-button';
+  review.append(apply);
+  review.onsubmit=async event=>{
+   event.preventDefault();if(busy||saving)return;
+   saving=true;lock();
+   const ids=[...new Set([...approved,...ready.map(row=>row.id)])];
+   try{await completeAgent(plan,flow,ticket,{...state,prior:result.results},ids);}
+   catch(err){report(err);retryRequest.hidden=false;}
+   finally{saving=false;lock();}
+  };
+ }
+ const finish=document.createElement('button');
+ finish.type='button';finish.className='text-button';finish.textContent='结束本轮';
+ finish.onclick=()=>{if(!busy&&!saving)echoAgent(ticket,result);};
+ if(!pending)review.append(finish);
+ retryRequest.hidden=!pending;retryRequest.textContent='重试未完成步骤';tell(pending?'尚有步骤未完成，可重试。':'');
+}
 async function complete(response,flow,source,ticket){
  clearReview();tell('');
+ if(ticket&&response.proposal?.mode==='agent_task'){
+  await completeAgent(response.proposal.result,flow,ticket);
+  rememberAutomatically(response,flow);
+  return;
+ }
  if(ticket&&response.proposal?.mode==='photo_meal'){
   try{
    assertSkillAction(skillCatalog(workspace.finance),'photo_meal');
@@ -996,21 +1083,23 @@ async function sendPhotos(input,options,files){
 async function sendMessage(input,options,files){
  clearFollowUp();book.setFollowUp(null);
  if(files.length>1&&!options.groupedPhotos){await sendPhotos(input,options,files);return;}
- if(options.groupedPhotos&&files.length){
-  const encoded=new Set();
-  for(const file of files)encoded.add(await jpeg(file));
-  options.photos=[...encoded];input={...input,photo:options.photos[0]};
+ if(files.length){
+  const encoded=options.groupedPhotos?[...new Set(await Promise.all(files.map(jpeg)))]:[input.photo];
+  input={...input,photo:encoded[0]};
+  if(options.groupedPhotos)options.photos=encoded;
   const keys=[];
-  for(const photo of options.photos){
+  for(const photo of encoded){
    const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(photo));
    keys.push(Array.from(new Uint8Array(bytes),value=>value.toString(16).padStart(2,'0')).join(''));
   }
-  options.mediaKey=keys.sort().join(':');
+  options.attachmentKeys=keys;options.mediaKey=[...keys].sort().join(':');
  }
- const userText=[input.text,input.photo?(options.groupedPhotos?'（同餐 '+files.length+' 张照片）':'（附一张照片）'):''].filter(Boolean).join(' ');
+ const userText=[input.text,input.photo?(options.groupedPhotos?'（附 '+files.length+' 张图片）':'（附一张照片）'):''].filter(Boolean).join(' ');
  const previous=book.current?.pending?.request;
- const hasPhoto=!!input.photo||!!previous?.healthAction?.photoSteps&&previous.text===input.text;
- if(!files.length&&previous?.healthAction?.photoSteps&&previous.text===input.text)options.mediaKey=previous.mediaKey;
+ const savedPlan=book.current?.pending?.healthAction;
+ const resumesAttachment=!!(savedPlan?.photoSteps||savedPlan?.agentTask)&&previous?.text===input.text;
+ const hasPhoto=!!input.photo||resumesAttachment&&previous.hasPhoto;
+ if(!files.length&&resumesAttachment)options.mediaKey=previous.mediaKey;
  const reuse=previous?.text===input.text&&previous.hasPhoto===hasPhoto&&(previous.mediaKey??null)===(options.mediaKey??null);
  const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto,
   healthClock:options.healthClock,mediaKey:options.mediaKey},reuse);
@@ -1021,7 +1110,7 @@ async function sendMessage(input,options,files){
  try{
   const flow={input,options,steps:[]};
   const staged=book.current?.pending?.healthAction;
-  if(options.healthActions&&(options.healthAuto||staged)){
+   if(options.healthActions&&!staged?.agentTask&&(options.healthAuto||staged)){
    flow.healthBase=await workspace.readHealth();
    if(options.healthAuto){
     const context=healthContext(flow.healthBase,input,options.healthReference);
@@ -1031,6 +1120,8 @@ async function sendMessage(input,options,files){
   const existing=flow.healthBase&&healthActionReceipt(flow.healthBase,healthOptions(flow,ticket));
   if(existing){
    echoHealth(ticket,existing);tell('');
+  }else if(staged?.agentTask){
+   await completeAgent(staged.agentTask,flow,ticket,staged);
   }else if(staged){
    if(!options.healthActions)throw Error('本轮未允许本机健康数据操作。');
    if(staged.plan){flow.photoSteps=staged.photoSteps;flow.photoReview=staged.photoReview;flow.photoNotes=staged.photoNotes;}
@@ -1077,10 +1168,12 @@ function memoriesFor(input,allowRead){
 composer.onsubmit=async e=>{
  e.preventDefault();if(busy||saving)return;
  const text=composer.elements.text.value.trim(),files=[...composer.elements.image.files];
- if(!text&&!files.length){tell('请输入消息或添加照片');return;}
+ const savedRequest=book.current?.pending;
+ const resumeSaved=!!savedRequest?.healthAction&&savedRequest.request?.text===text;
+ if(!text&&!files.length&&!resumeSaved){tell('请输入消息或添加照片');return;}
  busy=true;lock();tell('');
  try{
-  if(!demo){
+  if(!demo&&!resumeSaved){
    tell('正在读取本机 API Key…');
    if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
   }
@@ -1088,19 +1181,21 @@ composer.onsubmit=async e=>{
   const retry=pending?.text===text;
   const photo=files.length===1?await jpeg(files[0]):null,date=(retry?pending.date:null)??localDate();
   const model=readChatModel(workspace.finance).id;
-  const {turns,summary}=await prepareContext(date,model);
+  const {turns,summary}=resumeSaved?{turns:[],summary:null}:await prepareContext(date,model);
   const history=retry&&turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
-  const groupedPhotos=!demo&&files.length>1&&!/分别|逐张|每张|独立识别/.test(text)&&
-   skillCatalog(workspace.finance).some(skill=>skill.id==='photos'&&skill.enabled)&&composer.elements.allowRead.checked;
-  const input={mode:'chat',text:text||(groupedPhotos?'同餐照片预览':''),photo,date,history};
+  const groupedPhotos=!demo&&files.length>1&&(!/分别|逐张|每张|独立识别/.test(text)||/采购|订单|支付|付款|退款/.test(text))&&
+   skillCatalog(workspace.finance).some(skill=>['photos','receipts'].includes(skill.id)&&skill.enabled)&&composer.elements.allowRead.checked;
+  const input={mode:'chat',text,photo,date,history};
   const allowRead=composer.elements.allowRead.checked;
+  const agentTasks=!demo&&allowRead&&(files.length>0||/账|帐|财务|买|花了|收了|支出|收入|采购|退款|报销|付款|支付/.test(text));
   const options={model,contextSummary:summary,allowRead,memory:memoriesFor(input,allowRead),
    documentAccess:hasDocumentAccess(workspace.finance),autoMemory:automaticMemoryEnabled(workspace.finance),
-   skills:allowRead?selectSkills(skillCatalog(workspace.finance),{text,photos:groupedPhotos,
+   skills:allowRead?selectSkills(skillCatalog(workspace.finance),{text,photos:files.length>0,
     previousText:history.filter(row=>row.role==='user').at(-1)?.text}):[],groupedPhotos,
-   healthActions:!demo&&allowRead&&(!files.length||groupedPhotos)&&!!input.text,healthAuto:allowRead&&hasHealthAuto(workspace.finance),
+   agentTasks,receiptInput:agentTasks&&files.length>0,agentQuiet:agentTasks,
+   healthActions:!demo&&allowRead&&(!files.length||groupedPhotos||agentTasks)&&!!input.text,healthAuto:allowRead&&hasHealthAuto(workspace.finance),
    healthClock:(retry?pending.healthClock:null)??localClock(),healthReference:book.current?.healthReference};
-  if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
+  if(files.length<2&&!resumeSaved&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
  }catch(err){report(err);}
  finally{busy=false;lock();}

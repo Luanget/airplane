@@ -38,14 +38,18 @@ export const HEALTH_SKILLS=Object.freeze([
   ['read_packages'],['weigh'],'先核包装和最近一次实称，再比较同一包装。','拒绝跨瓶、增长和没有依据的换算。','重量差及最新毛重。'),
  define('exercise','运动和 TDEE',/运动|骑|跑步|通勤|散步|训练|手表|watch|tdee|消耗/i,
   ['read_health_report','read_ledger'],['activity','correct_activity'],'区分通勤、专项和设备全天数据，核对重叠。','按本机能量政策计算，不重复累计。','运动口径、计入消耗和周期。'),
- define('progress','晨重和六天周期',/体重|晨重|均重|周期|缺口|减脂|趋势/,
-  ['read_health_report','read_ledger'],['weight','cycle','correct_weight'],'按日期查询有效晨重和周期。','缺报不记为零，正式和条件分开。','七次窗口、正式缺口、进度和理论脂肪当量。'),
+ define('progress','晨重和六天周期',/体重|晨重|均重|周期|缺口|减脂|趋势|全天|封账|待补/,
+  ['read_health_report','read_ledger'],['weight','cycle','correct_weight','day_status'],'按日期查询有效晨重和周期。','缺报不记为零，正式和条件分开。','七次窗口、正式缺口、进度和理论脂肪当量。'),
  define('correction','历史补报和纠错',/补报|补记|漏了|更正|改成|少算|多算|昨天|前天|原记录/,
   ['read_food_history','read_health_report','read_packages'],['correct'],'定位日期、餐次、原记录和关联库存。','更正原事件，新补报才新增。','改前改后、影响日期和重新计算。'),
  define('sync','文件同步',/同步|备份|外部主账|sqlite|library|合并导入|导出/i,
   ['read_health_status'],[],'读取账本来源、已导出的回执与冲突状态，使用现有文件流程。','禁止把本机保存或文件导出描述为外部主账已同步。','本机保存、同步包生成、外部确认三个状态。'),
  define('photos','餐食多图识别',/多图|照片|截图|标签|续粉|剩菜/,
-  ['read_packages'],['photo_meal'],'将同餐各图作为同一份证据，分离实吃、续份、剩余和包装标签。','同一道菜不同角度合并；无明确实吃授权只预览。','逐项来源和不确定性。')
+  ['read_packages'],['photo_meal'],'将同餐各图作为同一份证据，分离实吃、续份、剩余和包装标签。','同一道菜不同角度合并；无明确实吃授权只预览。','逐项来源和不确定性。'),
+ define('receipts','采购截图',/截图|订单|购物|实付|退款|采购/,
+  ['read_packages','read_ledger'],['receipt_order'],'按订单号合并附件，提取付款状态、价格、商品与包装规格。','校验实付与分类金额，食品入库，使用待同步日志联动账本。','支出分类、库存、分摊待补及退款。'),
+ define('finance','日常收支',/记账|记帐|支出|收入|花了|付款|报销|消费/,
+  ['read_ledger','read_expense_summary'],['finance_write'],'按本机启用分类校验本轮明确的一笔收支。','使用单独的自动执行授权和限额，对原账更改需人工核对。','金额、分类和撤销。')
 ]);
 
 export function skillCatalog(store){
@@ -61,7 +65,7 @@ export function setSkillEnabled(store,id,enabled){
 }
 export function selectSkills(catalog,{text='',photos=false,previousText=''}={}){
  const cue=/^(?:那|这|刚才|继续|然后)/.test(text)?previousText:'';
- return catalog.filter(skill=>skill.enabled&&(skill.pattern.test(text+' '+cue)||photos&&['photos','intake'].includes(skill.id)));
+ return catalog.filter(skill=>skill.enabled&&(skill.pattern.test(text+' '+cue)||photos&&['photos','intake','receipts'].includes(skill.id)));
 }
 export function assertSkillAction(catalog,kind){
  const skill=catalog.find(row=>row.actions.includes(kind));

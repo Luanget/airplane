@@ -13,7 +13,9 @@ body[data-module="health"] fieldset { min-width:0 }
 }
 .health-hero { margin-bottom:14px }
 .hero-label, .hero-foot, .cycle-meta { color:var(--muted); font-size:13px }
-.hero-tag { border-radius:999px; padding:4px 8px; background:var(--surface-2); font-size:11px }
+.hero-tag { border:0; border-radius:999px; padding:4px 8px; background:var(--surface-2); font:inherit; font-size:11px; color:inherit }
+.hero-tag:enabled { cursor:pointer }
+.hero-tag:disabled { opacity:1 }
 .hero-count { margin:8px 0 15px }
 .hero-count .unit { margin-left:5px; color:var(--muted); font-size:17px; letter-spacing:0 }
 .progress-track { height:8px; overflow:hidden; border-radius:999px; background:var(--surface-2); margin:8px 0 }

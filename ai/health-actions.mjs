@@ -1,7 +1,7 @@
 import {displayDay,normalizeClock} from '../calendar.mjs';
 import {HEALTH_STEP_LIMIT,healthActionSchema,matches} from '../health/contract.mjs';
 import {actualFood,addDays,addFood,allocateStock,cycleForDate,dayIntake,events,inventoryWithMoves,isStockReference,
- recordEvent,round,suggestNutritionByInventory,validDate} from '../health/core.mjs';
+ recordEvent,round,setDayCompleteness,suggestNutritionByInventory,validDate} from '../health/core.mjs';
 import {confirmPackageAction,ensureContainers,packagesFor,revisePackageFood,revisePackageIntake,selectPackage} from '../health/containers.mjs';
 import {managedFoodPackage,onShelf} from '../health/container-ledger.mjs';
 import {basis,quantityInUnit} from '../health/candidates.mjs';
@@ -70,7 +70,7 @@ function plausible(text,sku){
  return /包面/.test(raw)&&/(?:面条|荞麦面|方便面|面饼|拉面)/.test(sku.name);
 }
 function hasWriteLanguage(text){
- return /吃|喝|毛重|剩.*(?:克|g)|现在.{0,18}(?:克|g)|记|称|克|丢|扔|分装|晨重|体重|跑|骑|走|运动|消耗|手表|更正|改|错|少算|多算|公斤|kg/i.test(text);
+ return /吃|喝|毛重|剩.*(?:克|g)|现在.{0,18}(?:克|g)|记|称|克|丢|扔|分装|晨重|体重|跑|骑|走|运动|消耗|手表|更正|改|错|少算|多算|公斤|封账|全天|缺报|待补|kg/i.test(text);
 }
 function statedDate(text,today){
  if(/前天/.test(text))return addDays(today,-2);
@@ -351,6 +351,10 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
    registerPortions(next,{foodId:sku.id,batchId:(selected||sources[0]).id,date,quantities:step.weights,
     estimated:step.estimated==='yes',id:operationId});
    ensureContainers(next);messages.push(sku.name+'分为 '+step.weights.join('、')+' g');
+  }else if(step.kind==='day_status'){
+   if(step.status==='complete'&&!dayIntake(next,date).reported)throw Error('没有当天的实际摄入记录可以确认。');
+   setDayCompleteness(next,date,step.status);
+   messages.push(displayDay(date)+(step.status==='complete'?' 全天记录已确认':' 标记为全天待补'));
   }else if(step.kind==='weight'){
    const prior=events(next,'weights').filter(row=>row.date===date&&(row.isMorning===true||/^(是|纳入)/.test(row.trendStatus??'')));
    if(step.morning==='yes'&&prior.length){
@@ -412,7 +416,7 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
  return {next,messages,queryMessages,touched:[...touched],reference:resultReference, id,text,today,habits};
 }
 
-const patches=['foods','weights','activities','stockMoves','batches','containers','containerEvents'];
+const patches=['foods','weights','activities','stockMoves','batches','containers','containerEvents','dayCompleteness'];
 function changesFrom(before,after){
  const changes={};
  for(const key of patches){
@@ -505,6 +509,13 @@ function validatePlan(plan,text,photoSteps={}){
  for(const [index,step] of plan.steps.entries()){
   if(!step.evidence.trim()||!text.includes(step.evidence))throw Error('有操作缺少本轮原话依据，账本未更改。');
   if(!photoSteps[index])verifyValues(step);
+  if(step.kind==='day_status'){
+   const partial=/待补|没记全|未记全|未完整|没有记全|没录全|未录全|缺报|不完整/;
+   const complete=/已记录|已记全|记完|已报完|已齐|确认.*全天|全天.*完整|封账/;
+   if(!/全天|日终|封账|缺报/.test(step.evidence)||
+     (step.status==='partial'?!partial.test(step.evidence):partial.test(step.evidence)||!complete.test(step.evidence)))
+    throw Error('请明确是否确认当天所有饮食已记录。');
+  }
   if(step.kind==='discard'&&!/丢弃|扔掉|扔了|倒掉|过期.*扔/.test(step.evidence))
    throw Error('丢弃操作需要本轮明确说要丢弃。');
   if(step.kind==='discard'&&/全部|所有|一并|都扔/.test(step.evidence))
@@ -542,7 +553,10 @@ export async function executeHealthAction(workspace,base,plan,options){
  if(!Object.keys(changesFrom(base,prepared.next)).length)return {text:preview,source};
  const signature=today+'\n'+normal(text)+'\n'+(mediaKey||'');
  check();
- const record={id,signature,at:now,expectedRevision:expected,revision:expected+1,changes:changesFrom(base,prepared.next),
+ const changes=changesFrom(base,prepared.next);
+ const independent=Object.keys(changes).every(key=>['weights','activities','dayCompleteness'].includes(key))?
+  changesFrom(prepared.next,base):null;
+ const record={id,signature,at:now,expectedRevision:expected,revision:expected+1,changes,independent,
   reference:prepared.reference,text:'已保存。'+preview,source};
  prepared.next.local.assistantActions=[...operationList(prepared.next).slice(-(HISTORY_SIZE-1)),record];
  await workspace.saveHealth(prepared.next,expected,check);
@@ -565,7 +579,11 @@ export async function undoHealthAction(workspace,id){
  const state=await workspace.readHealth(),expected=state.revision??0;
  const record=operationList(state).find(row=>row.id===id);
  if(!record||record.undone)throw Error('这笔操作已撤销或无法定位。');
- if(record.revision!==expected)throw Error('之后已有健康账本更新，请通过对话更正具体记录。');
+ if(record.revision!==expected){
+  const unchanged=record.independent&&Object.entries(record.independent).every(([key,rows])=>
+   rows.every(([id,post])=>same((state.local[key]??[]).find(row=>row.id===id),post?.row)));
+  if(!unchanged)throw Error('之后已有相关账本更新，请通过对话更正具体记录。');
+ }
  const next=structuredClone(state);
  for(const key of patches){
   const items=record.changes[key];if(!items)continue;
@@ -587,7 +605,7 @@ export async function undoHealthAction(workspace,id){
   for(const [id,exists,row] of touched)if(exists)table[id]=row;else delete table[id];
  }
  const receipt=operationList(next).find(row=>row.id===id);
- receipt.undone=true;delete receipt.changes;
+ receipt.undone=true;delete receipt.changes;delete receipt.independent;
  await workspace.saveHealth(next,expected);
  const stored=await workspace.readHealth();
  if(!operationList(stored).find(row=>row.id===id)?.undone)throw Error('未能验证撤销，请重新查询。');

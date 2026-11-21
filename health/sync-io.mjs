@@ -70,7 +70,7 @@ export function createSyncPackage(state,{id,version,now=new Date().toISOString()
  for(const value of deletes.values())
   if(EVENT_TYPES.includes(value.type)&&!events(state,value.type).some(row=>row.id===value.id))
    changes.push({...value,action:'delete'});
- for(const type of ['stockMoves','batches','purchases','templates','shoppingList','containers','containerEvents']){
+ for(const type of ['stockMoves','batches','purchases','templates','shoppingList','containers','containerEvents','dayCompleteness','agentReceipts']){
   const prior=new Map(Object.values(anchors).flatMap(anchor=>Object.values(anchor.records[type]??{}))
    .filter(record=>record.target).map(record=>[record.target,record.accepted]));
   for(const row of state.local[type]??[]){
@@ -188,6 +188,10 @@ function projectSummaries(tables,raw,base,state,dates,today){
   for(const date of new Set([...Object.keys(left),...Object.keys(right)]))
    if(validDate(date)&&!same(left[date],right[date]))dates.add(date);
  }
+ const beforeStatus=new Map((base.local.dayCompleteness??[]).map(row=>[row.date,row.status]));
+ const afterStatus=new Map((state.local.dayCompleteness??[]).map(row=>[row.date,row.status]));
+ for(const date of new Set([...beforeStatus.keys(),...afterStatus.keys()]))
+  if(beforeStatus.get(date)!==afterStatus.get(date))dates.add(date);
  const daily=new Map(),energy=new Map();
  for(const date of dates){
   const previous=dayIntake(base,date),next=dayIntake(state,date);

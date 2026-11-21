@@ -914,6 +914,9 @@ function openTransactionModal(existing=null,suppliedDraft=null){
           }
         }
         if(existing){
+          if(existing.receiptKey&&(syncStock||record.amount!==Number(existing.amount)||record.date!==existing.date||record.type!==existing.type)){
+            toast('截图订单的金额和日期需要整单核对。请在原对话查看执行详情。');return;
+          }
           const order=purchaseForTransaction(health,existing.id);
           if(order&&(syncStock||record.amount!==Number(existing.amount)||record.date!==existing.date||record.time!==normalizeClock(existing.time)||record.type!==existing.type)){
             openLinkedPurchase(order);return;
@@ -935,7 +938,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
     }
   };
   document.getElementById('txSubmit').onclick=()=>submit();
-  if(!suppliedDraft?.purchaseId){
+  if(!suppliedDraft?.purchaseId&&!existing?.receiptKey){
     const sync=document.createElement('button');
     sync.type='button';sync.className='secondary-button';sync.textContent='保存食品支出并同步入库';
     sync.onclick=()=>submit(true);
@@ -951,6 +954,9 @@ function openLinkedPurchase(order){
   location.href=url.href;
 }
 async function deleteTransaction(id){
+  if(data.transactions.find(row=>row.id===id)?.receiptKey){
+    toast('请在原对话的执行详情中撤销整张截图订单。');return;
+  }
   try{
     const order=purchaseForTransaction(await readHealthState(),id);
     if(order){openLinkedPurchase(order);return;}

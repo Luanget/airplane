@@ -6,6 +6,7 @@ import {extname} from 'node:path';
 import {CORE_RULES} from '../ai/health-profile.mjs';
 import {freshData} from '../finance-storage.mjs';
 import {assistantFixture,action,examples,proposal} from './health-action-fixture.mjs';
+import {combinedTask,conversation,orderFinance,orderReceipt,orderState,receiptStep} from './order-agent-fixture.mjs';
 
 const {chromium}=createRequire(import.meta.url)('playwright-core');
 const assets=new Set(['sw.js',...Array.from(readFileSync('sw.js','utf8').split('const assets')[0].matchAll(/'\.\/([^']+)'/g),match=>match[1])]);
@@ -59,13 +60,34 @@ try{
    assert.match(body.instructions,/同一菜不同角度/);
    assert.match(body.instructions,/photos v1/);
    result={mode:'photo_meal',date:null,result:photoPlan};
+  }else if(['',conversation,'补充购买付款截图','测试购物车','登记退款','确认顺序'].includes(input.text)){
+   const order=orderReceipt(input.date);
+   const images=body.input[0].content.filter(row=>row.type==='input_image');
+   assert.ok(images.length>=1);
+   assert.match(body.instructions,/独立流水号/);
+   let plan;
+   if(input.text===conversation){
+    assert.equal(images.length,2);
+    plan=combinedTask({...order,images:[1,2],orderNo:'SYNTH-BROWSER-MIX'});
+   }else{
+    const patch={
+     '':{lines:[],discount:null,shipping:null},
+     '补充购买付款截图':{orderNo:'SYNTH-BROWSER-REBUY',images:[1]},
+     '测试购物车':{state:'unpaid',paymentEvidence:'购物车待付款'},
+     '登记退款':{orderNo:'SYNTH-START-001',state:'partial_refund',paymentEvidence:'退款成功',totalEvidence:'实退 ¥6',
+      refund:6,refundNo:'SYNTH-REFUND-001',lines:[],discount:null,shipping:null},
+     '确认顺序':{orderNo:'SYNTH-BROWSER-REVIEW'}
+    }[input.text];
+    plan={steps:[receiptStep({...order,...patch})]};
+   }
+   result={mode:'agent_task',date:null,result:plan};
   }else if(input.text===financeText)result={mode:'document_edit',date:null,result:{document:'finance',patch:'[]'}};
   else if(input.text===deleteText)result={mode:'delete_record',date:input.date,result:{kind:'food',query:'',meal:null,selection:'all'}};
   else {
    assert.ok(expected.has(input.text),input.text);
    result={mode:'health_action',date:null,result:expected.get(input.text)};
   }
-  const value={reply:'正在处理。',proposal:result,...(full?{saveMode:'save'}:{}),
+  const value={reply:result?.mode==='agent_task'?'模型声称已全部保存。':'正在处理。',proposal:result,...(full?{saveMode:'save'}:{}),
    ...(body.text.format.schema.required.includes('memoryUpdates')?{memoryUpdates:[]}:{})};
   await route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]}});
  });
@@ -100,7 +122,7 @@ try{
  async function sent(text,match,requestCount=1){
   const start=calls.length;
   await say(text);
-  await log.getByText(match).last().waitFor();
+  await log.locator('.chat-bubble').filter({hasText:match}).last().waitFor();
   assert.equal(calls.length-start,requestCount);
   assert.equal(await review.isVisible(),false);
  }
@@ -183,7 +205,7 @@ try{
  await open();
  const agent=settings.locator('#assistant-agent');
  await agent.getByText('健康 Skills 与规则',{exact:true}).click();
- assert.equal(await agent.locator('[data-skill-list] input:checked').count(),9);
+ assert.equal(await agent.locator('[data-skill-list] input:checked').count(),11);
  const content=['# 合成工作规范',...Object.keys(CORE_RULES),
   '普通日参考约 1700 kcal。TDEE基线2900kcal，已包含日常通勤。',
   '六天缺口7700 kcal。一天通常1袋鸡胸。芹菜在午餐与晚餐分两餐。'].join(String.fromCharCode(10));
@@ -227,4 +249,105 @@ try{
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),375);
  assert.deepEqual(errors,[]);
  console.log('PASS same-meal three-photo grouping, additional serving, reporting, deduplicated retry and mixed execution');
+ await page.setViewportSize({width:390,height:844});
+ await page.evaluate(async({seed,ledger})=>{
+  const storage=await import('../health/storage.mjs');
+  const current=await storage.readState();
+  await storage.saveState(seed,current.revision);
+  localStorage.setItem('airplane-pwa-v1',JSON.stringify(ledger));
+ },{seed:orderState(today),ledger:orderFinance(today)});
+ await page.locator('[data-new]').click();
+ const accessSection=settings.locator('details').filter({has:page.locator('[data-finance-auto]')});
+ const openAccess=async()=>{
+  await open();
+  if(!await accessSection.evaluate(node=>node.open))await accessSection.locator('summary').click();
+ };
+ await openAccess();
+ await full.uncheck();
+ const financeGrant=settings.getByRole('checkbox',{name:'日常财务自动记账'});
+ const financeLimit=settings.locator('[data-finance-limit]');
+ assert.equal(await financeGrant.isChecked(),false);
+ await financeGrant.check();await financeLimit.fill('10');await financeLimit.press('Tab');await close();
+ const choose=files=>composer.locator('[name=image]').setInputFiles(files);
+ const newEvidence=(await page.evaluate(()=>['#2846be','#882b40'].map(color=>{
+  const canvas=document.createElement('canvas');canvas.width=24;canvas.height=24;
+  const drawing=canvas.getContext('2d');drawing.fillStyle=color;drawing.fillRect(0,0,24,24);
+  return canvas.toDataURL('image/png').split(',')[1];
+ }))).map((base64,index)=>({name:'order-'+index+'.png',mimeType:'image/png',buffer:Buffer.from(base64,'base64')}));
+ const receipts=async()=>JSON.parse((await read()).finance).transactions.filter(row=>row.receiptKey);
+ await choose([attachments[0]]);await say('');
+ await review.getByRole('button',{name:'确认待保存项'}).waitFor();
+ assert.match(await review.innerText(),/单笔上限/);
+ assert.equal((await receipts()).length,0);
+ await review.getByRole('button',{name:'确认待保存项'}).click();
+ await log.getByText(/已记支出 ¥34.00/).last().waitFor();
+ assert.equal((await receipts()).length,1);
+ assert.equal((await receipts())[0].receiptUnallocated,true);
+ assert.equal(await log.getByText('模型声称已全部保存。',{exact:true}).count(),0);
+ await choose([attachments[0]]);await sent('',/未重复写入/);
+ assert.equal((await receipts()).length,1);
+ await choose([attachments[2]]);await sent('测试购物车',/未付款订单或购物车/);
+ await openAccess();
+ await financeLimit.fill('300');await financeLimit.press('Tab');await close();
+ await choose([attachments[2]]);await sent('登记退款',/已登记退款 ¥6.00/);
+ assert.equal((await receipts()).at(-1).budgetSync,false);
+ await choose([attachments[1],attachments[2]]);await sent(conversation,/已记支出 ¥34.00.*72.4 kg.*下一餐建议/s);
+ assert.equal((await read()).state.local.foods.length,0);
+ assert.equal((await read()).state.local.weights.length,1);
+ assert.deepEqual((await read()).milk.map(row=>row.nominal.value),[500,500]);
+ assert.ok((await receipts()).some(row=>row.categoryName==='家庭食材'&&row.amount===13&&row.budgetExcluded));
+ assert.ok((await receipts()).some(row=>row.categoryName==='日用'&&row.amount===18));
+ console.log('PASS payment-only screenshot, opt-in cap, no model success claim, duplicate, unpaid cart, refund, mixed category and weight / order / dinner DAG');
+
+ await page.evaluate(()=>{
+  const put=IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put=function(value,key){
+   if(key==='main')throw Error('合成中断，财务落账后健康尚未写入');
+   return put.call(this,value,key);
+  };
+ });
+ await choose([newEvidence[0]]);await say('补充购买付款截图');
+ await review.locator(":scope > p").filter({hasText:/财务已保存，健康账本待同步/}).waitFor();
+ assert.equal((await read()).state.local.purchases.length,1);
+ assert.equal((await receipts()).length,8);
+ const during=calls.length;
+ await page.reload();
+ await composer.locator('[data-retry-request]').click();
+ await log.getByText(/已记支出 ¥34.00.*未重复写入/).last().waitFor();
+ assert.equal(calls.length,during);
+ assert.equal((await receipts()).length,8);
+ assert.equal((await read()).state.local.purchases.length,2);
+ const details=log.locator('details.chat-source').last();
+ await details.locator('summary').click();
+ await details.getByRole('button',{name:'撤销截图订单'}).click();
+ await details.getByRole('button',{name:/已撤销整张截图订单/}).waitFor();
+ assert.equal((await receipts()).length,5);
+ assert.equal((await read()).state.local.batches.length,1);
+ assert.equal(await page.evaluate(async()=>!!await (await import('../health/purchase-sync.mjs')).readPendingPurchase({finance:localStorage})),false);
+ console.log('PASS staged IndexedDB interruption, reload without API, one inventory commit and linked undo');
+
+ await page.evaluate(()=>{
+  const set=Storage.prototype.setItem;
+  Storage.prototype.setItem=function(key,value){
+   if(key==='airplane-pwa-v1'&&!window.financeFailure){
+    window.financeFailure=true;throw Error('合成财务写入中断');
+   }
+   return set.call(this,key,value);
+  };
+ });
+ await choose([newEvidence[1]]);await say('确认顺序');
+ await review.locator(":scope > p").filter({hasText:/财务写入未完成/}).waitFor();
+ assert.equal((await receipts()).length,5);
+ const retryCount=calls.length;
+ await composer.getByRole('button',{name:'重试未完成步骤'}).click();
+ await log.getByText(/已记支出 ¥34.00/).last().waitFor();
+ assert.equal(calls.length,retryCount);
+ assert.equal((await receipts()).length,8);
+ assert.equal((await read()).state.local.batches.length,2);
+ for(const width of [375,390,430]){
+  await page.setViewportSize({width,height:600});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),width);
+ }
+ assert.deepEqual(errors,[]);
+ console.log('PASS failed primary finance write safely retries and compact order UI fits three mobile widths');
 }finally{await browser?.close();server.close();}

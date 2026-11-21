@@ -5,7 +5,7 @@ import {modelRequest,parseResult,pendingLedgerRead} from '../ai/responses.mjs';
 import {readResponseStream,ResponseStreamError} from '../ai/stream.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validateAppState,inventoryWithMoves,dayIntake,energyForDay,cycleForDate} from '../health/core.mjs';
+import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validateAppState,inventoryWithMoves,dayIntake,energyForDay,cycleForDate,setDayCompleteness} from '../health/core.mjs';
 import {addBatch,saveSku} from '../health/inventory.mjs';
 import {remainingGrossWeights,summarizeFoodHistory,reviseFoodPortion} from '../health/food-history.mjs';
 import {readLedger} from '../ai/workspace.mjs';
@@ -53,6 +53,7 @@ test('scoped progress queries use local weight and cycle reports without exporti
  for(let i=0;i<8;i++)state.local.weights.push({source:'manual',date:addDays(today,i-7),kg:88-i/4,isMorning:true});
  state.local.weights.push({source:'manual',date:addDays(today,1),kg:100,isMorning:true});
  addFood(state,{date:yesterday,meal:'午餐',name:'测试食品',kcal:1500,nutrition});
+ setDayCompleteness(state,yesterday,'complete');
  const workspace={readHealth:async()=>state};
  const weight=await readLedger(workspace,{scope:'weight',query:''},today);
  assert.deepEqual(weight,{asOf:today,latest:{date:today,kg:86.25,tentative:false},change:-0.25,count:7,last7:87,previous7:87.25,delta:-0.25});
@@ -283,7 +284,7 @@ test('requests never serialize the health snapshot, financial data or historical
 test('six-day boundary, next-day closing and missing days, with imported energy-only baseline',()=>{
   const state=newState(); state.settings.cycleAnchor=date;state.settings.cycleDays=6;
   assert.equal(cycleForDate(state,'2030-01-07','2030-01-07').start,'2030-01-07');
-  state.legacy.energy[date]={intake:800,tdee:null};
+  state.legacy.energy[date]={intake:800,tdee:null,status:'已封账'};
   const next=confirmItems(state,[part],date,'晚餐');
   assert.equal(energyForDay(next,date,date).closed,false);
   assert.equal(energyForDay(next,date,'2030-01-03').intake,900);
@@ -432,7 +433,8 @@ test('nutrition queries omit inventory and matching saved chat queries omit othe
  assert.equal(summary.protein,15);
  assert.equal(summary.deficit,2100);
  assert.equal(summary.cost,2);
- assert.equal(summary.closed,true);
+ assert.equal(summary.closed,false);
+ assert.equal(summary.completeness.status,'partial');
  assert.ok(!Object.hasOwn(summary,'stock'));
  const book={list:()=>[{id:'first',title:'测试',messages:[{role:'assistant',text:'合成体重趋势',carry:true},
   {role:'assistant',text:'另一个主题'}]},{id:'second',title:'无关',messages:[{role:'user',text:'合成体重秘密'}]}]};

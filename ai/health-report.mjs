@@ -48,10 +48,10 @@ export function healthReport(state,date,today,{includeMeals=true,proposed=[]}={}
   fat:intake.totals.fat==null?null:round(fatMin-intake.totals.fat,1),
   sodium:intake.totals.sodium==null?null:round(sodiumTarget-intake.totals.sodium,1)};
  return {date,...(includeMeals?{meals:mealRows(actual),plans:mealRows(pending)}:{}),actual:intake.totals,
-  cost:{known:intake.cost,partial:intake.costPartial},targets,difference,quality:{status:!intake.reported?'缺报':intake.incomplete.length?'部分数据待补':'已有报告',
+  cost:{known:intake.cost,partial:intake.costPartial},targets,difference,quality:{status:!intake.reported?'缺报':intake.incomplete.length?'部分营养数据待补':day.completeness.status==='complete'?'全天记录已确认':'全天记录待确认',
    missingMeals:['午餐','晚餐'].filter(meal=>!actualMeals.has(meal)),
    unknown:intake.incomplete},conditionalNutrition:pending.length?conditional(intake.totals,pending):null,
-  energy:{tdee:day.tdee,source:day.source,closed:day.closed,deficit:day.deficit},
+  energy:{tdee:day.tdee,source:day.source,closed:day.closed,completeness:day.completeness,deficit:day.deficit},
   cycle:{start:cycle.start,end:cycle.end,days:cycle.days,closedDays:cycle.closedDays,unreported:cycle.unreported,
    closedThrough:cycle.entries.filter(row=>row.closed).at(-1)?.date??null,formal:cycle.deficit,goal:cycle.goal,
    conditionalToday,conditionalTotal:conditionalToday==null?null:round(cycle.deficit+conditionalToday,2),

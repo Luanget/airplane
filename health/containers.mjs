@@ -61,18 +61,21 @@ export function ensureContainers(state){
  for(const sku of skuRows){
   if(!sku.active||isStockReference(sku))continue;
   const skuLots=lots.filter(lot=>lot.foodId===sku.id);
-  const spec=packageSpec(sku);
-  if(spec){
+  const defaultSpec=packageSpec(sku);
+  if(defaultSpec||skuLots.some(lot=>lot.packageSpec)){
    const receipts=local.stockMoves.filter(row=>row.foodId===sku.id&&!row.batchId&&!row.containerId&&row.delta>0)
     .map(row=>({id:'receipt:'+row.id,quantity:row.delta,costCents:row.costCents,origin:'receipt'}));
    const groups=[...skuLots.filter(lot=>!lot.portion),{id:virtualBatch(sku.id),quantity:sku.qty,costCents:null,origin:'opening'},...receipts];
    for(const lot of groups){
+    const declared=lot.packageSpec;
+    const spec=declared?packageSpec({...sku,packageKind:declared.kind,packageSize:declared.size,packageUnit:declared.unit}):defaultSpec;
+    if(!spec)continue;
     const count=round(lot.quantity/spec.stockAmount,6);
     if(!Number.isSafeInteger(count)||count<=0)continue;
     let allocated=0;
     for(let i=0;i<count;i++){
      const total=lot.costCents==null?null:Math.round((i+1)*lot.costCents/count);
-     const price=sku.priceBasis===sku.unit?sku.pricePerUnit:null;
+     const price=lot.receiptLine==null&&sku.priceBasis===sku.unit?sku.pricePerUnit:null;
      const costCents=total===null?(price==null?null:Math.round(price*spec.stockAmount*100)):total-allocated;
      allocated=total??0;
      add(newContainer(sku,lot.id,i,{...spec,costCents,origin:lot.origin??'batch'}));

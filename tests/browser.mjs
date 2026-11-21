@@ -158,6 +158,7 @@ try {
   const weightChart=page.getByRole('slider',{name:'查看近期晨重'});
   await weightChart.waitFor();
   assert.match(await weightChart.getAttribute('aria-valuetext'),/1月4日.*79\.7 kg/);
+  await weightChart.scrollIntoViewIfNeeded();
   const plot=await weightChart.boundingBox();
   await page.mouse.move(plot.x+plot.width*.92,plot.y+plot.height*.5);
   await page.mouse.down();

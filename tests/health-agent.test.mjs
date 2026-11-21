@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {assistantFixture,action,proposal} from './health-action-fixture.mjs';
 import {addBatch,saveSku} from '../health/inventory.mjs';
-import {addFood,addDays,dayIntake,energyForDay,events,inventoryWithMoves,recordEvent,validateAppState} from '../health/core.mjs';
+import {addFood,addDays,dayIntake,energyForDay,events,inventoryWithMoves,recordEvent,setDayCompleteness,validateAppState} from '../health/core.mjs';
 import {ensureContainers,packagesFor} from '../health/containers.mjs';
 import {recordPurchase} from '../health/purchases.mjs';
 import {HEALTH_SKILLS,SKILLS_KEY,assertSkillAction,selectSkills,setSkillEnabled,skillCatalog} from '../ai/skills.mjs';
@@ -156,6 +156,8 @@ test('daily reports distinguish pending meals, missing nutrients, measured weigh
  assert.notEqual(full.cycle.formal,full.cycle.conditionalTotal);
  assert.match(renderHealthReport(full),/正式累计缺口.*\n理论脂肪当量/s);
  mix('历史补报',missing,'晚餐','actual',1500);
+ assert.equal(healthReport(state,date,date).cycle.closedDays,full.cycle.closedDays);
+ setDayCompleteness(state,missing,'complete');
  assert.equal(healthReport(state,date,date).cycle.closedDays,full.cycle.closedDays+1);
 });
 

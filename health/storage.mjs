@@ -108,11 +108,12 @@ export async function replaceRestoreSnapshot(account,expected,next){
   });
  }finally{db.close();}
 }
-export function stagePurchaseUpdate(account,state,expected,change){
+export function stagePurchaseUpdate(account,state,expected,change,guard){
  ensureContainers(state);
  if(!validateAppState(state))throw Error('采购更新后的健康账本无效');
  return purchaseWrite(account,(store,current,pending)=>{
   if(pending||(current?.revision??0)!==expected)throw Error('账本已变更，请刷新后重试');
+  guard?.();
   const job={id:crypto.randomUUID(),expected,state:{...state,revision:expected+1},change};
   store.put(pack(account,job),purchaseSlot(account));
   return job;

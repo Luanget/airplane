@@ -70,14 +70,14 @@ export function saveSku(state,fields) {
   return row;
 }
 
-export function addBatch(state,{id=makeId('batch'),foodId,date,time,quantity,costCents=null,expires=null,raw=null,cooked=null,reason='采购',parent=null,portion=false,estimated=false}) {
+export function addBatch(state,{id=makeId('batch'),foodId,date,time,quantity,costCents=null,expires=null,raw=null,cooked=null,reason='采购',parent=null,portion=false,estimated=false,packageSpec=null,receiptLine}) {
   quantity=numeric(quantity);
   if(!validDate(date) || !(quantity>0) || expires&&!validDate(expires) || !inventoryWithMoves(state).some(s=>s.id===foodId))
     throw Error('请检查批次数量、食品和日期');
   if(costCents!==null && (!Number.isSafeInteger(costCents)||costCents<0))throw Error('价格须精确到分');
   const batches=state.local.batches??=[];
   if(batches.some(b=>b.id===id))throw Error('此批次已入库');
-  const batch={id,foodId,date,quantity,costCents,expires,raw,cooked,parent,...(portion?{portion,...(estimated?{estimated}:{})}: {})};
+  const batch={id,foodId,date,quantity,costCents,expires,raw,cooked,parent,...(packageSpec?{packageSpec}:{}),...(receiptLine!=null?{receiptLine}:{}),...(portion?{portion,...(estimated?{estimated}:{})}: {})};
   batches.push(batch);
   state.local.stockMoves.push({id:makeId('stock'),batchId:id,foodId,date,...(time?{time}:{}),delta:quantity,reason,createdAt:new Date().toISOString()});
   return batch;

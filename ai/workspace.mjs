@@ -91,12 +91,12 @@ export async function readLedger(workspace,args,today){
   const day=entries.find(row=>row.date===date);
   return {start,end,days,closedDays,unreported,closedThrough:entries.filter(row=>row.closed).at(-1)?.date??null,
    deficit,goal,progress,fatEquivalent,remaining,today:{date,intake:day?.intake??null,tdee:day?.tdee??null,
-    conditionalDeficit:day?.deficit??null,closed:day?.closed??false,source:day?.source??null}};
+    conditionalDeficit:day?.deficit??null,closed:day?.closed??false,completeness:day?.completeness??null,source:day?.source??null}};
  }
  if(args.scope==='nutrition'){
   const intake=dayIntake(state,date),energy=energyForDay(state,date,today);
   return {date,...dietSummary(state,intake),cost:intake.cost,costPartial:intake.costPartial,
-   tdee:energy.tdee,deficit:energy.deficit,closed:energy.closed,energySource:energy.source};
+   tdee:energy.tdee,deficit:energy.deficit,closed:energy.closed,completeness:energy.completeness,energySource:energy.source};
  }
  const inventory=inventoryWithMoves(state).filter(s=>s.active&&!isStockReference(s)&&(args.scope==='stock'||s.qty>0)&&(!query||s.name?.toLowerCase().includes(query)||s.aliases?.some(alias=>alias.toLowerCase().includes(query))))
   .sort((a,b)=>Number(b.name?.toLowerCase()===query)-Number(a.name?.toLowerCase()===query));

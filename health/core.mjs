@@ -170,6 +170,12 @@ export function validateAppState(state){
    && (state.importedAt == null || typeof state.importedAt === 'string')
    && (state.importInfo == null || object(state.importInfo))
    && validContainerTables(m,validDate)
+   && rows(m.dayCompleteness??[],x=>dated(x)&&x.id===x.date&&['complete','partial'].includes(x.status))
+   && new Set((m.dayCompleteness??[]).map(row=>row.id)).size===(m.dayCompleteness??[]).length
+   && rows(m.agentReceipts??[],x=>typeof x.id==='string'&&dated(x)&&typeof x.merchant==='string'&&
+    Number.isSafeInteger(x.total)&&x.total>0&&Array.isArray(x.financeIds)&&x.financeIds.length>0&&
+    x.financeIds.every(id=>typeof id==='string')&&new Set(x.financeIds).size===x.financeIds.length)
+   && new Set((m.agentReceipts??[]).map(row=>row.id)).size===(m.agentReceipts??[]).length
    && rows(l.foods, food) && rows(m.foods, x => food(x) && dated(x))
    && rows(l.weights, dated) && rows(m.weights, dated) && rows(l.activities, dated) && rows(m.activities, dated)
    && rows(l.inventory, sku) && rows(m.inventory ?? [], sku) && rows(m.stockMoves, x => dated(x) && Number.isFinite(x.delta))
@@ -235,6 +241,25 @@ export function weightTrend(state,asOf){
  const avg=arr=>arr.length?round(arr.reduce((s,x)=>s+x.kg,0)/arr.length,3):null;
  return {last:all[n-1]||null,points:all,last7:avg(last),previous7:previous.length===7?avg(previous):null,delta:previous.length===7?round(avg(last)-avg(previous),3):null};
 }
+export function setDayCompleteness(state,date,status){
+ if(!validDate(date)||!['complete','partial'].includes(status))throw Error('请选择有效日期和记录状态。');
+ const rows=state.local.dayCompleteness??=[];
+ const index=rows.findIndex(row=>row.id===date);
+ const row={id:date,date,status};
+ if(index<0)rows.push(row);
+ else rows[index]=row;
+}
+function completenessFor(state,date,food){
+ const manual=state.local.dayCompleteness?.find(row=>row.id===date);
+ if(manual)return {status:manual.status,source:'user'};
+ const settlement=state.legacy.energy[date]?.status??'';
+ const note=state.legacy.daily[date]?.note??'';
+ const historicalClose=/^(?:已(?:按次日自动)?封账|已结算|最终结算|完整)(?:[；（;:\s]|$)/;
+ const historicalIntake=/全天[^。；]{0,30}已确认|饮食已确认至晚餐|已确认[^。；]{0,20}没有其他饮食/;
+ if(historicalClose.test(settlement)||historicalClose.test(note)||historicalIntake.test(settlement)||historicalIntake.test(note))
+  return {status:'complete',source:'legacy'};
+ return {status:food.reported?'partial':'missing',source:'inferred'};
+}
 export function energyForDay(state,date,today){
  const legacy=state.legacy.energy[date];
  const food=dayIntake(state,date);
@@ -248,7 +273,8 @@ export function energyForDay(state,date,today){
  const tdee=deviceTotal ?? (importedTotal===null? effectiveTdee(state.settings,date)+currentExtra : importedTotal+currentExtra-previouslyIncluded);
  const reported=food.totals.kcal!==null && !food.incomplete.includes('kcal') && !activities.some(e=>deviceTotal===null&&!e.includedInBase&&numeric(e.kcal)===null);
  const intake=food.totals.kcal;
- return {date,reported,closed:date<today&&reported,deficit:reported?round(tdee-intake,2):null,intake,tdee,
+ const completeness=completenessFor(state,date,food);
+ return {date,reported,completeness,closed:date<today&&reported&&completeness.status==='complete',deficit:reported?round(tdee-intake,2):null,intake,tdee,
   source:deviceTotal!==null?'device_total':importedTotal!==null?'imported_energy_model':'base_tdee_estimate'};
 
 }
@@ -257,7 +283,7 @@ export function cycleForDate(state,date,today){
  const numDays=utcDay(date)-utcDay(anchor);const shift=Math.floor(numDays/days)*days;const start=addDays(anchor,shift),end=addDays(start,days-1);
  const dates=Array.from({length:days},(_,i)=>addDays(start,i));const entries=dates.map(d=>energyForDay(state,d,today));const closed=entries.filter(e=>e.closed&&e.reported);
  const sum=round(closed.reduce((s,e)=>s+e.deficit,0),2);const goal=Number(settings.cycleTarget)||7700;
- return {start,end,dates,entries,closedDays:closed.length,days,unreported:entries.filter(e=>e.date<today&&!e.reported).length,
+ return {start,end,dates,entries,closedDays:closed.length,days,unreported:entries.filter(e=>e.date<today&&!e.closed).length,
   deficit:sum,goal,progress:round(sum/goal*100,1),fatEquivalent:round(sum/7700,3),remaining:round(goal-sum,2)};
 }
 export function inventoryWithMoves(state){

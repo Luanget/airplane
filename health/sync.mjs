@@ -12,7 +12,7 @@ import {EVENT_TYPES,baselines,eventData,eventIdentity,externalCatalogs,foodStatu
 const clone=structuredClone;
 const empty=()=>Object.create(null);
 const labels={foods:'饮食',weights:'体重',activities:'运动',inventory:'食品与库存',purchases:'采购',
- batches:'库存批次',stockMoves:'库存流水',templates:'餐食模板',shoppingList:'补货清单',
+ dayCompleteness:'全天记录确认',agentReceipts:'截图订单回执',batches:'库存批次',stockMoves:'库存流水',templates:'餐食模板',shoppingList:'补货清单',
  containers:'独立包装',containerEvents:'包装称重或消耗',stockLinks:'扣库待核对',baselines:'每日汇总与能量基线',settings:'健康参数',aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',rules:'现行规则'};
 const keyFor=(kind,row)=>kind==='shoppingList'?row.foodId:kind==='rules'?row.key:row.id;
 const canonicalName=(state,row)=>{
@@ -183,9 +183,9 @@ function verifyGraph(state,baseline){
  const financeLinks=new Set();
  for(const order of state.local.purchases??[]){
   if(order.status==='cancelled')continue;
-  if(order.financeId){
-   if(financeLinks.has(order.financeId))report(order.id,'同一财务支出被多次关联');
-   financeLinks.add(order.financeId);
+  for(const id of order.financeIds??[order.financeId].filter(Boolean)){
+   if(financeLinks.has(id))report(order.id,'同一财务支出被多次关联');
+   financeLinks.add(id);
   }
   if(same(order,orderBefore.get(order.id)))continue;
   const items=order.items??[];
@@ -587,8 +587,9 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    if(orderSrc.items.some(item=>suppressed.has(item.foodId))){reserve(order,true);continue;}
    const key=hash(order.id),old=oldMatch('purchases',key);
    const sameId=seenOrders.find(row=>row.id===(old?.target??order.id));
-   const common=seenOrders.filter(row=>order.financeId&&row.financeId===order.financeId||purchaseKey(row)===purchaseKey(order));
-   const close=seenOrders.filter(row=>row.date===order.date&&row.items.some(item=>order.items.some(other=>other.foodId===item.foodId)));
+   const distinctReceipt=row=>order.receiptId&&row.receiptId&&order.receiptId!==row.receiptId;
+   const common=seenOrders.filter(row=>!distinctReceipt(row)&&(order.financeId&&row.financeId===order.financeId||purchaseKey(row)===purchaseKey(order)));
+   const close=seenOrders.filter(row=>!distinctReceipt(row)&&row.date===order.date&&row.items.some(item=>order.items.some(other=>other.foodId===item.foodId)));
    const before=sameId??(common.length===1?common[0]:null);
    const compare=value=>value&&{...value,items:value.items.map(line=>({...line,batchId:undefined})),id:undefined,history:undefined,financeId:undefined};
    if(before&&(same(compare(before),compare(order))||old?.incoming===hash(stable(orderSrc)))){
@@ -602,10 +603,10 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
     continue;
    }
    if(before||close.length||common.length){
-    const linked=before&&(before.financeId||financeRows.has('expense-'+before.id));
+    const linked=before&&(before.receiptId||before.financeId||financeRows.has('expense-'+before.id));
     const options=before?[{value:'keep',label:'保留本机采购'},
-     ...(!linked||before.totalCents===order.totalCents&&before.date===order.date&&order.status!=='cancelled'?review.slice(1):[])]:
-     [{value:'keep',label:'暂不入库'},{value:'separate',label:'确认为另一笔采购'}];
+     ...(!before.receiptId&&!order.receiptId&&(!linked||before.totalCents===order.totalCents&&before.date===order.date&&order.status!=='cancelled')?review.slice(1):[])]:
+     [{value:'keep',label:'暂不入库'},...(!order.receiptId?[{value:'separate',label:'确认为另一笔采购'}]:[])];
     const row=entry('purchases',key,before??common.concat(close),order,before?'conflict':'suspect',options,
      linked?'已关联财务。金额或日期的更正请在库存页处理原订单；合并不写财务。':'影响采购批次与成本，合并不新增财务支出');
     if(row.chosen==='take'){
@@ -646,7 +647,8 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   if(covered.size)next.local.stockMoves=next.local.stockMoves.filter(move=>!covered.has(move.linkedFoodId)||!changedNative.has(move.linkedFoodId));
   // A corrected order was already replayed via revisePurchase; do not replay
   // its receipts or cost allocations from the source's copy of the graph.
-  for(const kind of ['batches','stockMoves','templates','shoppingList']){
+  for(const kind of ['batches','stockMoves','templates','shoppingList','dayCompleteness','agentReceipts']){
+   if(['dayCompleteness','agentReceipts'].includes(kind)&&!incoming.local[kind]?.length)continue;
    const local=next.local[kind]??=[];
    const index=new Map(local.map(row=>[keyFor(kind,row),row]));
    const byContent=new Map(local.map(row=>[hash(stable({...row,id:undefined,createdAt:undefined})),row]));

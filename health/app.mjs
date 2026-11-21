@@ -13,7 +13,7 @@ import {quantityInUnit,basis,packageInfo} from './candidates.mjs';
 import {APP_VERSION,shellIcon} from '../shell.mjs';
 import {bindUpdateCheck} from '../updates.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
-import {newState,normalizeLedger,recoverLegacyPortions,validateAppState,APP_SCHEMA,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,availableBatches,addDays,isOnHand,isStockReference,carbReference,currentCarbReference,importedDietTargets} from './core.mjs';
+import {newState,normalizeLedger,recoverLegacyPortions,validateAppState,APP_SCHEMA,numeric,makeId,addFood,localStockChange,dayIntake,energyForDay,setDayCompleteness,cycleForDate,weightTrend,foodsForDay,inventoryWithMoves,suggestNutritionByInventory,validDate,NUTRIENTS,events,recordEvent,deleteEvent,batchBalances,availableBatches,addDays,isOnHand,isStockReference,carbReference,currentCarbReference,importedDietTargets} from './core.mjs';
 import {readState,saveState} from './storage.mjs';
 import {mealOrder,timelineGroup,eatingState,stockName,stockUnit,stockGroups} from './presentation.mjs';
 import {renderWeightChart} from './weight-chart.mjs';
@@ -95,7 +95,13 @@ function renderOverview(){
  const today=dateNow(),intake=dayIntake(state,selectedDate),cals=intake.totals.kcal,known=intake.reported;
  const goal=state.settings.calorieTarget,energy=energyForDay(state,selectedDate,today);
  $('report-date').value=selectedDate;
- text('today-status',selectedDate<today?(energy.closed?'已结算':known?'数据待补':'缺少记录'):selectedDate===today?'当天待结算':'未来日期');
+ text('today-status',selectedDate>today?'未来日期':energy.closed?'已结算':!known?'缺少记录':
+  energy.completeness.status==='complete'?(energy.reported?'次日结算':'热量数据待补'):'全天记录待确认');
+ const completeness=$('today-status');
+ completeness.disabled=selectedDate>today||!known;
+ completeness.title=completeness.disabled?'':energy.completeness.status==='complete'?'标记全天待补':'确认全天已记录';
+ completeness.setAttribute('aria-label',completeness.title||completeness.textContent);
+ completeness.dataset.status=energy.completeness.status==='complete'?'partial':'complete';
  text('hero-calories',known?fmt(cals,1):'—'); text('hero-goal',`目标 ${fmt(goal)} kcal`);
  syncCalendarFields($('report-date').parentElement);
  text('hero-remaining',cals!==null&&!intake.incomplete.includes('kcal')?(goal-cals>=0?`剩余 ${fmt(goal-cals,1)} kcal`:`超出 ${fmt(cals-goal,1)} kcal`):'摄入数据待补');progress('cal-progress',known?cals/goal*100:0);
@@ -107,7 +113,7 @@ function renderOverview(){
  const weights=weightTrend(state);text('weight-stat',weights.last?`${fmt(weights.last.kg,1)} kg`:'—');text('weight-date',weights.last?displayDay(weights.last.date):'尚未录入');text('weight-average',weights.last7!==null?`${fmt(weights.last7,1)} kg`:'—');text('weight-trend',weights.delta!==null?`滚动变化 ${weights.delta>=.05?'+':''}${fmt(weights.delta,1)} kg`:'需至少8次有效晨重');
  renderWeightChart($('weight-chart'),$('weight-chart-value'),weights.points.slice(-14));
  text('cycle-title',state.settings.cycleDays===6?'六天减脂周期':state.settings.cycleDays+' 天减脂周期');
- const cycle=cycleForDate(state,selectedDate,today);text('cycle-range',`${displayDay(cycle.start)} — ${displayDay(cycle.end)} · ${cycle.closedDays}/${cycle.days}天已封账`);text('cycle-deficit',`${fmt(cycle.deficit)} kcal`);progress('cycle-progress',cycle.progress);text('cycle-pct',`目标完成 ${fmt(cycle.progress,1)}% / ${fmt(cycle.goal)} kcal`);text('cycle-equivalent',`理论脂肪当量 ${fmt(cycle.fatEquivalent,3)} kg`);text('cycle-note',cycle.unreported?`有 ${cycle.unreported} 天缺少有效进食记录，未按零摄入推算；消耗和外食热量均为估算。`:'已过日期根据现有记录自动封账。可补报更正，估算并不等于实测。');
+ const cycle=cycleForDate(state,selectedDate,today);text('cycle-range',`${displayDay(cycle.start)} — ${displayDay(cycle.end)} · ${cycle.closedDays}/${cycle.days}天已封账`);text('cycle-deficit',`${fmt(cycle.deficit)} kcal`);progress('cycle-progress',cycle.progress);text('cycle-pct',`目标完成 ${fmt(cycle.progress,1)}% / ${fmt(cycle.goal)} kcal`);text('cycle-equivalent',`理论脂肪当量 ${fmt(cycle.fatEquivalent,3)} kg`);text('cycle-note',cycle.unreported?`有 ${cycle.unreported} 天记录缺失、未确认全天或热量待补，暂未纳入正式缺口。`:'全天记录确认后于次日结算。历史补报会重算。');
  renderTimeline();
 }
 function setDateDefaults(){document.querySelectorAll('form input[name=date]').forEach(el=>{if(!el.value)el.value=dateNow();});}
@@ -525,7 +531,7 @@ function bindForm(type,update,message){
    if(inlineStock?.form===form)closeInlineStock();
    if(historyTypes[type])$('health-entry').close();
   }catch(err){toast(err.message);}
-  finally{button.disabled=false;}
+  finally{button.disabled=selectedDate>dateNow()||!dayIntake(state,selectedDate).reported;}
  };
 }
 function setHealthState(next){state=ensureContainers(recoverLegacyPortions(next));rebuildFoodSelection();render();}
@@ -560,6 +566,16 @@ function attach(){
  $('add-health').onclick=openEntry;
  for(const type of Object.keys(historyTypes)) $(`${type}-form`).addEventListener('input',()=>dirtyEntries.add(type));
  $('health-settings').onclick=openSettings;
+ $('today-status').onclick=async()=>{
+  const button=$('today-status'),status=button.dataset.status;
+  const next=structuredClone(state);
+  const date=selectedDate;
+  if(date>dateNow()||!dayIntake(state,date).reported)return;
+  button.disabled=true;
+  try{setDayCompleteness(next,date,status);await commit(next,status==='complete'?'已确认全天记录':'已标记为待补');}
+  catch(err){toast(err.message);}
+  finally{button.disabled=false;}
+ };
  document.querySelectorAll('[data-entry]').forEach(b=>b.onclick=()=>selectEntry(b.dataset.entry));
  document.querySelectorAll('.health-sheet').forEach(d=>d.addEventListener('close',()=>{
   const t=$('toast');

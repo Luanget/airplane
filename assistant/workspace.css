@@ -132,6 +132,7 @@
 .assistant-data-review { margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.5 }
 
 .document-access { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600 }
+.document-access input[data-finance-limit] { width:8em; max-width:55% }
 .document-review pre { max-height:16rem; overflow:auto; touch-action:pan-y }
 
 .assistant-memory-item { padding-block:10px; border-bottom:1px solid var(--line) }

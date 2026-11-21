@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {addFood,batchBalances,cycleForDate,dayIntake,deleteEvent,energyForDay,events,inventoryWithMoves,localStockChange,newState,normalizeLedger,recordEvent,validateAppState} from '../health/core.mjs';
+import {addFood,batchBalances,cycleForDate,dayIntake,deleteEvent,energyForDay,events,inventoryWithMoves,localStockChange,newState,normalizeLedger,recordEvent,setDayCompleteness,validateAppState} from '../health/core.mjs';
 import {addBatch,convertCookingWeight,measuredGrams,saveSku,splitBatch} from '../health/inventory.mjs';
 import {combinedBackup,unpackBackup} from '../health/backup.mjs';
 
@@ -50,6 +50,8 @@ test('an unknown intake does not close a day; watch total suppresses duplicate a
  addFood(s,food,row.id);
  assert.equal(energyForDay(s,day,day).closed,false);
  assert.equal(energyForDay(s,day,tomorrow).tdee,2400);
+ assert.equal(cycleForDate(s,day,tomorrow).deficit,0);
+ setDayCompleteness(s,day,'complete');
  assert.equal(cycleForDate(s,day,tomorrow).deficit,2300);
 });
 test('combined backup accepts partial choices and requires a valid source ledger',()=>{

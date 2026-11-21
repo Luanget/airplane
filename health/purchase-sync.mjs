@@ -18,6 +18,12 @@ export function projectedExpense(order,updated,before){
  return same(before,after)?null:{id:before.id,before,after};
 }
 function status(finance,change){
+ if(change.kind==='receipt'){
+  const match=key=>change.pairs.every(pair=>same(transaction(finance.payload,pair.id),pair[key]));
+  if(match('after'))return 'applied';
+  if(match('before'))return finance.primary===change.expected?'ready':'stale';
+  return 'conflict';
+ }
  if(change.kind==='assistant'){
   const rows=change.entries.map(entry=>transaction(finance.payload,entry.id));
   if(rows.every((row,index)=>same(row,change.entries[index])))return 'applied';
@@ -31,7 +37,7 @@ function status(finance,change){
 }
 async function settle(account,job){
  const finance=readFinance(account.finance);
- const change=job.change,assistant=change.kind==='assistant';
+ const change=job.change,assistant=change.kind==='assistant',receipt=change.kind==='receipt';
  const phase=status(finance,change);
  if(phase==='conflict')throw Error('财务记录在另一页面有变更，请核对待同步的账本更新');
  if(phase==='stale'){
@@ -41,6 +47,11 @@ async function settle(account,job){
  if(phase==='ready'){
   const next=finance.payload??freshData();
   if(assistant)addConfirmedTransactions(next,change.entries);
+  else if(receipt){
+   const removed=new Set(change.pairs.filter(pair=>pair.before).map(pair=>pair.id));
+   next.transactions=next.transactions.filter(row=>!removed.has(row.id));
+   addConfirmedTransactions(next,change.pairs.flatMap(pair=>pair.after?[pair.after]:[]));
+  }
   else {
    const {id,after}=change;
    next.transactions=after?next.transactions.map(row=>row.id===id?after:row):next.transactions.filter(row=>row.id!==id);
@@ -48,12 +59,13 @@ async function settle(account,job){
   try{replaceFinance(account.finance,next,finance.primary);}
   catch(err){
    if(assistant)await finishPurchaseUpdate(account,job.id,false);
+   if(receipt)throw new AssistantSyncPending('采购待同步：财务写入未完成，请重试同一任务。',{cause:err});
    throw err;
   }
  }
  try{return await finishPurchaseUpdate(account,job.id,true);}
  catch(err){
-  if(assistant)throw new AssistantSyncPending('财务已保存，健康账本待同步。请继续同步。',{cause:err});
+  if(assistant||receipt)throw new AssistantSyncPending('财务已保存，健康账本待同步。请继续同步。',{cause:err});
   throw err;
  }
 }
@@ -70,7 +82,15 @@ export function writeFinanceWithPurchaseCheck(account,expected,transactionIds,pr
    if(purchaseForTransaction(state,id))throw Error('这笔记录已关联采购，请更正或撤销采购订单');
    if(!payload?.transactions.some(row=>row.id===id))throw Error('原记录已变更，请重新核对');
   }
-  replaceFinance(account.finance,project(payload??freshData()),expected);
+  const receipts=(payload?.transactions??[]).filter(row=>row.receiptKey).map(row=>({...row}));
+  const next=project(payload??freshData());
+  const byId=new Map(next.transactions.map(row=>[row.id,row]));
+  for(const before of receipts){
+   const current=byId.get(before.id);
+   if(!current||['receiptKey','type','amount','date'].some(key=>!same(before[key],current[key])))
+    throw Error('截图订单的关联金额、日期和方向需要整单更正。');
+  }
+  replaceFinance(account.finance,next,expected);
  });
 }
 export function deleteUnlinkedTransactions(account,ids,expected) {
@@ -97,6 +117,31 @@ export function updateAssistantLedgers(account,state,revision,expected,entries){
   return settle(account,job);
  });
 }
+export function updateReceiptLedgers(account,state,revision,expected,{id,operation,pairs},guard){
+ return locked(account,async()=>{
+  const pending=await readPurchaseUpdate(account);
+  if(pending){
+   if(pending.change.kind!=='receipt'||pending.change.id!==id||pending.change.operation!==operation)
+    throw new AssistantSyncPending('另有账本更新待同步，请先处理。');
+   return settle(account,pending);
+  }
+  if(readFinance(account.finance).primary!==expected)throw Error('财务账本已变更，请重新核对。');
+  guard?.();
+  const change={kind:'receipt',id,operation,expected,pairs};
+  const finance=readFinance(account.finance);
+  if(!pairs.length||new Set(pairs.map(pair=>pair.id)).size!==pairs.length||status(finance,change)!=='ready')
+   throw Error('关联收支与当前账本不一致，请重新核对。');
+  const job=await stagePurchaseUpdate(account,state,revision,change,guard);
+  return settle(account,job);
+ });
+}
+export function resumeReceiptUpdate(account,taskId){
+ return locked(account,async()=>{
+  const job=await readPurchaseUpdate(account);
+  if(!job||job.change.kind!=='receipt'||job.change.operation!==taskId)return;
+  return settle(account,job);
+ });
+}
 export async function resumePurchaseUpdate(account){
  return locked(account,async()=>{
   const job=await readPurchaseUpdate(account);
@@ -109,7 +154,7 @@ export function abandonPurchaseUpdate(account){
   if(!job)return readState(account);
   const finance=readFinance(account.finance);
   const phase=status(finance,job.change);
-  if(phase==='applied'||job.change.kind==='assistant'&&phase==='conflict')
+  if(phase==='applied'||['assistant','receipt'].includes(job.change.kind)&&phase==='conflict')
    throw Error('部分或全部财务更新已写入，请先核对并完成同步');
   return finishPurchaseUpdate(account,job.id,false);
  });
