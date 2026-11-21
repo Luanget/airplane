@@ -27,6 +27,9 @@ test('future combined meal evaluation uses saved lunch, portions, goals and exac
  const saved=planOperation(state,{items:lunch,replaceIds:[]},{id:'first',today,habits:[limit]});
  const stillAvailable=planningFacts(saved.next,[tomorrow],today,[limit]);
  assert.equal(stillAvailable.days[0].existingPlans.length,3);
+ const priorMealChange=evaluateMealPlan(saved.next,{items:[row('酸奶',100,'午餐')],replaceIds:[]},today,[limit]);
+ assert.equal(priorMealChange.feasible,false);
+ assert.match(priorMealChange.violations[0].reason,/已有保存计划/);
  const dinner=[row('酸奶',300,'晚餐'),row('蛋白',300,'晚餐'),row('米饭',200,'晚餐'),row('油',25,'晚餐')];
  const evaluation=evaluateMealPlan(saved.next,{items:dinner,replaceIds:[]},today,[limit]);
  assert.equal(evaluation.feasible,true);

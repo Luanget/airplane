@@ -76,6 +76,29 @@ export function threadBook(store){
    row.review=null;row.photos=null;row.followUp=null;
    save(true);return {threadId:row.id,id,operationId:row.pending.operationId};
   },
+  enqueueAgent(job){
+   refresh();
+   const row=ensure(job.label||'新对话');
+   (row.agentQueue??=[]).push(job);save(true);
+   return row.id;
+  },
+  startAgent(id){
+   refresh();
+   const row=current();
+   const queued=row?.agentQueue?.find(job=>job.id===id);
+   if(!queued||row.pending)return null;
+   row.agentQueue=row.agentQueue.filter(job=>job.id!==id);
+   add(row,'user',queued.label,true);
+   row.pending={id,operationId:id,request:{native:true,text:queued.label},partial:''};
+   row.review=null;row.photos=null;row.followUp=null;save();
+   return {threadId:row.id,id,operationId:id};
+  },
+  addAgentSteer({threadId,id},text){
+   refresh();
+   const row=threads.find(item=>item.id===threadId);
+   if(row?.pending?.id!==id)return;
+   add(row,'user',text,true);save();
+  },
   checkpoint({threadId,id},partial){
    refresh();
    const row=threads.find(item=>item.id===threadId);
@@ -93,7 +116,7 @@ export function threadBook(store){
    refresh();
    const row=threads.find(item=>item.id===threadId);
    if(row?.pending?.id!==id)return false;
-   add(row,'assistant',reply,!source,{...(source?{source}:{}),...metadata});
+   add(row,'assistant',reply,metadata?.native?!metadata.privateMedical:!source,{...(source?{source}:{}),...metadata});
    row.pending=null;row.review=review;save();return true;
   },
   setReview(review){if(activeId)patch(activeId,{review});},

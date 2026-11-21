@@ -1,3 +1,4 @@
+import {mountAgentChat} from './agent-chat.mjs';
 import {combineReceiptTurn,localAgentCommand,routeAgent,routedSkills,scopedHistory,separateAttachmentRequests} from './routing.mjs';
 import {healthTraceReceipt,relatedTaskSummaries,failureKind,taskJournal} from './task-log.mjs';
 import {mountTaskSettings} from './task-settings.mjs';
@@ -36,6 +37,7 @@ import {syncChoiceFields} from '../choice-picker.mjs';
 
 const demo=new URLSearchParams(location.search).get('demo')==='1';
 const workspace=demo?await demoWorkspace(localDate()):localWorkspace();
+const nativeAgentEnabled=!demo;
 const book=threadBook(demo?workspace.finance:localStorage);
 const respond=demo?workspace.respond:recognize;
 const journal=taskJournal(workspace.account);
@@ -57,7 +59,7 @@ const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-histor
 const historySearch=historyPanel.querySelector('input');
 const historyConfirmation=$('[data-delete-confirm]'),historyDelete=$('[data-delete-apply]');
 const keyPanel=$('#assistant-key-panel'),settings=$('#assistant-settings-sheet');
-let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null,photoRun=null,photoBatch=null;
+let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null,photoRun=null,photoBatch=null,nativeUi=null;
 
 hydrateShell();
 const automaticMemory=$('[data-automatic-memory]');
@@ -192,6 +194,7 @@ async function requestReply(input,options,savePartial=()=>{}){
  }
 }
 stop.onclick=()=>{
+ if(nativeUi?.running){nativeUi.stop();return;}
  stop.disabled=true;
  if(photoRun)photoRun.stopped=true;
  activeRequest?.abort();
@@ -270,7 +273,12 @@ historyDelete.onclick=()=>{
  if(!deletingThread||busy||saving)return;
  const active=book.current?.id===deletingThread;
  try{
+  const removed=book.list().find(row=>row.id===deletingThread);
+  if(active)nativeUi?.stop();
   book.remove(deletingThread);clearHistoryConfirmation();
+  for(const job of [...(removed?.agentQueue??[]),...(removed?.pending?.request?.native?[removed.pending]:[]),
+   ...(removed?.messages??[]).map(message=>message.media).filter(Boolean)])
+   void journal.removeRun(job.id).catch(()=>{});
   if(active)renderThread();else syncThreads();
   historyButton.focus();tell('已删除这段对话。');
  }catch(err){report(err);}
@@ -294,7 +302,7 @@ function messageNode(role,text){
  row.append(mark,body);
  return row;
 }
-function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[]){
+function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[],media){
  const scroll=thread.scrollTop;
  const follow=thread.scrollHeight-scroll-thread.clientHeight<48;
  const node=messageNode(role,text);
@@ -322,7 +330,7 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
     undo.onclick=async()=>{
      if(busy||saving||undo.disabled)return;
      saving=true;undo.disabled=true;lock();
-     try{undo.textContent=await undoAgentTask(workspace,token);await journal.undo(token.id).catch(()=>{});}
+     try{undo.textContent=await (token.kind==='meal_plan'?nativeUi.undo(token):undoAgentTask(workspace,token));await journal.undo(token.id).catch(()=>{});}
      catch(err){report(err);undo.disabled=false;}
      finally{saving=false;lock();}
     };
@@ -330,6 +338,28 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
    }
    details.append(actions);
   }
+ }
+ if(media){
+  const details=document.createElement('details'),title=document.createElement('summary');
+  details.className='chat-source';title.textContent='本轮附件 · '+media.count+' 个';
+  details.append(title);transcript.append(details);
+  details.ontoggle=async()=>{
+   if(!details.open||details.childElementCount>1)return;
+   try{
+    const stored=await journal.readRun(media.id);
+    if(!stored)throw Error('附件已不在本机。');
+    const box=document.createElement('div');box.className='chat-archived-media';
+    stored.attachments.forEach(({input},index)=>{
+     if(input.type==='input_image'){
+      const image=document.createElement('img');image.alt='附件 '+(index+1);image.loading='lazy';image.src=input.image_url;box.append(image);
+     }else if(input.type==='input_file'){
+      const link=document.createElement('a');link.textContent='打开报告 '+(index+1);link.download='Airplane-报告-'+(index+1)+'.pdf';
+      link.href=input.file_data;box.append(link);
+     }
+    });
+    details.append(box);
+   }catch(error){const note=document.createElement('p');note.textContent=error.message;details.append(note);}
+  };
  }
  thread.scrollTop=!preserveScroll||follow?thread.scrollHeight:scroll;
 }
@@ -389,7 +419,7 @@ function renderTranscript(){
  start.hidden=messages.length>0;
  for(const [index,m] of messages.entries()){
   if(index===current?.photos?.summaryIndex)continue;
-  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source,m.healthActionId,false,m.agentUndo);
+  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source,m.healthActionId,false,m.agentUndo,m.media);
  }
 }
 function showPending(){
@@ -417,6 +447,7 @@ function renderThread(previousPhotos){
   if(followUp.partial)bubble('assistant',followUp.partial);
  }
  syncThreads();updateContext();lock();
+ void nativeUi?.restore();
 }
 const refreshMemory=mountMemorySettings($('#assistant-memory'),workspace.memory,updateContext);
 const refreshAgent=mountAgentSettings($('#assistant-agent'),workspace,refreshMemory);
@@ -425,7 +456,7 @@ newChat.onclick=()=>{
  try{book.start();openHistory(false);tell('');renderThread();}
  catch(err){report(err);}
 };
-clearPhoto.onclick=resetPhoto;
+clearPhoto.onclick=()=>{resetPhoto();void nativeUi?.clearDraftAttachments();};
 function describeAttachments(medical){
  const active=medical?composer.elements.medicalFiles:composer.elements.image;
  const other=medical?composer.elements.image:composer.elements.medicalFiles;
@@ -1235,6 +1266,7 @@ async function sendMessage(input,options,files){
  }finally{saved.stop();}
 }
 retryRequest.onclick=()=>{
+ if(nativeUi&&book.current?.pending?.request?.native){void nativeUi.restore({resume:true});return;}
  const item=book.current?.pending?.request;
  if(!item||busy||saving)return;
  composer.elements.text.value=item.text;
@@ -1298,6 +1330,8 @@ async function runMedicalTurn(kind,text,files,route,traceId){
 }
 composer.onsubmit=async e=>{
  e.preventDefault();if(busy||saving)return;
+ const activePending=book.current?.pending;
+ if(nativeUi&&(!activePending||activePending.request?.native)){await nativeUi.submit();return;}
  const text=composer.elements.text.value.trim(),files=[...composer.elements.image.files];
  const medicalFiles=[...composer.elements.medicalFiles.files];
  const kind=!demo?medicalIntent(text,files.length,medicalFiles.length):null;
@@ -1362,3 +1396,13 @@ composer.onsubmit=async e=>{
  }catch(err){void traceStatus(traceId,book.current?.pending?.healthAction?'pending':'failed',err);report(err);}
  finally{busy=false;lock();}
 };
+
+if(nativeAgentEnabled){
+ nativeUi=mountAgentChat({book,journal,workspace,composer,review,stop,retry:retryRequest,replyRetry:$('[data-retry-agent-reply]'),
+  steerLabel:$('[data-agent-steer]'),transcript,thread,context:updateContext,trace,status:tell,onError:report,
+  onQueue:count=>{if(count)tell('等待处理 '+count+' 条消息');},
+  onUser:label=>{start.hidden=true;bubble('user',label,null,null,true);syncThreads();},
+  onFinal:(reply,source,undo,media)=>{bubble('assistant',reply,source,null,true,undo,media);syncThreads();updateContext();},
+  onKey:revealKeySettings,resetPhoto});
+ void nativeUi.restore();
+}

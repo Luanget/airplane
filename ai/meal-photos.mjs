@@ -18,14 +18,28 @@ export function groupMealPhotos(result,text,count,{native=false}={}){
  for(const observation of result.observations){
   if(observation.images.some(i=>!Number.isInteger(i)||i>count))throw Error('照片编号与实际附件不符。');
   const key=clean(observation.dishKey),name=clean(observation.name);
-  const existing=nameKeys.get(name);
+  const variant=native&&observation.role!=='extra'?[...nameKeys].find(([other,otherKey])=>
+   name.length>=2&&other.length>=2&&(other.includes(name)||name.includes(other))&&
+   byDish.get(otherKey).some(row=>row.role==='label'||observation.role==='label'||row.role===observation.role&&samePortion(row,observation))
+  )?.[1]:null;
+  const existing=nameKeys.get(name)??variant;
   if(existing&&existing!==key&&observation.role!=='extra'){
    const previous=byDish.get(existing);
-   previous.push(observation);continue;
+   previous.push(observation);nameKeys.set(name,existing);continue;
   }
   const rows=byDish.get(key)??[];
   rows.push(observation);
   byDish.set(key,rows);nameKeys.set(name,key);
+ }
+ if(native){
+  const groups=[...byDish.values()];
+  for(let i=0;i<groups.length;i++){
+   const item=take(groups[i],'served');
+   if(item&&groups.slice(i+1).some(rows=>{
+    const other=take(rows,'served');
+    return other&&samePortion(item,other)&&item.images.some(number=>other.images.includes(number));
+   }))throw Error('同张照片的两个原份候选重量相同，需要先合并或分清食物，再保存。');
+  }
  }
  const evidence=text.trim()||'同餐照片预览';
  const steps=[],photoSteps={},notes=[];
@@ -71,7 +85,9 @@ export function groupMealPhotos(result,text,count,{native=false}={}){
    }
    if(quantity===0)continue;
    const basis=label?.nutrition?label:sameMealRefill?
-    labelsByName.get(withoutRefill(view.name))??view:view;
+    labelsByName.get(withoutRefill(view.name))??(native?[...labelsByName].find(([name])=>
+     name.length>=2&&withoutRefill(view.name).length>=2&&
+     (name.includes(withoutRefill(view.name))||withoutRefill(view.name).includes(name)))?.[1]:null)??view:view;
    const nutrition=basis.nutrition&&basis.basisUnit===view.unit&&basis.basisAmount>0?
     Object.fromEntries(NUTRIENTS.map(key=>[key,basis.nutrition[key]===null?null:round(basis.nutrition[key]*quantity/basis.basisAmount,2)])):null;
    const photos=[...new Set(rows.flatMap(row=>row.images))].sort((a,b)=>a-b);
@@ -88,7 +104,8 @@ export function groupMealPhotos(result,text,count,{native=false}={}){
  }
  // The same food recognised in photos and transcribed in the text can only write once.
  for(const step of result.steps){
-  if(step.kind==='eat'&&steps.some(row=>clean(row.name)===clean(step.name)))continue;
+  if(step.kind==='eat'&&steps.some(row=>clean(row.name)===clean(step.name)||native&&row.amount===step.amount&&row.unit===step.unit&&
+   (clean(row.name).includes(clean(step.name))||clean(step.name).includes(clean(row.name)))))continue;
   steps.push(step);
  }
  if(steps.length>HEALTH_STEP_LIMIT)throw Error('同餐有多项记录，请分组处理以便核对。');

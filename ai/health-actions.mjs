@@ -319,7 +319,7 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
  for(let [index,step] of plan.steps.entries()){
   if(skills&&!native)assertSkillAction(skills,step.kind);
   const operationId='health:'+id+':'+index;
-  if(plan.steps.filter(interpretedWrite).length===1&&['eat','correct','weigh'].includes(step.kind)&&
+  if(!native&&plan.steps.filter(interpretedWrite).length===1&&['eat','correct','weigh'].includes(step.kind)&&
    plausible(text,{name:step.name})&&statedDate(step.evidence,today)===null&&statedDate(text,today)!==null)
    step={...step,date:statedDate(text,today)};
   if(step.kind==='next_meal'&&plan.steps.length===1&&!step.date)
@@ -517,7 +517,7 @@ function statedNumber(evidence,amount){
  const literal=evidence.normalize('NFKC').match(/\d+(?:\.\d+)?|[零一二两三四五六七八九十百]+/g)??[];
  return literal.some(text=>numberFromText(text)===Math.abs(amount));
 }
-function verifyValues(step){
+function verifyValues(step,native=false){
  const fields={eat:['amount'],weigh:['gross','initialGross','volumeMl'],discard:['tare'],
   weight:['kg'],activity:['km','minutes','kcal'],correct:['amount','delta','gross'],
   correct_weight:['kg'],correct_activity:['km','minutes','kcal']};
@@ -527,7 +527,8 @@ function verifyValues(step){
   throw Error('建议的数值和本轮原话对不上，账本未更改。');
  if(step.kind==='eat'&&step.whole==='yes'){
   const explicit=/吃完|喝完|全部吃|全部喝|整[瓶盒袋包份]|(?:\d+|[一二两三四五六七八九十]+)\s*[瓶盒袋包份]/.test(step.evidence);
-  if(!explicit||/一半|半[瓶盒袋包份]/.test(step.evidence))
+  const selectedPortion=native&&step.containerId&&/(?:实称|净重)\s*\d+(?:\.\d+)?\s*(?:g|克)\s*(?:的)?那(?:一)?[袋份]/i.test(step.evidence);
+  if(!explicit&&!selectedPortion||/一半|半[瓶盒袋包份]/.test(step.evidence))
    throw Error('没有明确吃完整包装，账本未更改。');
  }
  if(step.kind==='correct'&&step.delta!=null){
@@ -548,8 +549,14 @@ function validatePlan(plan,text,photoSteps={},native=false){
    /(?:净重|实称)\s*\d+(?:\.\d+)?\s*(?:g|克)的?那(?:一)?[袋份]/i.test(text);
   const step=statedPortion?{...candidate,evidence:text}:candidate;
   if(!step.evidence.trim()||!quotation(text).includes(quotation(step.evidence)))throw Error('有操作缺少本轮原话依据，账本未更改。');
+  if(native&&step.kind==='eat'&&!photoSteps[index]&&step.whole==='no'){
+   // A number quoted as a current scale reading is not a stated consumption quantity.
+   const observed=step.evidence.normalize('NFKC').match(/(?:毛重|复称|现在|还剩)\s*(?:为|是|[:：])?\s*(\d+(?:\.\d+)?)\s*(?:g|克)/i);
+   if(observed&&Number(observed[1])===step.amount&&step.unit==='g')
+    throw Error('原话给的是当前称重读数，请查同一包装并使用 weigh；不要把读数当作吃下的克数。');
+  }
   if(!photoSteps[index])verifyValues(step.kind==='weigh'&&step.initialGross!=null&&!statedNumber(step.evidence,step.initialGross)?
-   {...step,initialGross:null}:step);
+   {...step,initialGross:null}:step,native);
   if(native)continue;
   if(step.kind==='day_status'){
    const partial=/待补|没记全|未记全|未完整|没有记全|没录全|未录全|缺报|不完整/;

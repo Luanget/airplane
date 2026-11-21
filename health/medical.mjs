@@ -301,7 +301,9 @@ export function redactMedicalDocument(value){
  const omitTables=table=>Object.fromEntries(Object.entries(table??{}).filter(([key])=>!['medical_baseline','symptom_events'].includes(key)));
  const clean={...value};
  if(clean.health)clean.health=redactMedicalDocument(clean.health);
- if(clean.local?.medical){clean.local={...clean.local};delete clean.local.medical;}
+ if(clean.local?.medical||clean.local?.agentToolReceipts){
+  clean.local={...clean.local};delete clean.local.medical;delete clean.local.agentToolReceipts;
+ }
  if(clean.legacy?.sourceSnapshot){
   const raw=clean.legacy.sourceSnapshot;
   clean.legacy={...clean.legacy,sourceSnapshot:{...raw,tables:omitTables(raw.tables)}};

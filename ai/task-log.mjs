@@ -1,7 +1,7 @@
 import {estimatedCost,modelRates,usageTokens} from './usage.mjs';
 
 const terminal=new Set(['done','skipped','cancelled','failed','blocked','partial']);
-const completed=new Set(['done','skipped']);
+const completed=new Set(['done','skipped','saved','ok','undone']);
 const integer=value=>Number.isSafeInteger(value)&&value>=0;
 const clean=value=>typeof value==='string'?value.slice(0,360):null;
 
@@ -28,6 +28,8 @@ export function updateTask(previous,id,event,now=Date.now()){
   task.status='running';task.finishedAt=null;
  }else if(event.type==='thread'){
   task.threadId??=event.threadId??null;
+ }else if(event.type==='context'){
+  task.context={habits:event.habits,skills:event.skills};
  }else if(event.type==='request'){
   task.requests.push(event.request);
  }else if(event.type==='confirm'){

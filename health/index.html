@@ -74,6 +74,12 @@
         </details>
         <section class="health-ledger" aria-labelledby="health-ledger-title">
           <div class="section-head"><h2 id="health-ledger-title">饮食</h2><span id="health-history-period" class="muted"></span></div>
+          <div class="button-row plan-selection">
+            <button class="btn btn-text" type="button" id="select-plans" hidden>选择计划</button>
+            <button class="btn btn-text" type="button" id="select-all-plans" hidden>全选本月计划</button>
+            <button class="btn btn-text" type="button" id="remove-plans" hidden>删除所选计划</button>
+            <button class="btn btn-text" type="button" id="undo-plans" hidden>撤销计划删除</button>
+          </div>
           <div id="local-events"></div>
         </section>
       </section>
@@ -239,6 +245,8 @@
             <span class="mini-icon" data-shell-icon="sparkles"></span><span class="setting-copy"><span class="setting-title">管理 API Key</span></span><span class="chevron" data-shell-icon="chevron"></span>
           </a>
         </section>
+        <section class="health-data-management" aria-labelledby="health-data-title">
+          <h2 id="health-data-title">数据管理</h2>
         <details class="card form-panel" id="health-merge">
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="download"></span><span class="setting-copy"><span class="setting-title">合并导入与文件同步</span><span class="setting-sub">保留原账，先核对差异</span></span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="backup-options">
@@ -290,6 +298,7 @@
             </div>
           </section>
         </details>
+        </section>
         <details class="card form-panel">
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="chart"></span><span class="setting-copy setting-title">营养与周期</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <section class="backup-preview" id="diet-reference" hidden>

@@ -21,7 +21,11 @@ test('manual continuation preserves full output and keeps success through answer
   assert.ok(nativeRequest(state,'instructions',[]).input.some(item=>item.encrypted_content==='opaque'));
   throw Error('connection interrupted');
  }}),/connection interrupted/);
- const final=await runAgent(snapshots.at(-1),{dispatch,save:()=>{},replyOnly:true,
+ const retry=snapshots.at(-1),before=structuredClone(retry);
+ await assert.rejects(runAgent(retry,{dispatch,save:()=>{},replyOnly:true,
+  request:()=>out(tool('unexpected'))}),/仅重试回复/);
+ assert.deepEqual(retry,before);
+ const final=await runAgent(retry,{dispatch,save:()=>{},replyOnly:true,
   request(state,options){
    assert.equal(nativeRequest(state,'instructions',[],options).tool_choice,'none');
    return out(answer('合成记录已保存。'));

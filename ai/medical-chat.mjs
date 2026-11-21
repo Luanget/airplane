@@ -105,7 +105,7 @@ export function reportDraft(result,today){
  return {...report,date,source:'ai',
   auto:Boolean(dateProven&&!report.uncertainty&&report.measurements.length&&report.measurements.every(fractionEvidence))};
 }
-function symptomDraft(result,text,today){
+export function symptomDraft(result,text,today){
  const date=dateIn(text,today);
  if(!text.includes(result.evidence)||!result.evidence.includes(result.description)||
   [result.change,result.visit].some(value=>value&&!result.evidence.includes(value)))throw Error('症状候选与本轮原话不一致，请重述或手动录入。');

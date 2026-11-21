@@ -37,12 +37,12 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
   changes.replaceChildren();
   for(const problem of plan.problems)changes.append(element('p',problem,'sync-problem'));
   const cards={};
-  for(const record of plan.rows){
-   const compact=['same','existing'].includes(record.status);
-   const section=cards[compact]??=element('details');
+  for(const record of plan.rows.filter(item=>!['same','existing'].includes(item.status))){
+   const conflict=record.options.length>0;
+   const section=cards[conflict]??=element('details');
    if(!section.firstChild){
-    section.append(element('summary',compact?'已有或相同记录':'待核对与计划改动'));
-    section.open=!compact;changes.append(section);
+    section.append(element('summary',conflict?'待核对':'将合并的改动'));
+    section.open=true;changes.append(section);
    }
    const name=record.after?.name??record.before?.name??record.after?.date??record.before?.date??record.after?.key??record.before?.key??'';
    const card=element('details',undefined,'sync-change');
@@ -63,13 +63,19 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
     label.append(select);card.append(label);
    }
    if(record.impact)card.append(element('p',record.impact,'form-hint'));
-   const comparison=element('div',undefined,'sync-values');
-   for(const [side,value] of [['本机原值',record.before],['来源值',record.after]]){
-    const group=element('section');
-    group.append(element('strong',side),element('pre',value===null?'—':stringify(value)));
-    comparison.append(group);
-   }
-   card.append(comparison);section.append(card);
+   const values=element('details',undefined,'sync-change-values');
+   values.append(element('summary','查看前后明细'));
+   values.ontoggle=()=>{
+    if(!values.open||values.children.length>1)return;
+    const comparison=element('div',undefined,'sync-values');
+    for(const [title,value] of [['本机原值',record.before],['来源值',record.after]]){
+     const group=element('section');
+     group.append(element('strong',title),element('pre',value===null?'—':stringify(value)));
+     comparison.append(group);
+    }
+    values.append(comparison);
+   };
+   card.append(values);section.append(card);
   }
   impact.replaceChildren();
   impact.hidden=plan.impact.length===0;
@@ -77,7 +83,6 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
    impact.append(element('summary','受影响日期与营养、消耗预览'));
    for(const row of plan.impact)impact.append(element('p',row.date+' · 摄入 '+(row.before.kcal??'待补')+
     ' → '+(row.after.kcal??'待补')+' kcal · 消耗 '+row.tdeeBefore+' → '+row.tdeeAfter+' kcal'));
-   impact.append(element('pre',stringify(plan.impact)));
   }
   keep.hidden=!plan.unresolved.some(row=>row.options.some(option=>['keep','skip'].includes(option.value)));
   apply.disabled=busy||!plan.changed||plan.unresolved.length>0||plan.problems.length>0;
@@ -172,8 +177,8 @@ export function renderSyncCatalog(panel,state){
   list.append(summary);
   for(const row of rows){
    const item=element('details');
-   item.append(element('summary',[row.date,row.name??row.key,row.alias].filter(Boolean).join(' · ')||row.id),
-    element('pre',stringify(row)));
+   item.append(element('summary',[row.date,row.name??row.key,row.alias].filter(Boolean).join(' · ')||row.id));
+   item.ontoggle=()=>{if(item.open&&item.children.length===1)item.append(element('pre',stringify(row)));};
    list.append(item);
   }
   return [list];

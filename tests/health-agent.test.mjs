@@ -263,3 +263,16 @@ test('future meal recommendations use the requested local date without writing c
  assert.equal(dayIntake(state,tomorrow).totals.kcal,null);
  assert.deepEqual(state.local.stockMoves,before.local.stockMoves);
 });
+
+test('model photo groups normalize a shortened alias and reuse the same label for an extra serving',()=>{
+ const facts=[
+  {...basePhoto,dishKey:'full-name',name:'合成米粉',role:'label',amount:null,confidence:'label'},
+  {...basePhoto,dishKey:'full-name',name:'合成米粉',role:'served',amount:150,images:[1]},
+  {...basePhoto,dishKey:'short-name',name:'米粉',role:'served',amount:150,images:[2]},
+  {...basePhoto,dishKey:'refill',name:'米粉续粉',role:'extra',amount:50,images:[3],nutrition:null}
+ ];
+ const draft=groupMealPhotos({date:null,meal:'午餐',intent:'execute',observations:facts,steps:[]},
+  '我吃了原份150g和续粉50g。',3,{native:true});
+ assert.deepEqual(draft.plan.steps.map(row=>row.amount),[150,50]);
+ assert.equal(draft.plan.steps.reduce((n,row)=>n+row.nutrition.kcal,0),200);
+});

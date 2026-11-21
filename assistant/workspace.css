@@ -145,3 +145,9 @@
 .agent-profile-preview { white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; font:inherit; font-size:12px }
 
 [data-task-summary] { white-space:pre-line }
+
+.agent-steer{display:flex;align-items:center;gap:.4rem;font-size:.78rem;color:var(--muted)}
+.agent-steer[hidden]{display:none}
+.agent-live{white-space:pre-wrap;align-self:flex-start}
+.chat-archived-media{display:flex;gap:6px;flex-wrap:wrap;padding:5px 0}
+.chat-archived-media img{max-width:128px;max-height:128px;object-fit:contain;border-radius:8px}

@@ -105,7 +105,7 @@ export function memoryLibrary(store,legacyKey){
     if(row.topic&&topics.has(row.topic))return false;
     if(row.topic)topics.add(row.topic);return true;
    }).map(({id,name,text,topic,updatedAt,constraint})=>({id,name,text,topic,updatedAt,
-    constraint:constraint??(topic==='chicken-one'?{kind:'food_meal_limit',food:'鸡胸',maxMeals:1}:null)}));
+    constraint:constraint===undefined&&topic==='chicken-one'?{kind:'food_meal_limit',food:'鸡胸',maxMeals:1}:constraint??null}));
  }
  function learnHabit(update,source){
   if(!automaticMemoryEnabled(store))throw Error('本机自动记忆已关闭');

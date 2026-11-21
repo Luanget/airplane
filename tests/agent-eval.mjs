@@ -26,7 +26,10 @@ const server=createServer((req,res)=>{
  if(!name||name.endsWith('/'))name+='index.html';
  if(!shellAssets[mode]?.has(name)){res.writeHead(404).end();return;}
  const mime={'.html':'text/html','.css':'text/css','.mjs':'text/javascript','.js':'text/javascript','.png':'image/png','.webmanifest':'application/manifest+json'};
- res.setHeader('Content-Type',mime[extname(name)]??'text/plain');res.end(readFileSync(join(roots[mode],name)));
+ res.setHeader('Content-Type',mime[extname(name)]??'text/plain');
+ let source=readFileSync(join(roots[mode],name));
+ if(name==='ai/chat.mjs')source=Buffer.from(source.toString().replace('const nativeAgentEnabled=!demo;','const nativeAgentEnabled=false;'));
+ res.end(source);
 });
 await new Promise((ok,fail)=>server.once('error',fail).listen(0,'127.0.0.1',ok));
 const origin='http://127.0.0.1:'+server.address().port;

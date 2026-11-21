@@ -66,9 +66,9 @@ export async function runAgent(run,{request,dispatch,save,additions=()=>[],onSte
     const output=response.output;
     const calls=output.filter(item=>item.type==='function_call');
     if(!calls.every(validCall)||new Set(calls.map(call=>call.call_id)).size!==calls.length)throw Error('模型工具调用编号异常。');
+    if(replyOnly&&calls.length)throw Error('仅重试回复时收到了工具调用。');
     run.turns++;
     run.input.push(...output);
-    if(replyOnly&&calls.length)throw Error('仅重试回复时收到了工具调用。');
     if(!calls.length){
      if(await admit())continue;
      const final=answerOf(output);

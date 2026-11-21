@@ -1,3 +1,4 @@
+import {isMealPlan,planOperation,undoMealPlan} from '../ai/meal-planning.mjs';
 import {attachMedical} from './medical-ui.mjs';
 import {ensureMedical,medicalCounts,verifyMedicalState} from './medical.mjs';
 import {attachHealthMerge,renderSyncCatalog} from './sync-ui.mjs';
@@ -24,6 +25,8 @@ const E=s=>String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&g
 const fmt=(v,d=0)=> v===null||v===undefined?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:d,minimumFractionDigits:d});
 let state=newState(), selectedDate=dateNow(),tab='overview',toastHandle;
 let renderedDiet=null,renderedMonth='',inlineStock=null;
+let selectingPlans=false,deletedPlans=null;
+const selectedPlans=new Set();
 const expandedStock=new Set(),expandedGroups=new Set(),expandedPackageHistory=new Set();
 let openPackage;
 const editing={};
@@ -127,20 +130,50 @@ function setDateDefaults(){document.querySelectorAll('form input[name=date]').fo
 const historyTypes={food:'foods',weight:'weights',activity:'activities'};
 function renderTimeline(){
  const month=selectedDate.slice(0,7);
+ if(renderedMonth!==month){selectedPlans.clear();selectingPlans=false;}
  if(renderedDiet===state&&renderedMonth===month)return;
  renderedDiet=state;renderedMonth=month;
  text('health-history-period',month.slice(0,4)+'年'+Number(month.slice(5))+'月');
- $('local-events').innerHTML=[...monthGroups(['food'],month)].map(([date,rows])=>{
+ const groups=[...monthGroups(['food'],month)];
+ const planIds=groups.flatMap(([,rows])=>rows.filter(isMealPlan).map(row=>row.id));
+ for(const id of selectedPlans)if(!planIds.includes(id))selectedPlans.delete(id);
+ updatePlanButtons(planIds.length);
+ $('local-events').innerHTML=groups.map(([date,rows])=>{
   const meals=new Map();
   for(const row of rows){
    const label=timelineGroup(row);
    if(!meals.has(label))meals.set(label,[]);
    meals.get(label).push(row);
   }
-  return `<div class="day-group"><div class="day-head">${dayLabel(date)}</div>${mealOrder.filter(label=>meals.has(label)).map(label=>
+  return `<div class="day-group"><div class="day-head">${dayLabel(date)}</div>${timelinePlanTotals(date,rows)}${mealOrder.filter(label=>meals.has(label)).map(label=>
    `<section class="meal-group" aria-label="${label}"><h3>${label}</h3><div class="card transaction-list">${meals.get(label).map(dietRow).join('')}</div></section>`
   ).join('')}</div>`;
  }).join('')||'<div class="card event-empty health-ledger-empty">本月暂无饮食</div>';
+}
+const dietFields=[['kcal','热量','kcal'],['protein','蛋白','g'],['fat','脂肪','g'],['carbs','碳水','g'],['sodium','钠','mg']];
+function timelinePlanTotals(date,rows){
+ if(!validDate(date)||!rows.some(isMealPlan))return '';
+ const actual=dayIntake(state,date);
+ const actualMeals=new Set(foodsForDay(state,date).map(row=>row.meal));
+ const plans=rows.filter(row=>isMealPlan(row)&&!actualMeals.has(row.meal));
+ const planned=Object.fromEntries(NUTRIENTS.map(key=>[key,plans.every(row=>row.nutrition?.[key]!=null)?
+  plans.reduce((sum,row)=>sum+row.nutrition[key],0):null]));
+ const projection=Object.fromEntries(NUTRIENTS.map(key=>[key,
+  planned[key]===null||actual.reported&&(actual.totals[key]===null||actual.incomplete.includes(key))?null:
+   (actual.totals[key]??0)+planned[key]]));
+ const metrics=values=>dietFields.map(([key,label,unit])=>label+' '+(values[key]==null?'—':fmt(values[key],1)+' '+unit)).join(' · ');
+ return `<details class="diet-day-plan"><summary>实际、计划与预计全天</summary><dl>
+  <dt>实际</dt><dd>${E(metrics(actual.totals))}</dd>
+  <dt>有效计划</dt><dd>${E(metrics(planned))}</dd>
+  <dt>预计全天</dt><dd>${E(metrics(projection))}</dd></dl></details>`;
+}
+function updatePlanButtons(count=events(state,'foods').filter(row=>isMealPlan(row)&&row.date?.startsWith(selectedDate.slice(0,7))).length){
+ $('select-plans').hidden=!count;
+ text('select-plans',selectingPlans?'完成选择':'选择计划');
+ $('select-all-plans').hidden=!count||!selectingPlans;
+ $('remove-plans').hidden=!selectedPlans.size||!selectingPlans;
+ text('remove-plans','删除 '+selectedPlans.size+' 项计划');
+ $('undo-plans').hidden=!deletedPlans;
 }
 function dayLabel(date){return date?displayDay(date):'日期待补';}
 function monthGroups(types,month){
@@ -167,13 +200,15 @@ function dietRow(row){
  const status=eatingState(row);
  const badge={plan:'计划',cancelled:'已取消',unknown:'待确认'}[status];
  const nutrients=[['kcal','','kcal'],['protein','蛋白','g'],['fat','脂肪','g'],['carbs','碳水','g'],['sodium','钠','mg']];
- const values=status==='actual'?nutrients.map(([key,label,unit])=>{
+ const values=['actual','plan'].includes(status)?nutrients.map(([key,label,unit])=>{
   const amount=row.nutrition?.[key];
   const output=amount==null?'—':fmt(amount,1)+' '+unit;
   return `<span>${label?label+' ':''}${output}</span>`;
  }).join(''):'';
  const glyph=badge?'calendar':mealSymbols[timelineGroup(row)];
- return `<button type="button" class="tx-row tx-row-interactive health-tx-row diet-row" data-edit-id="${E(row.id)}" data-type="food">
+ const selector=selectingPlans&&status==='plan'?
+  `<label class="diet-check"><input type="checkbox" data-select-plan="${E(row.id)}"${selectedPlans.has(row.id)?' checked':''}> 选中 ${E(row.name)}</label>`:'';
+ return selector+`<button type="button" class="tx-row tx-row-interactive health-tx-row diet-row" data-edit-id="${E(row.id)}" data-type="food">
   ${recordSymbol(glyph)}
   <span class="diet-content">
    <span class="diet-main"><span class="tx-title">${E(row.name)}</span>${badge?`<span class="diet-status">${badge}</span>`:''}</span>
@@ -601,6 +636,42 @@ function attach(){
  $('local-events').onclick=$('body-events').onclick=e=>{
   const row=e.target.closest('[data-edit-id]');
   if(row)editEvent(row.dataset.type,row.dataset.editId);
+ };
+ $('select-plans').onclick=()=>{
+  selectingPlans=!selectingPlans;selectedPlans.clear();renderedDiet=null;renderTimeline();
+ };
+ $('select-all-plans').onclick=()=>{
+  for(const field of $('local-events').querySelectorAll('[data-select-plan]')){
+   selectedPlans.add(field.dataset.selectPlan);field.checked=true;
+  }
+  updatePlanButtons();
+ };
+ $('local-events').addEventListener('change',event=>{
+  const id=event.target.dataset.selectPlan;
+  if(!id)return;
+  if(event.target.checked)selectedPlans.add(id);else selectedPlans.delete(id);
+  updatePlanButtons();
+ });
+ $('remove-plans').onclick=async()=>{
+  const button=$('remove-plans');
+  if(button.disabled||!selectedPlans.size)return;
+  button.disabled=true;
+  try{
+   const {next,changes}=planOperation(state,{items:[],replaceIds:[...selectedPlans]},{id:makeId('plan-batch'),today:dateNow(),habits:[]});
+   await commit(next,'已删除 '+changes.removed.length+' 项计划');
+   deletedPlans=changes;selectedPlans.clear();selectingPlans=false;renderedDiet=null;renderTimeline();
+  }catch(error){toast(error.message);}
+  finally{button.disabled=false;}
+ };
+ $('undo-plans').onclick=async()=>{
+  const button=$('undo-plans');
+  if(button.disabled||!deletedPlans)return;
+  button.disabled=true;
+  try{
+   await commit(undoMealPlan(state,deletedPlans),'已撤销计划删除');
+   deletedPlans=null;updatePlanButtons();
+  }catch(error){toast(error.message);}
+  finally{button.disabled=false;}
  };
  $('delete-health-entry').onclick=()=>{
   $('delete-health-entry').hidden=true;

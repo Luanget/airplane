@@ -219,3 +219,11 @@ body[data-module="health"] [data-shell] .inline-inventory-editor :is(input,selec
 .medical-trend .medical-item { margin-top:8px }
 .medical-trend svg { width:100%; max-height:72px; display:block }
 .medical-trend polyline { fill:none; stroke:var(--green); stroke-width:2 }
+
+.health-data-management{display:grid;gap:10px}
+.health-data-management>h2{font-size:14px;margin:4px 4px 0;color:var(--muted)}
+.diet-day-plan{margin:4px 0 8px;color:var(--muted);font-size:12px}
+.diet-day-plan dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px}
+.diet-day-plan dd{margin:0}
+.diet-check{display:block;padding:6px 12px;font-size:12px}
+.plan-selection:has(button:not([hidden])){margin-bottom:6px}

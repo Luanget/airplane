@@ -18,6 +18,7 @@ const server=createServer((req,res)=>{
   if (!path.startsWith(prefix) || !publicAssets.has(name)) {res.writeHead(404).end();return;}
   try {
     let buf=old ? execFileSync('git',['show','6fb5f50:'+name],{stdio:['ignore','pipe','ignore']}) : readFileSync(resolve(root,name));
+    if(!old&&name==='ai/chat.mjs')buf=Buffer.from(buf.toString().replace('const nativeAgentEnabled=!demo;','const nativeAgentEnabled=false;'));
     if(nextShell&&name==='sw.js')buf=Buffer.from(buf.toString().replace(/const SW_VERSION = '[^']+'/,"const SW_VERSION = 'fixture-next'"));
     const mime={'.html':'text/html','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.png':'image/png','.webmanifest':'application/manifest+json'};
     res.writeHead(200,{'Content-Type':mime[extname(name)] || 'text/plain','Cache-Control':'no-store'}).end(buf);
