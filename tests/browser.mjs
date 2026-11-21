@@ -1407,12 +1407,21 @@ try {
    const openSettings=mergePage.locator('#health-settings');
    await openSettings.waitFor();
    await mergePage.waitForFunction(()=>typeof document.getElementById('health-settings')?.onclick==='function');
-   const fixture=await mergePage.evaluate(async()=>{
-    const {readState,saveState}=await import('./storage.mjs');
-    const {addFood}=await import('./core.mjs');
+   const oldDay='2020-01-01';
+   const historical={日期:oldDay,餐次:'午餐','食物/饮品':'合成历史午餐 300g','份量/重量':'300g',状态:'已吃',kcal:450};
+   const inherited={ledger_id:'browser-merge-fixture',handoff_version:'301120.1',updated_at:oldDay+'T12:00:00Z',tables:{
+    food_events:[historical],food_inventory:[],weight_events:[],daily_summaries:[{日期:oldDay,kcal:450}]
+   }};
+   const tidy=structuredClone(inherited);
+   tidy.handoff_version+='-整理';
+   tidy.tables.food_events[0]['食物/饮品']='合成历史午餐';
+   tidy.tables.food_events[0]['原食物/饮品名称']=historical['食物/饮品'];
+   const fixture=await mergePage.evaluate(async tidy=>{
+    const {saveState}=await import('./storage.mjs');
+    const {addFood,normalizeLedger}=await import('./core.mjs');
     const {freshData,replaceFinance,STORAGE_KEY}=await import('../finance-storage.mjs');
     const {localDate}=await import('../calendar.mjs');
-    const state=await readState(),date=localDate();
+    const state=normalizeLedger(tidy),date=localDate();
     addFood(state,{date,meal:'午餐',name:'合成午餐',portion:'100 g',kcal:150});
     await saveState(state,0);
     const finance=freshData();
@@ -1420,12 +1429,12 @@ try {
     finance.transactions.push({id:'merge-fixture-expense',type:'expense',amount:9,date,categoryId:'default-1'});
     replaceFinance(localStorage,finance,null);
     return {date,finance:localStorage.getItem(STORAGE_KEY)};
-   });
+   },tidy);
    const dinner={日期:fixture.date,餐次:'晚餐','食物/饮品':'合成晚餐','份量/重量':'70g',状态:'实际',kcal:75};
-   const external={ledger_id:'browser-merge-fixture',handoff_version:'301120.1',tables:{
-    food_events:[{日期:fixture.date,餐次:'午餐','食物/饮品':'合成午餐','份量/重量':'110g',状态:'实际',kcal:175},dinner],
-    food_inventory:[],weight_events:[],daily_summaries:[{日期:fixture.date,kcal:250}]
-   }};
+   const external=structuredClone(inherited);
+   external.handoff_version='301120.2';
+   external.tables.food_events.push({日期:fixture.date,餐次:'午餐','食物/饮品':'合成午餐','份量/重量':'110g',状态:'实际',kcal:175},dinner);
+   external.tables.daily_summaries.push({日期:fixture.date,kcal:250});
    const json={name:'health_tracker_301120.1.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(external))};
    await openSettings.click();
    const mergePanel=mergePage.locator('#health-merge');
@@ -1463,10 +1472,15 @@ try {
    const merged=await read();
    assert.equal(merged.state.revision,2);
    assert.equal(merged.snapshot.health.local.foods[0].name,'合成午餐');
-   assert.equal(merged.snapshot.health.legacy.foods.length,0);
+   assert.equal(merged.snapshot.health.legacy.foods.length,1);
    assert.deepEqual(merged.snapshot.finance.data,JSON.parse(fixture.finance));
    assert.equal(merged.finance,fixture.finance);
-   assert.equal(merged.state.legacy.foods[0].name,'合成晚餐');
+   assert.equal(merged.state.legacy.foods.length,2);
+   assert.equal(merged.state.legacy.foods[1].name,'合成晚餐');
+   assert.equal(await mergePage.evaluate(async date=>{
+    const [{readState},{dayIntake}]=await Promise.all([import('./storage.mjs'),import('./core.mjs')]);
+    return dayIntake(await readState(),date).totals.kcal;
+   },oldDay),450);
    await importFile();
    await mergePanel.locator('[data-sync-summary]').filter({hasText:'已导入'}).waitFor();
    assert.equal(await submit.isEnabled(),false);
@@ -1476,7 +1490,7 @@ try {
    assert.equal(exported.format,'airplane-health-sync-v1');
    assert.equal(exported.anchor.revision,2);
    assert.ok(exported.health.legacy.foods.some(row=>row.name==='合成晚餐'));
-   console.log('PASS read-only merge preview, atomic recovery on abort, unchanged finance, repeat import and sync export');
+   console.log('PASS shared history, read-only merge preview, atomic recovery on abort, unchanged finance, repeat import and sync export');
   }finally{await mergeContext.close();}
   assert.deepEqual(errors,[]);
   console.log('PASS dated food lookup, thread reload, confirmed in-place correction and health timeline');

@@ -155,8 +155,8 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
 }
 
 export function renderSyncCatalog(panel,state){
- const groups={aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',rules:'现行规则'};
- const catalogs={...state.legacy.catalogs,rules:state.legacy.rules};
+ const groups={aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',pendingStock:'扣库待核对',rules:'现行规则'};
+ const catalogs={...state.legacy.catalogs,rules:state.legacy.rules,pendingStock:state.sync?.pendingStock};
  panel.replaceChildren(...Object.entries(groups).flatMap(([key,label])=>{
   const rows=catalogs[key]??[];
   if(!rows.length)return [];

@@ -9,7 +9,7 @@ export const CATALOG_TABLES={
  aliases:['food_aliases'],
  prices:['price_catalog'],
  purchaseEvents:['purchase_events'],
- inventoryAudit:['inventory_audit','inventory_audits','stock_audit','inventory_movements','inventory_history']
+ inventoryAudit:['inventory_transactions_audit','inventory_audit','inventory_audits','stock_audit','inventory_movements','inventory_history']
 };
 
 export const stable=value=>JSON.stringify(value,(_key,item)=>
@@ -39,6 +39,27 @@ function sourceName(input){
  return String(explicit).trim().replace(/\\/g,'/').split('/').at(-1)
   .replace(/_\d{6,8}(?:\.\d+)?(?=\.|$)/g,'').replace(/\.(?:json|sqlite|db)$/i,'')||'health_tracker';
 }
+export function inheritedLineage(state){
+ const snapshot=state.legacy.sourceSnapshot;
+ const canonical=snapshot?.ledger_id??snapshot?.source_id??snapshot?.canonical_source??state.importInfo?.canonicalSource;
+ const version=String(snapshot?.handoff_version??state.importInfo?.sourceVersion??'').match(/^(\d{6,8}\.\d+)/)?.[1];
+ if(canonical&&version)return {
+  id:sourceName({canonical_source:canonical}),version,cutoff:String(snapshot?.updated_at??'').slice(0,10)
+ };
+ return state.sync?.lineage??null;
+}
+
+// The tidy main ledger records the original name verbatim. Only this explicit
+// presentation metadata is ignored; a changed quantity, state or nutrient is
+// still a different row that needs to be reconciled.
+export function inheritedKey(type,row){
+ if(!row)return null;
+ if(type!=='foods')return hash(stable(row));
+ const {'原食物/饮品名称':name,...original}=row;
+ if(typeof name==='string'&&name.trim())original['食物/饮品']=name;
+ return hash(stable(original));
+}
+
 function matchingBase(raw){
  // Prior releases embedded the exact file. Use it to recover source provenance
  // for old rows, never to compare positions between different files.
@@ -58,16 +79,21 @@ function matchingBase(raw){
 export function externalCatalogs(tables){
  return Object.fromEntries(Object.entries(CATALOG_TABLES).map(([kind,keys])=>[kind,keys.flatMap(table=>
   list(tables,table).map(row=>{
-   const foodId=String(rawValue(row,['食品ID','标准食品ID','食物ID','SKU','sku','foodId','food_id'])??'');
-   const name=String(rawValue(row,['名称','规范名称','标准名称','食品名称','食物/饮品','商品','商品名称','食品','name','food_name','product'])??'');
+   const foodId=String(rawValue(row,['食品ID','标准食品ID','canonical_food_id','食物ID','SKU','sku','foodId','food_id'])??'');
+   const name=String(rawValue(row,['名称','规范名称','标准名称','食品名称','食物/饮品','商品','商品名称','食品','name','food_name','product','item'])??'');
    const alias=String(rawValue(row,['别名','别称','匹配词','alias','alias_name'])??'');
-   const date=String(rawValue(row,['日期','采购日期','时间','盘点日期','date','purchase_date','observedAt'])??'').slice(0,10);
-   const external=sourceId(row);
-   const data={table,foodId,name,date,...(alias?{alias}:{}),
-    ...(kind==='prices'?{unit:String(rawValue(row,['价格基准','库存单位','单位','unit','price_basis'])??''),
-      unitPrice:numeric(rawValue(row,['单价(CNY)','单价(元)','单价','unitPrice','unit_price']))}:{}),
+   const date=String(rawValue(row,['日期','采购日期','时间','盘点日期','date','purchase_date','observedAt','updated'])??'').slice(0,10);
+   const external=sourceId(row)||(kind==='prices'?String(row.price_id??''):
+    kind==='purchaseEvents'&&row.order_id?String(row.order_id)+':'+hash(stable([foodId,name])):'');
+   const data={table,foodId,name,date,...(external?{externalId:external}:{}),...(alias?{alias}:{}),
+    ...(kind==='inventoryAudit'?{event:row.event??'',unit:row.unit??'',
+     quantityDelta:numeric(row.qty_delta),priorBalance:numeric(row.prior_balance),remainingBalance:numeric(row.remaining_balance),
+     foodEventAlreadyRecorded:row.food_event_already_recorded??null,
+     financeId:String(rawValue(row,['financeId','finance_id','transaction_id','财务交易ID'])??'')}:{}),
+    ...(kind==='prices'?{unit:String(rawValue(row,['价格基准','库存单位','单位','unit','price_basis','basis_unit'])??''),
+      unitPrice:numeric(rawValue(row,['单价(CNY)','单价(元)','单价','unitPrice','unit_price','normalized_cny_per_unit']))}:{}),
     ...(kind==='purchaseEvents'?{totalCents:numeric(rawValue(row,['totalCents','total_cents']))??
-      ((money)=>money===null?null:Math.round(money*100))(numeric(rawValue(row,['订单金额(CNY)','实付(CNY)','总价(CNY)','采购金额','金额(CNY)','金额','paid','total','amount']))) }:{}),
+      ((money)=>money===null?null:Math.round(money*100))(numeric(rawValue(row,['订单金额(CNY)','实付(CNY)','总价(CNY)','采购金额','金额(CNY)','金额','paid','total','amount','original_line_total_cny']))) }:{}),
     original:copy(row)};
    const time=normalizeClock(rawValue(row,['时间','采购时间','time'])??'');
    const merchant=normalized(rawValue(row,['商家','平台','来源','merchant','store','vendor'])??'');

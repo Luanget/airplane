@@ -161,7 +161,7 @@ export async function readAppData(workspace,book,{dataset,id,date,query,fields=[
   const entries=Object.entries(catalog).filter(([,rows])=>Array.isArray(rows));
   if(!term&&!id&&!date)return {dataset,tables:Object.fromEntries(entries.map(([kind,rows])=>[kind,rows.length]))};
   const matches=entries.flatMap(([kind,rows])=>rows.filter(row=>
-   (!id||row.id===id)&&(!date||String(row.date??'').startsWith(date))&&
+   (!id||row.id===id||row.externalId===id)&&(!date||String(row.date??'').startsWith(date))&&
    (!term||kind.toLowerCase()===term||JSON.stringify(row).toLowerCase().includes(term))).map(row=>({...row,kind})));
   return {dataset,rows:projectFields(matches,fields)};
  }

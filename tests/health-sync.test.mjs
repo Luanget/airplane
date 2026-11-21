@@ -1,13 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {dayIntake,energyForDay,events,inventoryWithMoves,addFood,deleteEvent,newState,recordEvent} from '../health/core.mjs';
+import {dayIntake,energyForDay,events,inventoryWithMoves,addFood,deleteEvent,localStockChange,newState,normalizeLedger,recordEvent} from '../health/core.mjs';
 import {readAppData} from '../ai/data.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {recordPurchase,revisePurchase} from '../health/purchases.mjs';
 import {combinedBackup} from '../health/backup.mjs';
 import {freshData} from '../finance-storage.mjs';
 import {importSource} from '../health/sync-source.mjs';
-import {planHealthMerge} from '../health/sync.mjs';
+import {planHealthMerge,verifyMergeConsistency} from '../health/sync.mjs';
 import {createSyncPackage,externalBase,projectExternalLedger} from '../health/sync-io.mjs';
 
 const day='2030-11-20',tomorrow='2030-11-21';
@@ -73,9 +73,15 @@ test('unknown legacy identities require review and off-record summaries cannot s
  const base=importSource(legacy([],{daily_summaries:[{日期:day,kcal:200}]})).health;
  const raw=legacy([row('合成主食',100,200)],{daily_summaries:[{日期:day,kcal:200}]},'301120.2');
  const preview=plan(base,raw);
- const unresolved=preview.unresolved.find(item=>item.kind==='baselines');
+ const candidate=preview.unresolved.find(item=>item.kind==='foods');
+ assert.ok(candidate);
+ const held=clean(plan(base,raw,{[candidate.id]:'keep'}));
+ assert.equal(dayIntake(held,day).totals.kcal,200);
+ assert.equal(events(held,'foods').length,0);
+ const separate={[candidate.id]:'separate'};
+ const unresolved=plan(base,raw,separate).unresolved.find(item=>item.kind==='baselines');
  assert.ok(unresolved);
- const resolved=clean(plan(base,raw,{[unresolved.id]:'take'}));
+ const resolved=clean(plan(base,raw,{...separate,[unresolved.id]:'take'}));
  assert.equal(dayIntake(resolved,day).totals.kcal,200);
  const added=legacy([row('合成主食',120,240),row('合成主食',120,240)],{},'301120.3');
  const duplicates=plan(resolved,added);
@@ -191,4 +197,152 @@ test('older backups with null optional health tables can merge without replacing
  const state=clean(plan(phone,combinedBackup(old,freshData())));
  assert.equal(events(state,'foods')[0].name,'保留本机记录');
  assert.equal(state.settings.sodiumTarget,phone.settings.sodiumTarget);
+});
+
+test('a reordered tidy baseline matches archived names and duplicate copies without adding historical intake',()=>{
+ const a=row('合成米饭 100g',100,200),b=row('合成鱼肉 150g',150,240);
+ const archived=row('日期未知的合成方案',50,100,{date:'',status:'计划'});
+ const raw=legacy([a,b,{...a},archived],{daily_summaries:[{日期:day,kcal:640}]});
+ const tidy=structuredClone(raw);
+ tidy.handoff_version+='-整理';
+ tidy.tables.food_events=[b,a,archived,a].map(original=>({...original,
+  '食物/饮品':original['食物/饮品'].replace(/ \d+g$/,''),
+  '原食物/饮品名称':original['食物/饮品']}));
+ const phone=normalizeLedger(tidy);
+ assert.deepEqual(projectExternalLedger(raw,phone,{id:'test-fixture',version:'301120.2',today:tomorrow}).tables,raw.tables);
+ logFood(phone,'合成手机独有晚餐',100,160,'晚餐',tomorrow);
+ for(const [current,source] of [[phone,raw],[externalBase(raw).state,phone]]){
+  const preview=plan(current,source);
+  const next=clean(preview);
+  assert.equal(preview.rows.filter(change=>change.kind==='foods'&&change.status==='same').length,4);
+  assert.equal(events(next,'foods').length,5);
+  assert.equal(dayIntake(next,day).totals.kcal,640);
+  assert.equal(dayIntake(next,tomorrow).totals.kcal,160);
+  assert.equal(plan(next,source).changed,false);
+ }
+ const portable=createSyncPackage(phone,{id:'tidy-fixture',version:'0.9.10'});
+ const merged=clean(plan(externalBase(raw).state,portable));
+ assert.equal(events(merged,'foods').length,5);
+ assert.equal(plan(merged,portable).changed,false);
+});
+
+test('same-edition unknown inherited rows cannot be silently added or approved as independent records',()=>{
+ const master=legacy([row('合成原名',100,200)]);
+ const phone=importSource(master).health;
+ const mislabeled=structuredClone(master);
+ mislabeled.tables.food_events[0]['食物/饮品']='无原名字段的整理副本';
+ const preview=plan(phone,mislabeled);
+ const issue=preview.unresolved.find(change=>change.kind==='foods');
+ assert.equal(issue.status,'suspect');
+ assert.ok(!issue.options.some(choice=>choice.value==='separate'));
+ const kept=clean(plan(phone,mislabeled,choicesFor(preview)));
+ assert.equal(dayIntake(kept,day).totals.kcal,200);
+ assert.equal(events(kept,'foods').length,1);
+ assert.equal(plan(kept,mislabeled).changed,false);
+});
+
+test('edits on both sides of a shared original do not overwrite each other, even when the base has no ID',()=>{
+ const raw=legacy([row('合成可更正食物',100,200)]);
+ const a=importSource(raw).health,b=importSource(raw).health;
+ addFood(a,{...a.legacy.foods[0],status:'actual',portion:'110 g',kcal:220},a.legacy.foods[0].id);
+ addFood(b,{...b.legacy.foods[0],status:'actual',portion:'120 g',kcal:240},b.legacy.foods[0].id);
+ const conflict=plan(a,b);
+ assert.equal(conflict.unresolved.find(change=>change.kind==='foods').status,'conflict');
+ assert.equal(dayIntake(clean(plan(a,b,choicesFor(conflict))),day).totals.kcal,220);
+});
+
+test('business verification rejects unreviewed historical intake, TDEE, weights and stock changes',()=>{
+ const raw=legacy([row('合成面条',100,200)],{
+  weight_events:[{日期:day,数值:80,纳入趋势:'是'}],
+  energy_balance:[{饮食日期:day,'估计总消耗(kcal)':2300,'摄入(kcal)':200}],
+  food_inventory:[{食品ID:'fixture-pack',名称:'合成面条',库存值:5,库存单位:'包'}]
+ });
+ const state=importSource(raw).health;
+ const allowed=plan(state,raw).authorization;
+ const changed=structuredClone(state);
+ changed.legacy.energy[day].tdee=2800;
+ changed.legacy.energy[day].intake=400;
+ changed.legacy.weights[0].kg=81;
+ changed.legacy.inventory[0].qty=3;
+ changed.legacy.foods.push({...changed.legacy.foods[0],id:'unreviewed'});
+ const errors=verifyMergeConsistency(state,changed,allowed).join('\n');
+ for(const expectation of [/饮食发生未经预览/,/历史营养基线/,/历史总消耗/,/体重发生未经预览/,/库存期初/])
+  assert.match(errors,expectation);
+});
+
+test('zero-change projection retains every original table and incremental projection patches only affected fields',()=>{
+ const first={...row('合成旧记录',100,200,{status:'已吃'}),追溯:'原始凭据'};
+ const historical={日期:day,kcal:200,记录完整性:'历史质量',说明:'原始摘要'};
+ const energy={饮食日期:day,'摄入(kcal)':200,'估计总消耗(kcal)':2137.6,
+  '当日缺口(kcal)':1937.6,结算状态:'临时封账',依据:'历史手表'};
+ const raw=legacy([first,row('无日期的旧方案',70,100,{date:'',status:'计划'})],{
+  daily_summaries:[historical],energy_balance:[energy],
+  weight_events:[{日期:'',数值:88,状态:'保留档案'}],
+  activity_events:[{日期:'',项目:'历史无日期记录',来源:'原始'}],
+  rules:[{Key:'old',状态:'inactive',当前值:'历史'}],
+  inventory_transactions_audit:[{id:'audit-demo',food_id:'sku',date:day,qty_delta:-1,source:'原始审计'}]
+ });
+ const version='301121.1',id='fixture-ledger';
+ const state=externalBase(raw).state;
+ assert.deepEqual(projectExternalLedger(raw,state,{version,id,today:tomorrow}).tables,raw.tables);
+ const original=events(state,'foods')[0];
+ addFood(state,{...original,status:'actual',portion:'120 g',kcal:240},original.id);
+ const extra=logFood(state,'合成补报',55,80,'晚餐',tomorrow);
+ const patched=projectExternalLedger(raw,state,{version,id,today:tomorrow});
+ assert.equal(patched.tables.food_events[0].状态,'已吃');
+ assert.equal(patched.tables.food_events[0].追溯,first.追溯);
+ assert.deepEqual(patched.tables.food_events[1],raw.tables.food_events[1]);
+ assert.equal(patched.tables.food_events[0].kcal,240);
+ assert.equal(patched.tables.daily_summaries.length,2);
+ assert.equal(patched.tables.daily_summaries[0].说明,'原始摘要');
+ assert.deepEqual(patched.tables.energy_balance,[{...energy,'摄入(kcal)':240,'当日缺口(kcal)':1897.6}]);
+ for(const name of ['weight_events','activity_events','rules','inventory_transactions_audit'])
+  assert.deepEqual(patched.tables[name],raw.tables[name]);
+ const reopened=externalBase(patched).state;
+ assert.deepEqual(projectExternalLedger(patched,reopened,{version,id,today:tomorrow}).tables,patched.tables);
+ addFood(reopened,{...original,status:'actual',portion:'125 g',kcal:250},original.id);
+ deleteEvent(reopened,'foods',extra.id);
+ const roundTrip=projectExternalLedger(patched,reopened,{version:'301121.2',id,today:tomorrow});
+ assert.equal(roundTrip.tables.food_events[0].kcal,250);
+ assert.equal(roundTrip.tables.food_events.length,2);
+ assert.equal(roundTrip.tables.energy_balance.length,1);
+});
+
+test('real audit column types and unresolved bottle weighing survive merge without a fabricated deduction',async()=>{
+ const raw=legacy([],{
+  food_inventory:[{食品ID:'bottle-fixture',名称:'合成瓶装酱',库存值:1,库存单位:'瓶',标准份量:'每100g'}],
+  inventory_transactions_audit:[{id:'audit-fixture',food_id:'bottle-fixture',date:day,event:'盘点',
+   qty_delta:-1,unit:'瓶',remaining_balance:1,finance_id:'order-fixture',food_event_already_recorded:true}]
+ });
+ const phone=importSource(raw).health;
+ const food=addFood(phone,{name:'合成瓶装酱',foodId:'bottle-fixture',date:tomorrow,meal:'晚餐',portion:'30 g',kcal:60,
+  weighing:{beforeGross:330,afterGross:300}});
+ const target=externalBase(raw).state;
+ const preview=plan(target,phone);
+ assert.ok(preview.unresolved.some(change=>change.kind==='stockLinks'));
+ const merged=clean(plan(target,phone,choicesFor(preview)));
+ assert.equal(dayIntake(merged,tomorrow).totals.kcal,60);
+ assert.equal(merged.sync.pendingStock[0].id,food.id);
+ assert.equal(merged.local.stockMoves.length,0);
+ assert.equal(inventoryWithMoves(merged)[0].qty,1);
+ assert.equal(plan(merged,phone).changed,false);
+ const audit=await readAppData({readHealth:()=>merged},null,{dataset:'sync_catalog',id:'audit-fixture',date:null,query:'',fields:[]});
+ assert.equal(audit.rows[0].quantityDelta,-1);
+ assert.equal(audit.rows[0].financeId,'order-fixture');
+ assert.deepEqual(audit.rows[0].original,raw.tables.inventory_transactions_audit[0]);
+});
+
+test('adopting an external stock count retains later local consumption and never replays older movements',()=>{
+ const inventory={食品ID:'case-milk',名称:'合成盒装奶',库存值:10,库存单位:'盒',标准份量:'每盒'};
+ const base=legacy([],{food_inventory:[inventory]});
+ const phone=importSource(base).health;
+ localStockChange(phone,{foodId:inventory.食品ID,date:day,delta:-1});
+ localStockChange(phone,{foodId:inventory.食品ID,date:tomorrow,delta:-2});
+ const fresh=legacy([],{food_inventory:[{...inventory,库存值:8}]},'301120.2');
+ const review=plan(phone,fresh);
+ assert.ok(review.unresolved.some(change=>change.kind==='inventory'));
+ const merged=clean(plan(phone,fresh,choicesFor(review,'take')));
+ assert.equal(inventoryWithMoves(merged)[0].qty,6);
+ assert.deepEqual(merged.local.stockMoves,phone.local.stockMoves);
+ assert.equal(plan(merged,fresh).changed,false);
 });

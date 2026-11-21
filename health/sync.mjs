@@ -1,16 +1,17 @@
 import {normalizeClock} from '../calendar.mjs';
 import {NUTRIENTS,actualFood,addFood,batchBalances,dayIntake,deleteEvent,energyForDay,events,
  inventoryWithMoves,numeric,round,sampleNutrientSum,validDate,validateAppState} from './core.mjs';
+import {quantityInUnit} from './candidates.mjs';
 import {recordedPortion} from './food-history.mjs';
 import {orderBatchId,revisePurchase} from './purchases.mjs';
-import {EVENT_TYPES,baselines,eventData,eventIdentity,foodStatus,hash,normalized,originalEventRefs,
+import {EVENT_TYPES,baselines,eventData,eventIdentity,externalCatalogs,foodStatus,hash,inheritedKey,inheritedLineage,normalized,originalEventRefs,
  safeKey,same,stable} from './sync-source.mjs';
 
 const clone=structuredClone;
 const empty=()=>Object.create(null);
 const labels={foods:'饮食',weights:'体重',activities:'运动',inventory:'食品与库存',purchases:'采购',
  batches:'库存批次',stockMoves:'库存流水',templates:'餐食模板',shoppingList:'补货清单',
- baselines:'每日汇总与能量基线',settings:'健康参数',aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',rules:'现行规则'};
+ stockLinks:'扣库待核对',baselines:'每日汇总与能量基线',settings:'健康参数',aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',rules:'现行规则'};
 const keyFor=(kind,row)=>kind==='shoppingList'?row.foodId:kind==='rules'?row.key:row.id;
 const canonicalName=(state,row)=>{
  const names=[row.name];
@@ -87,7 +88,7 @@ function setEvent(state,type,previous,row,id,raw){
  }
  if(state.legacy[type].some(entry=>entry.id===id)){
   ((state.local.edits??={})[type]??={})[id]=record;
- }else if(raw&&!previous){
+ }else if(!previous&&(raw||type==='foods'&&!validDate(record.date)&&foodStatus(record)!=='actual')){
   state.legacy[type].push(record);
  }else{
   const rows=state.local[type],at=rows.findIndex(entry=>entry.id===id);
@@ -130,7 +131,7 @@ function chooseBaseline(current,next,selected,dates){
   if(Object.values(nutrition).some(value=>value!==null)||daily){
    next.legacy.daily[date]={...daily,date,nutrition,note:base.note};
   }
-  if(energy||base.baseTdee!==null){
+  if(selected[date]&&(energy||base.baseTdee!==null)){
    next.legacy.energy[date]={...energy,date,intake:nutrition.kcal,
     tdee:base.baseTdee===null?null:round(base.baseTdee+(activity.get(date)??0),2),
     deficit:null,status:base.status};
@@ -197,6 +198,58 @@ function verifyGraph(state,baseline){
  return [...new Set(problems)];
 }
 
+function changedRows(before,after,key){
+ const left=new Map(before.map(row=>[key(row),row]));
+ const right=new Map(after.map(row=>[key(row),row]));
+ return [...new Set([...left.keys(),...right.keys()])].flatMap(id=>{
+  const old=left.get(id),row=right.get(id);
+  return same(old,row)?[]:[[id,old,row]];
+ });
+}
+
+export function verifyMergeConsistency(before,after,allowed={}){
+ const problems=[];
+ const check=(kind,key)=>allowed[kind]?.includes(key);
+ const dates=new Set([...Object.keys(before.legacy.daily),...Object.keys(after.legacy.daily),
+  ...Object.keys(before.legacy.energy),...Object.keys(after.legacy.energy)]);
+ const intakeDates=new Set(),activityDates=new Set();
+ for(const kind of EVENT_TYPES){
+  const left=events(before,kind),right=events(after,kind);
+  for(const row of [...left,...right])if(validDate(row.date))dates.add(row.date);
+  for(const [id,old,row] of changedRows(left,right,value=>value.id)){
+   if(!check(kind+'Ids',id)){
+    problems.push(labels[kind]+'发生未经预览的改动 · '+(row?.date||old?.date||'日期未定'));
+    continue;
+   }
+   for(const date of [old?.date,row?.date]){
+    if(kind==='foods'&&(old&&actualFood(old)||row&&actualFood(row)))intakeDates.add(date);
+    if(kind==='activities')activityDates.add(date);
+   }
+  }
+ }
+ for(const date of dates){
+  if(!intakeDates.has(date)&&!check('baselines',date)&&
+   !same(dayIntake(before,date).totals,dayIntake(after,date).totals))
+   problems.push('历史营养基线发生未经预览的改动 · '+date);
+  const oldEnergy=before.legacy.energy[date],newEnergy=after.legacy.energy[date];
+  if(!check('baselines',date)&&(!same(oldEnergy?.tdee,newEnergy?.tdee)||
+   !activityDates.has(date)&&(oldEnergy?.tdee!=null||!check('settings','baselineTdee'))&&
+    energyForDay(before,date,date).tdee!==energyForDay(after,date,date).tdee))
+   problems.push('历史总消耗发生未经预览的改动 · '+date);
+ }
+ for(const [id] of changedRows([...before.legacy.inventory,...(before.local.inventory??[])],
+  [...after.legacy.inventory,...(after.local.inventory??[])],row=>row.id))
+  if(!check('inventory',id))problems.push('库存期初发生未经预览的改动 · '+id);
+ for(const [id] of changedRows(before.local.stockMoves,after.local.stockMoves,row=>row.id))
+  if(!check('stockMoves',id))problems.push('库存流水发生未经预览的改动 · '+id);
+ const balances=new Map(inventoryWithMoves(before).map(row=>[row.id,row.qty]));
+ const flows=new Set(allowed.stockSkus??[]);
+ for(const row of inventoryWithMoves(after))
+  if(balances.has(row.id)&&balances.get(row.id)!==row.qty&&!flows.has(row.id)&&!check('inventory',row.id))
+   problems.push('库存余额发生未经预览的改动 · '+row.id);
+ return [...new Set(problems)];
+}
+
 export function planHealthMerge(current,source,{choices={},finance=null,baseSource}={}){
  if(!validateAppState(current))throw Error('本机健康账本格式无效');
  const {health:incoming,id:sourceId,raw}=source;
@@ -205,7 +258,13 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
  const sources=sync.sources??={};
  const previous=sources[sourceId]??{};
  const anchors=clone(previous.anchors??{});
- const rows=[],ids=new Map(),dates=new Set(),newActualDates=new Set(),suppressed=new Set(),changedNative=new Set();
+ const rows=[],ids=new Map(),dates=new Set(),newActualDates=new Set(),newLegacyDates=new Set(),suppressed=new Set(),changedNative=new Set();
+ const leftLineage=inheritedLineage(current),rightLineage=inheritedLineage(incoming);
+ const observedDay=String(raw?.updated_at??'').slice(0,10);
+ const sharedLineage=leftLineage&&rightLineage&&leftLineage.id===rightLineage.id;
+ const sameEdition=sharedLineage&&leftLineage.version===rightLineage.version;
+ const lastInheritedDay=EVENT_TYPES.flatMap(type=>current.legacy[type].map(row=>row.date)).filter(validDate).sort().at(-1);
+ const authorization={foodsIds:[],weightsIds:[],activitiesIds:[],baselines:[],inventory:[],settings:[]};
  const failures=[];
  const versionNumber=value=>{
   const match=/^(\d{6,8})(?:\.(\d+))?$/.exec(value??'');
@@ -216,7 +275,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
  if(oldVersion!==null&&newVersion!==null&&oldVersion>newVersion||
   Number.isSafeInteger(oldRevision)&&Number.isSafeInteger(newRevision)&&oldRevision>newRevision)
   failures.push('此文件早于该来源上次合并的版本，请选择最新文件。');
- const baselineChoices=empty();
+ const baselineChoices=empty(),currentBase=baselines(current);
  const affectedDates=(old,row)=>{for(const value of [old?.date,row?.date])if(validDate(value))dates.add(value);};
  const entry=(kind,key,before,after,status,options=[],impact='')=>{
   const id=kind+':'+key;
@@ -249,7 +308,10 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    if(!change.options.length||change.chosen)saveAnchor(kind,key,id,row,take?row:before);
   }
  };
- for(const [kind,items] of Object.entries(incoming.legacy.catalogs??{})){
+ const inheritedTables=incoming.legacy.sourceSnapshot?.tables;
+ const typedCatalogs=incoming.legacy.catalogs??(inheritedTables&&(!sameEdition||!current.legacy.catalogs)
+  ?externalCatalogs(inheritedTables):{});
+ for(const [kind,items] of Object.entries(typedCatalogs)){
   if(!['aliases','prices','purchaseEvents','inventoryAudit'].includes(kind)||!Array.isArray(items))continue;
   const catalogs=next.legacy.catalogs??={};
   catalog(kind,catalogs[kind]??=[],items);
@@ -265,7 +327,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   if(!safeKey(sku.id))throw Error('食品 ID 无效');
   const key=hash(raw&&/^legacy-inventory-\d+$/.test(sku.id)?stable([normalized(sku.name),sku.unit,sku.standard]):sku.id);
   const old=oldMatch('inventory',key);
-  const exact=(!raw||!/^legacy-inventory-\d+$/.test(sku.id))&&existingInventory.find(row=>row.id===sku.id&&row.unit===sku.unit);
+  const exact=(!raw||!/^legacy-inventory-\d+$/.test(sku.id))&&existingInventory.find(row=>row.id===sku.id);
   const named=existingInventory.filter(row=>row.unit===sku.unit&&canonicalName(names,row).some(name=>canonicalName(names,sku).includes(name)));
   const mapped=old&&existingInventory.find(row=>row.id===old.target);
   const candidates=mapped?[mapped]:exact?[exact]:named;
@@ -281,6 +343,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    const target=existingInventory.some(row=>row.id===sku.id)||raw&&/^legacy-inventory-\d+$/.test(sku.id)?'sync-sku-'+hash(sourceId+key):sku.id;
    const values={...clone(base),id:target};
    if(raw)next.legacy.inventory.push(values);else (next.local.inventory??=[]).push(values);
+   authorization.inventory.push(target);
    newSkus.add(sku.id);ids.set(sku.id,target);existingInventory.push({...values,qty:sku.qty});
    entry('inventory',key,null,sku,'added',[],'新食品与来源库存');
    saveAnchor('inventory',key,target,sku,sku);
@@ -289,16 +352,26 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   const target=ids.get(sku.id),before=existingInventory.find(row=>row.id===target);
   const location=next.legacy.inventory.find(row=>row.id===target)??next.local.inventory?.find(row=>row.id===target);
   const signature=row=>({...row,id:target});
-  const comparableBefore=raw?before:location,comparableIncoming=raw?sku:base;
-  if(!same(signature(comparableBefore),signature(comparableIncoming))&&(!old||old.incoming!==hash(stable(sku)))){
+  const comparableBefore=raw&&!sameEdition?before:location,comparableIncoming=raw&&!sameEdition?sku:base;
+  const sameOpening=sameEdition&&before.id===sku.id&&location.qty===base.qty&&
+   location.pricePerUnit===base.pricePerUnit&&same(location.nutrition,base.nutrition);
+  const sameInventory=sameOpening||same(signature(comparableBefore),signature(comparableIncoming));
+  if(!sameInventory&&(!old||old.incoming!==hash(stable(sku)))){
    const change=entry('inventory',key+'-values',before,sku,'conflict',review,
-    raw?'来源为已扣减后的盘点余额。采用时以该数值为余额，保留本机流水。':'采用来源资料和期初数量，合并后由流水计算现存量');
+    raw&&!sameEdition
+     ?(validDate(observedDay)?'采用即确认 '+observedDay+' 及此前的本机流水已含在来源净盘点，之后的流水另计。':
+      '来源盘点日期未定。采用即确认其净余额已包含当前本机流水。')
+     :'采用来源期初数量，本机后续流水继续计算现存量');
    if(change.chosen==='take'){
-    const quantity=raw&&sku.qty!==null?round(sku.qty-next.local.stockMoves.filter(row=>row.foodId===target).reduce((n,row)=>n+row.delta,0),6):base.qty;
+    authorization.inventory.push(target);
+    const reflectedMoves=next.local.stockMoves.filter(row=>row.foodId===target&&
+     (!validDate(observedDay)||row.date<=observedDay));
+    const quantity=raw&&!sameEdition&&sku.qty!==null
+     ?round(sku.qty-reflectedMoves.reduce((n,row)=>n+row.delta,0),6):base.qty;
     Object.assign(location,clone(base),{id:target,qty:quantity});
    }
    if(!change.chosen)continue;
-  }else entry('inventory',key,before,sku,same(signature(comparableBefore),signature(comparableIncoming))?'same':'existing');
+  }else entry('inventory',key,before,sku,sameInventory?'same':'existing');
   saveAnchor('inventory',key,target,sku,location);
  }
 
@@ -309,12 +382,20 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   const outbound=new Map(Object.values(portable?.[type]??{}).filter(row=>row?.target)
    .map(row=>[row.target,row]));
   const byId=new Map(destinations.map(info=>[info.id,info]));
-  const byDay=new Map(),byIdentity=new Map();
+  const byDay=new Map(),byIdentity=new Map(),byInherited=new Map();
+  const baseRow=(row,lookup)=>row&&(row.externalRow??lookup[type]?.get(row.id));
   const index=info=>{
    const row=info.row??info.original;
    if(!row)return;
    if(!byDay.has(row.date))byDay.set(row.date,[]);
    byDay.get(row.date).push(info);
+   if(sharedLineage&&info.original){
+    const inherited=inheritedKey(type,baseRow(info.original,refs));
+    if(inherited){
+     if(!byInherited.has(inherited))byInherited.set(inherited,[]);
+     byInherited.get(inherited).push(info);
+    }
+   }
    const identity=eventIdentity(row,refs[type]?.get(row.id));
    if(identity){
     if(!byIdentity.has(identity))byIdentity.set(identity,[]);
@@ -341,7 +422,16 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    const occurrence=(seen.get(primary)??0)+1;seen.set(primary,occurrence);
    const key=occurrence===1?primary:primary+'-'+occurrence;
    let old=oldMatch(type,key);
-   const patch= row?eventRow(row,type,ids):null;
+   const patch=row?eventRow(row,type,ids):null;
+   const inherited=sharedLineage&&original?inheritedKey(type,baseRow(original,incomingRefs)):null;
+   const baselineMatches=inherited?byInherited.get(inherited)??[]:[];
+   const inheritedOnly=!raw&&original&&row&&same(row,original)||raw&&!!original;
+   const untouchedGroup=baselineMatches.length>1&&baselineMatches.every(info=>same(info.row,info.original));
+   const cutoff=sharedLineage&&validDate(leftLineage.cutoff)?leftLineage.cutoff:lastInheritedDay;
+   const protectInherited=!!original&&(sharedLineage&&(sameEdition||!raw)||!external&&!!cutoff&&
+    (!validDate(sourceRow.date)||sourceRow.date<=cutoff));
+   const overlapsSummary=type==='foods'&&row&&actualFood(row)&&
+    Object.values(currentBase[row.date]?.nutrition??{}).some(value=>value>0);
    const indexed=(byDay.get(sourceRow.date)??[]).filter(target=>nearby(type,target.row??target.original,sourceRow,names));
    const stableMatches=external?byIdentity.get(external)??[]:[];
    const available=indexed.filter(info=>!claimed.has(info.id));
@@ -349,7 +439,8 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
     !!Object.values(sourceRow.nutrition??{}).some(value=>numeric(value)!==null);
    const exact=informative?available.filter(info=>equivalent(type,info.row??info.original,sourceRow,names)):[];
    const strong=external?stableMatches.filter(info=>!claimed.has(info.id)):[];
-   const candidates=strong.length?strong:exact.length?exact:available;
+   const inheritedAvailable=baselineMatches.filter(info=>!claimed.has(info.id));
+   const candidates=strong.length?strong:inheritedAvailable.length?inheritedAvailable:exact.length?exact:available;
    if(!old&&candidates.length===1&&!strong.length){
     const candidate=candidates[0].row??candidates[0].original;
     const matchTime=!normalizeClock(candidate.time)||!normalizeClock(sourceRow.time)||normalizeClock(candidate.time)===normalizeClock(sourceRow.time);
@@ -360,22 +451,28 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
     }
    }
    let target=old&&byId.get(old.target);
-   if(!target&&candidates.length===1)target=candidates[0];
+   if(!target&&(candidates.length===1||untouchedGroup&&inheritedOnly&&inheritedAvailable.length))
+    target=candidates[0];
    let status;
    const incomingHash=hash(stable(patch?eventData(type,patch):null));
    const before=target?.row??null;
    const beforeData=before?eventData(type,before):null;
    const incomingSame=!!old&&old.incoming===incomingHash;
-   const strongIdentity=!!old||strong.length===1;
+   const provenInherited=!!target&&baselineMatches.includes(target)&&(baselineMatches.length===1||untouchedGroup&&inheritedOnly);
+   const strongIdentity=!!old||strong.length===1||provenInherited;
    const shared=target&&outbound.get(id);
    const hasShared=shared&&typeof shared.accepted==='string'&&typeof shared.incoming==='string';
    const localChanged=hasShared&&hash(stable(beforeData))!==shared.incoming;
    const sourceChanged=hasShared&&incomingHash!==shared.accepted;
    if(incomingSame){status='existing';target=old.target?byId.get(old.target)??null:null;}
+   else if(provenInherited&&inheritedOnly)status='same';
+   else if(!provenInherited&&protectInherited&&!strong.length&&(!target||!exact.includes(target)))status='suspect';
+   else if(provenInherited&&!inheritedOnly&&same(before,target.original)&&validDate(patch?.date??original?.date))status='corrected';
    else if(occurrence>1&&!old)status='suspect';
    else if(!target&&candidates.length)status='suspect';
    else if(!target&&!row)status='existing';
    else if(!target&&old?.target)status='conflict';
+   else if(!target&&overlapsSummary)status='suspect';
    else if(!target)status='added';
    else if(!before&&!row)status='same';
    else if(before&&patch&&equivalent(type,before,patch,names)&&(informative||strongIdentity))status='same';
@@ -383,10 +480,13 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    else if(!old&&hasShared&&sourceChanged&&!localChanged&&!shared.kept)status='corrected';
    else if(old&&!old.kept&&old.accepted===hash(stable(beforeData))&&validDate(patch?.date??original?.date))status='corrected';
    else status=strongIdentity||hasShared?'conflict':'suspect';
+   const separateAllowed=!!patch&&(!protectInherited||raw&&!sameEdition&&validDate(patch.date));
    const options=status==='conflict'?review:status==='suspect'?
-    [{value:'keep',label:'保留现有记录'},...(patch?[{value:'separate',label:'作为独立记录加入'}]:[]),
+    [{value:'keep',label:'保留现有记录'},...(separateAllowed?[{value:'separate',label:'作为独立记录加入'}]:[]),
      ...candidates.map(info=>({value:'take:'+info.id,label:'更正 '+(info.row??info.original).name+' · '+info.id}))]:[];
    const change=entry(type,key,target?before:candidates.map(info=>info.row),patch,status,options,
+    protectInherited&&status==='suspect'?'继承自共同主账，身份未核定。可保留本机或指定原记录。':
+    overlapsSummary&&status==='suspect'?'当天存在未逐条记录的摄入汇总。加入前需核对是否已计入。':
     type==='foods'?'影响对应日的营养、成本与已有扣库':'影响对应日的趋势或结算');
    if(change.chosen?.startsWith('take:'))target=byId.get(change.chosen.slice(5));
    const separate=change.chosen==='separate';
@@ -404,7 +504,12 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    }
    if(take){
     affectedDates(target?.row,patch);
-    if(type==='foods'&&!target&&patch&&actualFood(patch)&&validDate(patch.date))newActualDates.add(patch.date);
+    authorization[type+'Ids'].push(targetId);
+    if(protectInherited&&!target&&patch&&!separate)failures.push('继承历史不能作为新增写入 · '+(patch.date||'日期未定'));
+    if(type==='foods'&&!target&&patch&&actualFood(patch)&&validDate(patch.date)){
+     newActualDates.add(patch.date);
+     if(raw)newLegacyDates.add(patch.date);
+    }
     if(!raw)changedNative.add(targetId);
     try{
      if(patch&&!validDate(patch.date)&&target)throw Error('原记录日期无效，请保留本机或作为独立历史记录导入');
@@ -493,8 +598,13 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
     saveAnchor('purchases',key,order.id,orderSrc,order);
    }
   }
+  const sourceSkus=new Map(incomingInventory.map(row=>[row.id,row]));
+  const targetSkus=new Map([...next.legacy.inventory,...(next.local.inventory??[])].map(row=>[row.id,row]));
+  const unitsDiffer=(sourceId,targetId)=>sourceSkus.has(sourceId)&&targetSkus.has(targetId)&&
+   sourceSkus.get(sourceId).unit!==targetSkus.get(targetId).unit;
   const covered=new Set(incoming.local.stockMoves.filter(move=>move.linkedFoodId&&!ignoredOrders.has(ownedLots.get(move.batchId))&&
-   !suppressed.has(move.linkedFoodId)).map(move=>ids.get(move.linkedFoodId)??move.linkedFoodId));
+   !suppressed.has(move.linkedFoodId)&&!unitsDiffer(move.foodId,ids.get(move.foodId)??move.foodId))
+   .map(move=>ids.get(move.linkedFoodId)??move.linkedFoodId));
   const priorFoodIds=new Set(events(current,'foods').map(row=>row.id));
   if(covered.size)next.local.stockMoves=next.local.stockMoves.filter(move=>!covered.has(move.linkedFoodId)||!changedNative.has(move.linkedFoodId));
   // A corrected order was already replayed via revisePurchase; do not replay
@@ -518,6 +628,23 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
     const before=index.get(old?.target??target)??byContent.get(hash(stable({...copy,id:undefined,createdAt:undefined})));
     const linkedExisting=kind==='stockMoves'&&copy.linkedFoodId&&priorFoodIds.has(copy.linkedFoodId);
     if(linkedExisting&&!changedNative.has(copy.linkedFoodId))continue;
+    if((kind==='stockMoves'||kind==='batches')&&unitsDiffer(row.foodId,copy.foodId)){
+     const beforeUnit=sourceSkus.get(row.foodId).unit,afterUnit=targetSkus.get(copy.foodId).unit;
+     const reason='来源单位 '+beforeUnit+'，本机单位 '+afterUnit+'。无法直接套用数量。';
+     const unitKey=key+'-unit';
+     const stockRef={...copy,sourceUnit:beforeUnit,targetUnit:afterUnit};
+     if(oldMatch(kind,unitKey)?.incoming===hash(stable(stockRef)))continue;
+     const issue=entry(kind,unitKey,null,stockRef,'suspect',
+      [{value:'keep',label:'保留本机库存，暂缓合并该流水或批次'}],reason);
+     if(issue.chosen){
+      saveAnchor(kind,unitKey,null,stockRef,null);
+      if(copy.linkedFoodId&&!linkedExisting){
+       const food=events(next,'foods').find(item=>item.id===copy.linkedFoodId);
+       if(food&&changedNative.has(food.id))food.stockQty=null;
+      }
+     }
+     continue;
+    }
     const equal=same(before,copy)||before&&same({...before,id:undefined,createdAt:undefined},{...copy,id:undefined,createdAt:undefined});
     const status=equal?'same':old?.incoming===hash(stable(row))?'existing':!before?'added':
      old&&old.accepted===hash(stable(before))?'corrected':'conflict';
@@ -545,7 +672,26 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   }
  }
 
- const currentBase=baselines(current),incomingBase=baselines(incoming);
+ // A weighed bottle without a verified net capacity can retain its food
+ // record, but cannot create a fractional stock movement.
+ const skus=new Map(inventoryWithMoves(next).map(row=>[row.id,row]));
+ const linkedFoods=new Set(next.local.stockMoves.map(row=>row.linkedFoodId).filter(Boolean));
+ const pending=[];const priorPending=new Map((sync.pendingStock??[]).map(row=>[row.id,row]));
+ for(const food of events(next,'foods')){
+  const sku=skus.get(food.foodId);
+  if(!actualFood(food)||!food.weighing||!sku||food.stockQty!=null||linkedFoods.has(food.id)||
+   quantityInUnit(sku,1,'g',sku.unit)!==null)continue;
+  const detail={id:food.id,foodId:sku.id,date:food.date,name:food.name,portion:food.portion,stockUnit:sku.unit,
+   weighing:food.weighing,reason:'缺少可核实的单位换算'};
+  // Also surface records already on this device when first merging.
+  const prior=priorPending.get(food.id);
+  if(!same(prior,detail))entry('stockLinks',hash(food.id),prior,detail,'suspect',
+   [{value:'keep',label:'保留饮食，待核对包装资料'}],'保留份量和营养，不自动改变库存数量');
+  pending.push(detail);
+ }
+ if(pending.length||sync.pendingStock)sync.pendingStock=pending;
+
+ const incomingBase=baselines(incoming);
  for(const date of newActualDates){
   if(currentBase[date]&&!incomingBase[date])incomingBase[date]={
    nutrition:{},unresolved:[],baseTdee:currentBase[date].baseTdee,note:'',status:''};
@@ -557,18 +703,21 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   const hasEvents=EVENT_TYPES.some(type=>events(current,type).some(row=>row.date===date));
   const sameData=same(relevant(before),relevant(base));
   const residualOverlap=newActualDates.has(date)&&Object.values(before?.nutrition??{}).some(value=>value>0);
-  const conflicts=!sameData&&(residualOverlap||meaningful&&(!!before||hasEvents));
-  const status=base.unresolved.length?'suspect':sameData?'same':old?.incoming===hash(stable(base))?'existing':
-   conflicts?'conflict':'added';
-  const options=status==='conflict'?review:status==='suspect'?[{value:'keep',label:'按事件重算，来源汇总只供核对'}]:[];
+  const conflicts=residualOverlap||!sameData&&meaningful&&(!!before||hasEvents);
+  const exactlySame=same(current.legacy.daily[date],incoming.legacy.daily[date])&&
+   same(current.legacy.energy[date],incoming.legacy.energy[date]);
+  const status=residualOverlap?'conflict':old?.incoming===hash(stable(base))?'existing':exactlySame?'same':base.unresolved.length?'suspect':
+   sameData?'same':conflicts||sameEdition&&!!before?'conflict':'added';
+  const options=residualOverlap?[{value:'take',label:'采用来源的基线差额'}]:
+   status==='conflict'?review:status==='suspect'?[{value:'keep',label:'保留本机，来源汇总只供核对'}]:[];
   const row=entry('baselines',key,before&&{date,...before},{date,...base},status,options,
    '只合并没有被原始事件覆盖的差额与消耗基线，绝不叠加两边的已记录摄入');
   if((status==='added'&&meaningful)||row.chosen==='take'){
-   baselineChoices[date]=base;dates.add(date);
-  }else if(status==='suspect'&&row.chosen==='keep') dates.add(date);
+   baselineChoices[date]=base;dates.add(date);authorization.baselines.push(date);
+  }
   if(!options.length||row.chosen)saveAnchor('baselines',key,date,base,baselineChoices[date]??before??null);
  }
- chooseBaseline(current,next,baselineChoices,dates);
+ chooseBaseline(current,next,baselineChoices,new Set([...newLegacyDates,...Object.keys(baselineChoices)]));
 
  const settingFields=['calorieTarget','proteinMin','proteinMax','fatMin','sodiumTarget','baselineTdee','cycleDays','cycleTarget','cycleAnchor','preferences'];
  for(const field of settingFields){
@@ -576,10 +725,13 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   if(value===undefined||same(value,before))continue;
   const key=hash(field),old=oldMatch('settings',key),changed=old?.incoming!==hash(stable(value));
   const row=entry('settings',key,{[field]:before},{[field]:value},changed?'conflict':'existing',changed?review:[],'采用后重新计算未来页面的目标或周期');
-  if(row.chosen==='take')next.settings[field]=value;
+  if(row.chosen==='take'){next.settings[field]=value;authorization.settings.push(field);}
   if(!row.options.length||row.chosen)saveAnchor('settings',key,field,value,next.settings[field]);
  }
- const problems=failures.concat(verifyGraph(next,current));
+ const stockChanges=changedRows(current.local.stockMoves,next.local.stockMoves,row=>row.id);
+ authorization.stockMoves=stockChanges.map(([id])=>id);
+ authorization.stockSkus=[...new Set(stockChanges.flatMap(([,old,row])=>[old?.foodId,row?.foodId]).filter(Boolean))];
+ const problems=failures.concat(verifyGraph(next,current),verifyMergeConsistency(current,next,authorization));
  if(next.settings.proteinMin>next.settings.proteinMax)problems.push('蛋白质下限大于上限');
  if(!validateAppState(next))problems.push('合并后的账本格式无效');
  const unresolved=rows.filter(row=>row.options.length&&!row.chosen);
@@ -592,5 +744,5 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
  }
  const impact=[...dates].sort().map(date=>({date,before:dayIntake(current,date).totals,after:dayIntake(next,date).totals,
   tdeeBefore:energyForDay(current,date,date).tdee,tdeeAfter:energyForDay(next,date,date).tdee}));
- return {next,rows,unresolved,problems,impact,changed:!same(next,current)};
+ return {next,rows,unresolved,problems,impact,authorization,changed:!same(next,current)};
 }
