@@ -1,3 +1,4 @@
+import {tracedStep} from './task-log.mjs';
 import {normalizeClock} from '../calendar.mjs';
 import {addConfirmedTransactions,freshData,readFinance} from '../finance-storage.mjs';
 import {agentTaskSchema,matches,validFinanceEntry} from '../health/contract.mjs';
@@ -72,7 +73,7 @@ async function executeFinance(workspace,step,options){
  const saved=readFinance(workspace.finance).payload?.transactions.find(row=>row.id===stamp);
  if(!saved||!same(saved,entryRow))throw Error('未验证财务保存回执，请用原消息重试。');
  return {state:'done',text:(saved.type==='expense'?'已记支出':'已记收入')+' '+yuan(saved.amount)+' · '+saved.categoryName,
-  detail:saved.date+' · '+saved.note,undo:{kind:'finance',id:stamp,entry:saved}};
+  detail:saved.date+' · '+saved.note,receipt:{transactionIds:[saved.id]},undo:{kind:'finance',id:stamp,entry:saved}};
 }
 
 export async function executeAgentTask(workspace,plan,options){
@@ -86,7 +87,11 @@ export async function executeAgentTask(workspace,plan,options){
   }
   if(options.signal?.aborted)break;
   const missing=step.dependsOn.filter(id=>results[id]?.state!=='done');
-  if(missing.length){results[step.id]={state:'waiting',reason:'前置步骤未完成：'+missing.join('、')};continue;}
+  if(missing.length){
+   results[step.id]={state:'waiting',reason:'前置步骤未完成：'+missing.join('、')};
+   options.onStepEvent?.(tracedStep(step,results[step.id]));
+   continue;
+  }
   const confirmed=options.approved?.includes(step.id)===true;
   const id=options.id+':'+step.id;
   const check=()=>{options.signal?.throwIfAborted();options.guard?.();};
@@ -100,6 +105,7 @@ export async function executeAgentTask(workspace,plan,options){
   try{
    check();
    options.onStep?.(labels[step.kind]);
+   options.onStepEvent?.(tracedStep(step));
    if(step.kind==='receipt'){
     assertSkillAction(skillCatalog(workspace.finance),'receipt_order');
     results[step.id]=await executeReceipt(workspace,step.receipt,{...options,id,confirmed,guard,
@@ -119,7 +125,8 @@ export async function executeAgentTask(workspace,plan,options){
     reference=result.record?.reference??reference;
     const undo=result.record&&!result.record.undone&&(!result.duplicate||result.record.id===id)?{kind:'health',id:result.record.id}:null;
     results[step.id]=result.preview==='confirm'?{state:'review',reason:'健康自动执行未开启。',detail:result.text}:
-     {state:'done',text:result.text.split('\n')[0],detail:[result.text,result.source?.text].filter(Boolean).join('\n'),undo,reference};
+     {state:'done',text:result.text.split('\n')[0],detail:[result.text,result.source?.text].filter(Boolean).join('\n'),undo,reference,
+      receipt:result.record?{operationId:result.record.id,revision:result.record.revision,undone:!!result.record.undone}:null};
    }
   }catch(err){
    const retry=err instanceof AssistantSyncPending||options.signal?.aborted||
@@ -127,8 +134,12 @@ export async function executeAgentTask(workspace,plan,options){
    results[step.id]={state:retry?'pending':'blocked',reason:err.message||'无法完成该步骤。'};
   }
   options.progress?.(results);
+  options.onStepEvent?.(tracedStep(step,results[step.id]));
  }
- for(const step of steps)if(!hasOwn(results,step.id))results[step.id]={state:'pending',reason:'执行已停止，可用原消息重试。'};
+ for(const step of steps)if(!hasOwn(results,step.id)){
+  results[step.id]={state:'pending',reason:'执行已停止，可用原消息重试。'};
+  options.onStepEvent?.(tracedStep(step,results[step.id]));
+ }
  options.progress?.(results);
  const rows=steps.map(step=>({id:step.id,label:labels[step.kind],...results[step.id]}));
  return {results,reference,rows,

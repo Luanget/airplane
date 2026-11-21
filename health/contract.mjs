@@ -163,17 +163,34 @@ export const orderReceiptSchema=object({
 });
 const taskFields={id:string(28,1),dependsOn:list(string(28,1),8)};
 const taskKind=(kind,fields)=>object({...taskFields,kind:choice(kind),...fields});
-export const agentTaskSchema=object({
- steps:{...list({anyOf:[
-  taskKind('health',{action:healthActionSchema}),
-  taskKind('finance',{entry:financeSchema.properties.entry.anyOf[0],evidence:string(1600,1)}),
-  taskKind('receipt',{receipt:orderReceiptSchema})
- ]},8),minItems:1}
-});
-export function selectChatSchema({documentAccess,autoMemory,healthActions=false,groupedPhotos=false,agentTasks=false}){
+const agentKinds=[
+ taskKind('health',{action:healthActionSchema}),
+ taskKind('finance',{entry:financeSchema.properties.entry.anyOf[0],evidence:string(1600,1)}),
+ taskKind('receipt',{receipt:orderReceiptSchema})
+];
+const agentTasksWith=kinds=>object({steps:{...list({anyOf:kinds},8),minItems:1}});
+export const agentTaskSchema=agentTasksWith(agentKinds);
+const proposalMode=row=>row.properties?.mode?.enum[0];
+const scopedModes={
+ health:['activity','entry','plan','food_edit','inventory','portions','purchase'],
+ finance:['finance'],
+ receipt:[],
+ vision:['entry','purchase','inventory','portions','activity','plan'],
+ mixed:['finance','activity','purchase','entry','plan','food_edit','inventory','portions','batch']
+};
+export function selectChatSchema({documentAccess,autoMemory,healthActions=false,groupedPhotos=false,agentTasks=false,profile='general'}){
  const base=documentAccess?documentChatSchema:chatSchema;
- const additions=[...(healthActions?[proposal('health_action',healthActionSchema)]:[]),...(groupedPhotos?[proposal('photo_meal',groupedMealSchema)]:[]),...(agentTasks?[proposal('agent_task',agentTaskSchema)]:[])];
- const schema=additions.length?object({...base.properties,proposal:{anyOf:[...base.properties.proposal.anyOf,...additions]}}):base;
+ const scoped=scopedModes[profile];
+ const original=scoped?base.properties.proposal.anyOf.filter(row=>row.type==='null'||scoped.includes(proposalMode(row))):
+  base.properties.proposal.anyOf;
+ const kinds=profile==='receipt'||profile==='vision'?[agentKinds[2]]:
+  profile==='finance'?[agentKinds[1]]:profile==='health'?[agentKinds[0]]:agentKinds;
+ const additions=[
+  ...(healthActions&&!['finance','receipt'].includes(profile)?[proposal('health_action',healthActionSchema)]:[]),
+  ...(groupedPhotos&&profile!=='receipt'?[proposal('photo_meal',groupedMealSchema)]:[]),
+  ...(agentTasks?[proposal('agent_task',agentTasksWith(kinds))]:[])
+ ];
+ const schema=object({...base.properties,proposal:{anyOf:[...original,...additions]}});
  return autoMemory?withAutomaticMemory(schema):schema;
 }
 export const ledgerReadSchema=object({scope:choice('stock','stock_alerts','meal','nutrition','expenses','balance','budget','weight','cycle'),query:string()});

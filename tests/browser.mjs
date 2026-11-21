@@ -435,8 +435,9 @@ try {
     if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
     assert.equal(route.request().headers().authorization,'Bearer '+testKey);
     const body=route.request().postDataJSON(),content=body.input[0].content;
-    assert.equal(body.model,expectedModel);
-    assert.equal(body.reasoning.effort,expectedModel==='gpt-6.2-sol'?'low':'none');
+    const visual=content.some(row=>row.type==='input_image'||row.type==='input_file');
+    assert.equal(body.model,expectedModel==='gpt-6-luna'&&visual?'gpt-6.1-terra':expectedModel);
+    assert.equal(body.reasoning.effort,body.model==='gpt-6.2-sol'?'low':'none');
     assert.equal(body.store,false);assert.equal(body.stream,true);assert.equal(body.text.format.strict,true);
     const input=JSON.parse(content[0].text);
     const mockResult=value=>route.fulfill({headers,json:{status:'completed',output:[{type:'message',
@@ -453,6 +454,10 @@ try {
       fields.push('memory');
       assert.ok(input.memory.every(item=>Object.keys(item).sort().join(',')==='name,text'));
     }
+    if(input.activeSkills)fields.push('activeSkills');
+    if(input.financeCategories)fields.push('financeCategories');
+    if(input.healthContext)fields.push('healthContext');
+    if(input.photoPosition)fields.push('photoPosition');
     if(input.applied)fields.push('applied');
     if(input.contextSummary)fields.push('contextSummary');
     assert.deepEqual(Object.keys(input).sort(),fields.sort());
@@ -484,7 +489,7 @@ try {
       ]});
     }
     if(input.text==='晚餐用库存里的合成牛肉酱，初始360g，吃到322.2g'){
-      assert.ok(body.tools.some(tool=>tool.name==='read_app_document'));
+      assert.ok(!body.tools.some(tool=>tool.name==='read_app_document'));
       assert.ok(input.memory.some(item=>item.name==='酱料用量偏好'));
       return mockResult({reply:'会按同一瓶的两次称重记用量。',saveMode:'save',memoryUpdates:[],proposal:{
        mode:'entry',date:input.date,result:{meal:'晚餐',note:'',items:[{
@@ -559,7 +564,7 @@ try {
     if(input.text==='分别识别合成两张照片'){
       assert.equal(content.length,2);
       assert.equal(content[1].type,'input_image');
-      const photoIndex=Number(body.instructions.match(/照片中的第 (\d) 张/)?.[1]);
+      const photoIndex=input.photoPosition?.index;
       assert.ok([1,2].includes(photoIndex));
       if(photoIndex===1&&++firstPhotoAttempts===1)
         return route.fulfill({status:503,headers,json:{error:{code:'synthetic'}}});
@@ -778,7 +783,7 @@ try {
   await openAssistantSettings();
   const modelPanel=assistantSettings.locator('#assistant-model-panel');
   await modelPanel.getByText('模型',{exact:true}).click();
-  assert.equal(await modelPanel.getByRole('button',{name:'Luna',exact:true}).getAttribute('aria-pressed'),'true');
+  assert.equal(await modelPanel.getByRole('button',{name:'自动',exact:true}).getAttribute('aria-pressed'),'true');
   assert.equal(await assistantSettings.getByRole('link',{name:/API 余额|用量明细/}).count(),0);
   await modelPanel.getByRole('button',{name:'Terra',exact:true}).click();
   expectedModel='gpt-6.1-terra';

@@ -1,3 +1,7 @@
+import {combineReceiptTurn,localAgentCommand,routeAgent,routedSkills,scopedHistory} from './routing.mjs';
+import {failureKind,taskJournal} from './task-log.mjs';
+import {mountTaskSettings} from './task-settings.mjs';
+import {readFinance} from '../finance-storage.mjs';
 import {medicalAuto,medicalIntent,renderMedicalReview,setMedicalAuto,useMedicalTurn} from './medical-chat.mjs';
 import {displayDay,localDate,localClock} from '../calendar.mjs';
 import {hydrateShell,shellIcon} from '../shell.mjs';
@@ -10,8 +14,8 @@ import {financeAutomation,financeReview,setFinanceAutomation} from './finance.mj
 import {executeAgentTask,orderAgentTasks,undoAgentTask} from './agent-executor.mjs';
 import {localWorkspace,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
 import {foodEditReview,inventoryReview,portionReview} from './operations.mjs';
-import {automaticMemoryEnabled,mountMemorySettings,setAutomaticMemory} from './memory.mjs';
-import {mountModelSettings,readChatModel} from './models.mjs';
+import {automaticMemoryEnabled,memoryKind,mountMemorySettings,setAutomaticMemory} from './memory.mjs';
+import {mountModelSettings} from './models.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 import {batchReview} from './batch.mjs';
@@ -19,7 +23,7 @@ import {contextFor,HISTORY_OPTIONS,readHistoryOption,saveHistoryOption} from './
 import {appDataReview,readAppData} from './data.mjs';
 import {hasDocumentAccess,prepareDocumentEdit,readAppDocument,setDocumentAccess} from './documents.mjs';
 import {deleteReview} from './deletion.mjs';
-import {displayUsage,totalUsage} from './usage.mjs';
+import {displayUsage,modelRates,totalUsage} from './usage.mjs';
 import {executeHealthAction,healthActionReceipt,healthActionPreview,healthContext,hasHealthAuto,readPackages,READ_LIMIT,
  setHealthAuto,undoHealthAction} from './health-actions.mjs';
 import {mountAgentSettings} from './agent-settings.mjs';
@@ -34,6 +38,15 @@ const demo=new URLSearchParams(location.search).get('demo')==='1';
 const workspace=demo?await demoWorkspace(localDate()):localWorkspace();
 const book=threadBook(demo?workspace.finance:localStorage);
 const respond=demo?workspace.respond:recognize;
+const journal=taskJournal(workspace.account);
+let pendingTrace=Promise.resolve();
+function trace(id,event){
+ if(!id||demo)return Promise.resolve();
+ pendingTrace=pendingTrace.then(()=>journal.write(id,event)).catch(()=>{});
+ return pendingTrace;
+}
+const traceStep=(id,step)=>trace(id,{type:'step',step});
+const traceStatus=(id,status,error)=>trace(id,{type:'status',status,failure:failureKind(error)});
 const $=selector=>document.querySelector(selector);
 const transcript=$('.chat-transcript'),thread=$('.chat-thread'),review=$('.chat-review'),start=$('.assistant-start');
 const photoResults=$('[data-photo-results]');
@@ -84,12 +97,13 @@ documentAccess.onchange=()=>{
  catch(err){documentAccess.checked=hasDocumentAccess(workspace.finance);report(err);}
 };
 const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
+const refreshTasks=mountTaskSettings($('[data-task-settings]'),journal,workspace.finance,demo);
 $('#assistant-settings').onclick=()=>{settings.showModal();
  automaticMemory.checked=automaticMemoryEnabled(workspace.finance);
  healthAuto.checked=hasHealthAuto(workspace.finance);
  medicalSave.checked=medicalAuto(workspace.finance);
  documentAccess.checked=hasDocumentAccess(workspace.finance);
- refreshFinanceAccess();refreshModels();refreshMemory();refreshAgent();void refreshUsage();};
+ refreshFinanceAccess();refreshModels();refreshMemory();refreshAgent();void refreshUsage();void refreshTasks();};
 async function refreshUsage(){
  if(demo)return;
  const node=$('[data-local-usage]');
@@ -158,7 +172,9 @@ async function requestReply(input,options,savePartial=()=>{}){
  const controller=new AbortController();
  activeRequest=controller;stop.hidden=false;stop.disabled=false;
  try{
-  const result=await respond(input,{...options,documentAccess:options.documentAccess&&hasDocumentAccess(workspace.finance),
+  const result=await respond(input,{...options,rates:modelRates(workspace.finance),
+   onMetric:request=>trace(options.traceId,{type:'request',request}),
+   documentAccess:options.documentAccess&&hasDocumentAccess(workspace.finance),
    autoMemory:options.autoMemory&&automaticMemoryEnabled(workspace.finance),signal:controller.signal,onReply,onTool});
   if(demo&&result.reply){
    let text='';
@@ -189,7 +205,7 @@ function updateContext(){
   (summary?' · 已压缩 '+summary.length+' 字':'');
  return {turns,summary,compact};
 }
-async function prepareContext(date,model){
+async function prepareContext(date,model,traceId){
  const current=updateContext();
  if(!current.compact||demo)return current;
  const id=book.current.id,controller=new AbortController();
@@ -197,7 +213,8 @@ async function prepareContext(date,model){
  tell('正在压缩较早的对话…');
  try{
   const {summary}=await recognize({mode:'chat',text:'整理这段对话',history:current.compact.history,date,photo:null},
-   {model,compacting:true,contextSummary:current.summary,signal:controller.signal});
+   {model,compacting:true,contextSummary:current.summary,signal:controller.signal,rates:modelRates(workspace.finance),
+    onMetric:request=>trace(traceId,{type:'request',request})});
   book.setSummary(id,summary,current.compact.through);
   return updateContext();
  }catch(err){
@@ -327,7 +344,7 @@ function append(role,text,carry=true,source){
 function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;delete review.dataset.syncPending;}
 function clearFollowUp(){followUp=null;retryFollowUp.hidden=true;}
 function sessionFlow({id,input,options}){
- return {id,input:{...input,history:[],photo:null},options:{...options,memory:undefined,contextSummary:undefined,healthContext:undefined,healthReference:undefined,photos:undefined,skills:undefined},steps:[]};
+ return {id,input:{...input,history:[],photo:null},options:{...options,memory:undefined,contextSummary:undefined,healthContext:undefined,healthReference:undefined,photos:undefined,skills:undefined,local:undefined},steps:[]};
 }
 function checkpoint(save){
  let text='',timer;
@@ -466,6 +483,10 @@ async function makeReview(proposal,flow,photoJob,direct=false){
   label.className='photo-review-title';label.textContent=photoJob.label;panel.append(label);
  }
  const {mode,result}=proposal,today=flow.input.date;
+ const traceId=flow.options.traceId;
+ const reviewId=photoJob?'photo-'+photoJob.index:'review';
+ const reviewStep=(status,receipt=null,error)=>traceStep(traceId,{id:reviewId,kind:mode,dependsOn:[],
+  evidence:[photoJob?.label??flow.input.text.slice(0,360)],status,receipt,failure:failureKind(error)});
  const editsConversation=mode==='document_edit'&&result.document==='conversations';
  const willContinue=mode==='batch'&&result.next==='continue';
  let confirm,label;
@@ -572,6 +593,8 @@ async function makeReview(proposal,flow,photoJob,direct=false){
     throw err;
    }
   }
+  void reviewStep('done',{summary:message});
+  if(!willContinue||!continueRequested)void traceStatus(traceId,'done');
   if(editsConversation){
    if(!direct||!book.current)tell(message);
   }
@@ -603,8 +626,10 @@ async function makeReview(proposal,flow,photoJob,direct=false){
  const actions=document.createElement('div');actions.className='chat-actions';
  const apply=document.createElement('button');apply.type='submit';apply.className='primary-button';apply.textContent=label;
  if(mode==='delete_record'||mode==='app_data_edit'&&result.action==='delete')apply.classList.add('delete-apply');
+ void reviewStep('review');void traceStatus(traceId,'review');
  const discard=document.createElement('button');discard.type='button';discard.className='secondary-button';discard.textContent='放弃';
  discard.onclick=()=>{
+  void reviewStep('cancelled');void traceStatus(traceId,'cancelled');
   if(photoJob)settlePhoto(photoJob,'已放弃候选。');
   else book.setReview(null);
   if(mode==='app_data_edit'&&result.dataset==='conversations')renderThread(photoBatch);
@@ -621,10 +646,14 @@ async function makeReview(proposal,flow,photoJob,direct=false){
  let continuationApproved=false;
  review.onsubmit=async e=>{
   e.preventDefault();if(saving||busy)return;
-  if(review.dataset.syncPending!=='yes')continuationApproved=willContinue&&e.submitter===apply;
+  if(review.dataset.syncPending!=='yes'){
+   continuationApproved=willContinue&&e.submitter===apply;
+   void trace(traceId,{type:'confirm'});
+  }
   saving=true;lock();out.textContent='';
   try{await save(continuationApproved);}
   catch(err){
+   void reviewStep('pending',null,err);void traceStatus(traceId,'pending',err);
    out.textContent=err.message;
    if(err instanceof AssistantSyncPending){
     review.dataset.syncPending='yes';apply.textContent='继续同步';discard.hidden=true;
@@ -657,7 +686,7 @@ function healthOptions(flow,ticket,confirmed=false){
  const options=flow.options,auto=!!options.healthAuto&&hasHealthAuto(workspace.finance);
  return {id:ticket.operationId??ticket.id,text:flow.input.text,today:flow.input.date,
   clock:options.healthClock??localClock(),mediaKey:options.mediaKey,skills:skillCatalog(workspace.finance),
-  habits:habitPolicy(workspace.memory.list()),photoSteps:flow.photoSteps,reference:options.healthReference??book.current?.healthReference,
+  habits:habitPolicy(workspace.memory.list().filter(row=>memoryKind(row)==='habit')),photoSteps:flow.photoSteps,reference:options.healthReference??book.current?.healthReference,
   foodDate:book.current?.foodDate,auto,confirmed,
   guard:()=>{
    if(!flow.options.allowRead||!composer.elements.allowRead.checked)throw Error('本轮本机数据权限已关闭，账本未更改。');
@@ -689,35 +718,51 @@ async function saveHealthProposal(plan,flow,ticket,source,confirmed=false){
   activeRequest=null;stop.hidden=true;
  }
 }
+function healthTrace(plan,flow,status,result,error){
+ const traceId=flow.options.traceId;
+ for(const [index,step] of (plan?.steps??[]).entries()){
+  void traceStep(traceId,{id:'health-'+index,kind:step.kind,dependsOn:index?['health-'+(index-1)]:[],
+   evidence:[step.evidence],status,receipt:result?.record?{operationId:result.record.id,revision:result.record.revision}:null,
+   failure:failureKind(error)});
+ }
+ void traceStatus(traceId,status,error);
+}
 async function completeHealth(plan,flow,source,ticket){
  const options=healthOptions(flow,ticket);
  const base=flow.healthBase??await workspace.readHealth();
  const previously=healthActionReceipt(base,options);
- if(previously){echoHealth(ticket,previously,source);tell('');return;}
+ if(previously){healthTrace(plan,flow,'done',previously);echoHealth(ticket,previously,source);tell('');return;}
  let prepared;
  try{prepared=healthActionPreview(base,plan,options);}
- catch(err){echoHealth(ticket,{text:err.message},source);tell('');return;}
+ catch(err){healthTrace(plan,flow,'blocked',null,err);echoHealth(ticket,{text:err.message},source);tell('');return;}
  if(!prepared.execute){
+  healthTrace(plan,flow,'done');
   echoHealth(ticket,{text:[prepared.preview,...(flow.photoNotes??[])].filter(Boolean).join('\n'),source:prepared.source},source);tell('');return;}
  const savedPlan=flow.photoSteps?{plan,photoSteps:flow.photoSteps,photoReview:flow.photoReview,photoNotes:flow.photoNotes}:plan;
  if(!book.stageHealth(ticket,savedPlan))return;
  if(!options.auto||flow.photoReview){
   if(flow.options.healthAuto&&!flow.photoReview){tell('健康自动执行权限已关闭，账本未更改。');showPending();return;}
+  healthTrace(plan,flow,'review');
   const body=document.createElement('p');body.textContent=['待保存 · '+prepared.preview,...(flow.photoNotes??[])].join('\n');
   const apply=document.createElement('button');apply.type='submit';apply.textContent='确认健康记录';apply.className='primary-button';
   const cancel=document.createElement('button');cancel.type='button';cancel.className='text-button';cancel.textContent='取消';
-  cancel.onclick=()=>{echoHealth(ticket,{text:'已取消健康记录。'},source);clearReview();};
+  cancel.onclick=()=>{healthTrace(plan,flow,'cancelled');echoHealth(ticket,{text:'已取消健康记录。'},source);clearReview();};
   review.append(body,apply,cancel);review.hidden=false;
   review.onsubmit=async event=>{
    event.preventDefault();if(busy||saving)return;
-   saving=true;lock();
-   try{const result=await saveHealthProposal(plan,flow,ticket,source,true);echoHealth(ticket,result,source);clearReview();tell('');}
-   catch(err){report(err);retryRequest.hidden=false;}
+   saving=true;lock();void trace(flow.options.traceId,{type:'confirm'});
+   healthTrace(plan,flow,'running');
+   try{const result=await saveHealthProposal(plan,flow,ticket,source,true);healthTrace(plan,flow,'done',result);echoHealth(ticket,result,source);clearReview();tell('');}
+   catch(err){healthTrace(plan,flow,'pending',null,err);report(err);retryRequest.hidden=false;}
    finally{saving=false;lock();}
   };
   return;
  }
- const result=await saveHealthProposal(plan,flow,ticket,source);
+ healthTrace(plan,flow,'running');
+ let result;
+ try{result=await saveHealthProposal(plan,flow,ticket,source);}
+ catch(error){healthTrace(plan,flow,'pending',null,error);throw error;}
+ healthTrace(plan,flow,'done',result);
  if(flow.photoNotes?.length)result.text+='\n'+flow.photoNotes.join('\n');
  echoHealth(ticket,result,source);tell('');
 }
@@ -731,7 +776,7 @@ function echoAgent(ticket,result){
 async function completeAgent(plan,flow,ticket,staged={},approved=staged.approved??[]){
  if(!flow.options.allowRead)throw Error('请先允许本轮访问本机数据。');
  try{orderAgentTasks(plan);}
- catch(err){echoAgent(ticket,{text:err.message,detail:err.message,undo:[]});return;}
+ catch(err){void traceStatus(flow.options.traceId,'failed',err);echoAgent(ticket,{text:err.message,detail:err.message,undo:[]});return;}
  const state={agentTask:plan,prior:staged.prior,approved,attachmentKeys:staged.attachmentKeys??flow.options.attachmentKeys,
   mediaKey:staged.mediaKey??flow.options.mediaKey};
  if(!book.stageHealth(ticket,state))return;
@@ -744,10 +789,14 @@ async function completeAgent(plan,flow,ticket,staged={},approved=staged.approved
    attachmentKeys:state.attachmentKeys,approved,prior:state.prior,healthOptions:healthOptions(flow,ticket),signal:controller.signal,
    guard:()=>{if(!composer.elements.allowRead.checked)throw Error('本轮本机数据权限已关闭。');},
    onStep:label=>tell('正在处理'+label+'并核对本机回执…'),
+   onStepEvent:step=>void traceStep(flow.options.traceId,step),
    progress:prior=>{book.stageHealth(ticket,{...state,prior});}});
  }finally{activeRequest=null;stop.hidden=true;}
  const ready=result.rows.filter(row=>row.state==='review');
  const pending=result.rows.some(row=>row.state==='pending');
+ const blocked=result.rows.find(row=>['blocked','waiting'].includes(row.state));
+ const outcome=blocked?(result.rows.some(row=>row.state==='done')?'partial':'blocked'):'done';
+ void traceStatus(flow.options.traceId,pending?'pending':ready.length?'review':outcome,blocked?.reason);
  if(!ready.length&&!pending){echoAgent(ticket,result);return;}
  const body=document.createElement('p');body.textContent=result.text;
  const detail=document.createElement('details'),title=document.createElement('summary'),description=document.createElement('p');
@@ -758,7 +807,7 @@ async function completeAgent(plan,flow,ticket,staged={},approved=staged.approved
   review.append(apply);
   review.onsubmit=async event=>{
    event.preventDefault();if(busy||saving)return;
-   saving=true;lock();
+   saving=true;lock();void trace(flow.options.traceId,{type:'confirm'});
    const ids=[...new Set([...approved,...ready.map(row=>row.id)])];
    try{await completeAgent(plan,flow,ticket,{...state,prior:result.results},ids);}
    catch(err){report(err);retryRequest.hidden=false;}
@@ -767,7 +816,7 @@ async function completeAgent(plan,flow,ticket,staged={},approved=staged.approved
  }
  const finish=document.createElement('button');
  finish.type='button';finish.className='text-button';finish.textContent='结束本轮';
- finish.onclick=()=>{if(!busy&&!saving)echoAgent(ticket,result);};
+ finish.onclick=()=>{if(!busy&&!saving){void traceStatus(flow.options.traceId,'partial');echoAgent(ticket,result);}};
  if(!pending)review.append(finish);
  retryRequest.hidden=!pending;retryRequest.textContent='重试未完成步骤';tell(pending?'尚有步骤未完成，可重试。':'');
 }
@@ -798,6 +847,7 @@ async function complete(response,flow,source,ticket){
   return;
  }
  const candidate=response.proposal?{proposal:response.proposal,flow:sessionFlow(flow)}:null;
+ if(!candidate)void traceStatus(flow.options.traceId,'done');
  if(ticket){
   if(!book.finish(ticket,response.reply,source,candidate))return;
   bubble('assistant',response.reply,source);syncThreads();updateContext();
@@ -914,6 +964,8 @@ async function resolveResponse(response,flow,savePartial){
    else if(args.scope==='health_status')summary=readHealthFileStatus(workspace.finance,flow.healthBase??await workspace.readHealth());
    else summary=await readLedger(workspace,args,input.date);
    steps.push({item,summary,scope:args.scope});
+   void traceStep(options.traceId,{id:'read-'+steps.length,kind:args.scope,dependsOn:[],status:'done',
+    evidence:[args.date??args.start??args.query??''].filter(Boolean)});
    response=await requestReply(input,{...options,continuation:steps},savePartial);
    if(args.scope==='foods')try{book.setFoodDate(summary.date);}catch{}
  }
@@ -1118,11 +1170,11 @@ async function sendMessage(input,options,files){
  if(!files.length&&resumesAttachment)options.mediaKey=previous.mediaKey;
  const reuse=previous?.text===input.text&&previous.hasPhoto===hasPhoto&&(previous.mediaKey??null)===(options.mediaKey??null);
  const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto,
-  healthClock:options.healthClock,mediaKey:options.mediaKey},reuse);
+  healthClock:options.healthClock,mediaKey:options.mediaKey,traceId:options.traceId},reuse);
  const saved=checkpoint(text=>book.checkpoint(ticket,text));
  clearReview();restoreReview.hidden=true;retryRequest.hidden=true;photoResults.replaceChildren();
  renderTranscript();syncThreads();
- tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
+ tell(options.local?'正在本机处理…':demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
  try{
   const flow={input,options,steps:[]};
   const staged=book.current?.pending?.healthAction;
@@ -1135,6 +1187,7 @@ async function sendMessage(input,options,files){
   }
   const existing=flow.healthBase&&healthActionReceipt(flow.healthBase,healthOptions(flow,ticket));
   if(existing){
+   healthTrace(options.local?.proposal?.result??staged?.plan??staged,flow,'done',existing);
    echoHealth(ticket,existing);tell('');
   }else if(staged?.agentTask){
    await completeAgent(staged.agentTask,flow,ticket,staged);
@@ -1142,6 +1195,25 @@ async function sendMessage(input,options,files){
    if(!options.healthActions)throw Error('本轮未允许本机健康数据操作。');
    if(staged.plan){flow.photoSteps=staged.photoSteps;flow.photoReview=staged.photoReview;flow.photoNotes=staged.photoNotes;}
    await completeHealth(staged.plan??staged,flow,null,ticket);
+  }else if(options.local?.query){
+   const args=options.local.query,summary=await readLedger(workspace,args,input.date);
+   if(args.scope==='foods')book.setFoodDate(args.date);
+   const source=querySource([{scope:args.scope,summary}]);
+   const reply=args.scope==='balance'?'当前总余额 '+summary.balance.toFixed(2)+' 元。':
+    args.scope==='foods'?'本机 '+summary.date+' 的实际饮食共 '+summary.foods.length+' 条。':describeSummary(args.scope,summary);
+   if(book.finish(ticket,reply,source,null)){bubble('assistant',reply,source,null,true);syncThreads();updateContext();}
+   void traceStep(options.traceId,{id:'read-1',kind:args.scope,dependsOn:[],status:'done',evidence:[input.text]});
+   void traceStatus(options.traceId,'done');tell('');
+  }else if(options.local?.proposal){
+   await complete({proposal:options.local.proposal},flow,null,ticket);
+  }else if(options.decomposed){
+   const request={...input,text:options.decomposed.wireText};
+   let response;
+   try{response=await requestReply(request,options,saved.update);}
+   catch(error){if(failureKind(error)==='cancelled')throw error;}
+   const combined=combineReceiptTurn(options.decomposed,response?.proposal);
+   if(!combined)throw Error('这组订单有较多步骤，请按订单分别处理。');
+   await complete({proposal:combined},flow,null,ticket);
   }else{
    const response=await requestReply(input,options,saved.update);
    await showResponse(response,flow,ticket,saved.update);
@@ -1175,13 +1247,13 @@ restoreReview.onclick=async()=>{
  catch(err){clearReview();report(err);}
  finally{busy=false;lock();}
 };
-function memoriesFor(input,allowRead){
+function memoriesFor(input,allowRead,profile='general'){
  if(!allowRead)return [];
  const previous=input.history.filter(message=>message.role==='user').at(-1)?.text;
  const cue=/^(?:把)?(?:这条|那条|刚才|上面|继续|然后)/.test(input.text)?previous:'';
- return workspace.memory.relevant([input.text,cue].filter(Boolean).join(' '));
+ return workspace.memory.relevant([input.text,cue].filter(Boolean).join(' '),{budget:profile==='general'?1100:600,limit:profile==='general'?6:3});
 }
-async function runMedicalTurn(kind,text,files){
+async function runMedicalTurn(kind,text,files,route,traceId){
  clearReview();clearFollowUp();
  const allowed=()=>composer.elements.allowRead.checked;
  function echo(role,message,detail){
@@ -1189,7 +1261,13 @@ async function runMedicalTurn(kind,text,files){
   book.append(role,message,false,source,{privateMedical:true});
   bubble(role,message,source,null,true);start.hidden=true;syncThreads();updateContext();
  }
- const finish=(message,detail)=>{echo('assistant',message,detail);clearReview();tell('');};
+ const finish=(message,detail)=>{
+  const status=/已取消/.test(message)?'cancelled':/未能|无法/.test(message)?'blocked':'done';
+  const receipt=/已在本机保存|已保存症状|未重复录入/.test(message)?{summary:message}:null;
+  void traceStep(traceId,{id:'medical',kind,dependsOn:[],status,receipt});
+  void traceStatus(traceId,status);
+  echo('assistant',message,detail);clearReview();tell('');
+ };
  echo('user',text||'识别本轮选中的体检报告');
  await useMedicalTurn(workspace,{
   kind,text,files,allowed,show:finish,
@@ -1197,15 +1275,16 @@ async function runMedicalTurn(kind,text,files){
    if(!await readDeviceKey()){revealKeySettings();throw Error('请先导入 API Key。');}
    tell('正在处理本轮所选健康档案…');
    return requestReply({mode:'chat',text:question,photo:null,date:localDate(),history:[]},
-    {medical,model:readChatModel(workspace.finance).id,allowRead:false,agentQuiet:true});
+    {medical,model:route.model,traceId,allowRead:false,agentQuiet:true});
   },
   review:draft=>{
-   tell('');
+   void traceStep(traceId,{id:'medical',kind,dependsOn:[],status:'review'});
+   void traceStatus(traceId,'review');tell('');
    renderMedicalReview(review,{...draft,save:async date=>{
-    saving=true;lock();
+    saving=true;lock();void trace(traceId,{type:'confirm'});
     try{return await draft.save(date);}
     finally{saving=false;lock();}
-   }},finish,report,()=>busy||saving);
+   }},finish,error=>{void traceStatus(traceId,'pending',error);report(error);},()=>busy||saving);
   }
  });
  clearComposer();
@@ -1220,32 +1299,55 @@ composer.onsubmit=async e=>{
  const resumeSaved=!!savedRequest?.healthAction&&savedRequest.request?.text===text;
  if(!text&&!files.length&&!medicalFiles.length&&!resumeSaved){tell('请输入消息或添加照片');return;}
  busy=true;lock();tell('');
+ const pending=savedRequest?.request;
+ const retry=pending?.text===text&&pending.hasPhoto===Boolean(files.length||resumeSaved&&pending.hasPhoto);
+ const traceId=retry?pending.traceId??savedRequest.operationId:crypto.randomUUID();
  try{
-  if(kind){await runMedicalTurn(kind,text,medicalFiles.length?medicalFiles:files);return;}
-  if(!demo&&!resumeSaved){
-   tell('正在读取本机 API Key…');
-   if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
+  const allowRead=composer.elements.allowRead.checked,date=(retry?pending.date:null)??localDate();
+  const route=routeAgent(workspace.finance,{text,photos:files.length+medicalFiles.length,medical:kind,allowRead,legacy:demo,today:date});
+  let local=!demo&&!kind&&!resumeSaved?localAgentCommand(workspace,{text,today:date,allowRead,files:files.length}):null;
+  if(local?.needsStock){
+   const scoped=healthContext(await workspace.readHealth(),{text,date},book.current?.healthReference);
+   if(scoped.stock?.length!==1||!(scoped.stock[0].quantity>0))local=null;
   }
-  const pending=book.current?.pending?.request;
-  const retry=pending?.text===text;
-  const photo=files.length===1?await jpeg(files[0]):null,date=(retry?pending.date:null)??localDate();
-  const model=readChatModel(workspace.finance).id;
-  const {turns,summary}=resumeSaved?{turns:[],summary:null}:await prepareContext(date,model);
+  await trace(traceId,{type:'start',route:local?'local':resumeSaved?'resume':route.profile});
+  if(kind){
+   void traceStep(traceId,{id:'medical',kind,dependsOn:[],status:'running',evidence:medicalFiles.length||files.length?
+    ['本轮所选附件 '+(medicalFiles.length||files.length)+' 份']:['本轮指定档案']});
+   await runMedicalTurn(kind,text,medicalFiles.length?medicalFiles:files,route,traceId);
+   return;
+  }
+  if(!demo&&!resumeSaved&&!local){
+   tell('正在读取本机 API Key…');
+   if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');void traceStatus(traceId,'blocked','缺少 API Key');return;}
+  }
+  const photo=files.length===1?await jpeg(files[0]):null;
+  const model=route.model;
+  const context=resumeSaved||local?{turns:[],summary:null}:route.profile==='general'?
+   await prepareContext(date,model,traceId):scopedHistory(route.profile,text,updateContext());
+  const {turns,summary}=context;
   const history=retry&&turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
+  const catalog=allowRead?skillCatalog(workspace.finance):[];
   const groupedPhotos=!demo&&files.length>1&&(!/分别|逐张|每张|独立识别/.test(text)||/采购|订单|支付|付款|退款/.test(text))&&
-   skillCatalog(workspace.finance).some(skill=>['photos','receipts'].includes(skill.id)&&skill.enabled)&&composer.elements.allowRead.checked;
+   catalog.some(skill=>['photos','receipts'].includes(skill.id)&&skill.enabled);
   const input={mode:'chat',text,photo,date,history};
-  const allowRead=composer.elements.allowRead.checked;
-  const agentTasks=!demo&&allowRead&&(files.length>0||/账|帐|财务|买|花了|收了|支出|收入|采购|退款|报销|付款|支付/.test(text));
-  const options={model,contextSummary:summary,allowRead,memory:memoriesFor(input,allowRead),
+  const agentTasks=!demo&&allowRead&&(local?.proposal?.mode==='agent_task'||files.length>0||
+   /账|帐|财务|买|花了|收了|支出|收入|采购|退款|报销|付款|支付/.test(text));
+  const financeContext=allowRead&&['finance','receipt','mixed'].includes(route.profile)?
+   (readFinance(workspace.finance).payload?.categories??[]).filter(row=>!row.hidden&&
+    (route.profile!=='receipt'||!row.id.startsWith('default-')))
+    .map(({id,name,type})=>({id,name,type})):undefined;
+  const options={model,profile:route.profile,traceId,local,decomposed:route.decomposed,financeContext,contextSummary:summary,allowRead,
+   memory:route.profile==='receipt'?[]:memoriesFor(input,allowRead,route.profile),
    documentAccess:hasDocumentAccess(workspace.finance),autoMemory:automaticMemoryEnabled(workspace.finance),
-   skills:allowRead?selectSkills(skillCatalog(workspace.finance),{text,photos:files.length>0,
-    previousText:history.filter(row=>row.role==='user').at(-1)?.text}):[],groupedPhotos,
+   skills:routedSkills(selectSkills(catalog,{text,photos:files.length>0,
+    previousText:history.filter(row=>row.role==='user').at(-1)?.text}),route.profile),groupedPhotos,
    agentTasks,receiptInput:agentTasks&&files.length>0,agentQuiet:agentTasks,
-   healthActions:!demo&&allowRead&&(!files.length||groupedPhotos||agentTasks)&&!!input.text,healthAuto:allowRead&&hasHealthAuto(workspace.finance),
+   healthActions:!demo&&allowRead&&!['receipt','finance'].includes(route.profile)&&(!files.length||groupedPhotos||agentTasks)&&!!input.text,
+   healthAuto:allowRead&&hasHealthAuto(workspace.finance),
    healthClock:(retry?pending.healthClock:null)??localClock(),healthReference:book.current?.healthReference};
   if(files.length<2&&!resumeSaved&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
- }catch(err){report(err);}
+ }catch(err){void traceStatus(traceId,book.current?.pending?.healthAction?'pending':'failed',err);report(err);}
  finally{busy=false;lock();}
 };

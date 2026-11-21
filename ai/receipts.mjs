@@ -86,7 +86,7 @@ function verifyReceiptRecord(workspace,state,id){
  const record=rowsFor(state,id);
  if(!record)return null;
  const ledger=readFinance(workspace.finance).payload;
- if(record.cancelled)return {state:'done',text:'这张订单已经撤销，未重新写入。'};
+ if(record.cancelled)return {state:'skipped',text:'这张订单已经撤销，未重新写入。',receipt:{orderId:id,cancelled:true}};
  const txs=record.financeIds.map(id=>ledger?.transactions.find(row=>row.id===id));
  const total=txs.reduce((sum,row)=>sum+(row?cents(row.amount):0),0);
  if(txs.some(row=>!row||row.receiptKey!==record.id||row.type!==(record.refundOf?'income':'expense')||row.date!==record.date)||total!==record.total)
@@ -102,7 +102,7 @@ function verifyReceiptRecord(workspace,state,id){
    return '入库 '+(sku?.name??row.foodId)+' '+row.quantity+' '+(sku?.unit??'')+
     (row.costCents===null?' · 成本未知':' · 成本 '+money(row.costCents));
   }):[]),...(record.discount!=null?['优惠 '+money(record.discount)]:[]),...(record.shipping!=null?['运费 '+money(record.shipping)]:[]),
-  ...(record.refundOf?['退款保留原采购，实物退回需另行核对。']:[])].join('\n'),undo:{kind:'receipt',id}};
+  ...(record.refundOf?['退款保留原采购，实物退回需另行核对。']:[])].join('\n'),receipt:{orderId:id,transactionIds:record.financeIds,purchaseId:record.purchaseId},undo:{kind:'receipt',id}};
 }
 
 export async function executeReceipt(workspace,receipt,options){

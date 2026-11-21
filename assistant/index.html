@@ -114,7 +114,8 @@
             <form class="assistant-fields" hidden>
               <label>名称<input name="name"></label>
               <label>记忆内容<textarea name="text" rows="3" required></textarea></label>
-              <label>优先级<input name="priority" type="number" min="0" max="100" step="1" value="50"></label>
+              <label>类型<select name="kind"><option value="habit">稳定习惯</option><option value="fact">一次性事实</option><option value="plan">临时计划</option></select></label>
+                <label>优先级<input name="priority" type="number" min="0" max="100" step="1" value="50"></label>
               <label class="document-access"><input type="checkbox" name="enabled" checked>启用这条记忆</label>
               <div class="chat-actions">
                 <button type="button" class="text-button" data-cancel-memory>收起</button>
@@ -147,6 +148,23 @@
             </div>
             <output data-agent-status role="status"></output>
             <div data-skill-list></div>
+          </div>
+        </details>
+        <details class="card assistant-panel" data-task-settings>
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="chart"></span><span class="setting-copy setting-title">任务用量与费率</span><span class="chevron" data-shell-icon="chevron"></span></summary>
+          <div class="assistant-panel-body">
+            <p data-task-summary class="form-hint"></p>
+            <button type="button" class="text-button" data-export-tasks>导出本机任务日志</button>
+            <form class="assistant-fields">
+              <label>模型费率（美元／百万 Token）<select name="model"></select></label>
+              <div class="form-grid">
+                <label>输入<input type="number" name="input" min="0" step="any" required></label>
+                <label>缓存读取<input type="number" name="cached" min="0" step="any" required></label>
+                <label>输出<input type="number" name="outputRate" min="0" step="any" required></label>
+              </div>
+              <button type="submit" class="secondary-button">保存本机费率</button>
+              <output role="status"></output>
+            </form>
           </div>
         </details>
         <details class="card assistant-panel assistant-context">

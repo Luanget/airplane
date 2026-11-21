@@ -1,3 +1,5 @@
+import {requestMetric} from './task-log.mjs';
+import {modelRates} from './usage.mjs';
 import {OPENAI_URL,modelRequest,parseResult,pendingLedgerRead} from './responses.mjs';
 import {readResponseStream,ResponseStreamError} from './stream.mjs';
 import {readKey,importKey,forgetKey} from './keys.mjs';
@@ -73,11 +75,24 @@ function apiError(response,body,model){
  return Error(reason+'（HTTP '+response.status+(/^[A-Za-z0-9_-]{1,100}$/.test(id)?'，请求 ID '+id:'')+'）。');
 }
 
-export async function recognize(input,{signal,onReply,onTool,...options}={}) {
+export async function recognize(input,{onMetric,rates,...options}={}){
+ const metric={rates,started:performance.now()};
+ try{return await send(input,options,metric);}
+ catch(error){metric.error=error;throw error;}
+ finally{
+  if(metric.model&&onMetric){
+   try{await onMetric(requestMetric({...metric,servedModel:metric.body?.model,elapsedMs:performance.now()-metric.started}));}catch{}
+  }
+ }
+}
+
+async function send(input,{signal,onReply,onTool,...options},metric){
  if(!navigator.onLine)throw Error('目前离线，手动录入仍可用');
  const key=await readDeviceKey();
  if(!key)throw Error('请在设置的「API Key」中导入自己的密钥');
  const request={...modelRequest(input,options),stream:true};
+ const serialized=JSON.stringify(request);
+ metric.bytes=new TextEncoder().encode(serialized).length;
  const controller=new AbortController(),cancel=()=>controller.abort();
  if(signal?.aborted)cancel();
  signal?.addEventListener('abort',cancel,{once:true});
@@ -89,9 +104,10 @@ export async function recognize(input,{signal,onReply,onTool,...options}={}) {
  waitForData();
  let response,body;
  try{
+  metric.model=request.model;
   response=await fetch(OPENAI_URL,{method:'POST',cache:'no-store',credentials:'omit',
    referrerPolicy:'no-referrer',redirect:'error',signal:controller.signal,
-   headers:{Authorization:'Bearer '+key,'Content-Type':'application/json',Accept:'text/event-stream'},body:JSON.stringify(request)});
+   headers:{Authorization:'Bearer '+key,'Content-Type':'application/json',Accept:'text/event-stream'},body:serialized});
   if(response.ok&&response.headers.get('content-type')?.includes('text/event-stream')){
    body=await readResponseStream(response,{onReply,onTool,onActivity:()=>{
     receivedEvent=true;waitForData();
@@ -112,8 +128,9 @@ export async function recognize(input,{signal,onReply,onTool,...options}={}) {
  }finally{
   clearTimeout(timeout);signal?.removeEventListener('abort',cancel);
  }
+ metric.body=body;metric.httpStatus=response.status;
  if(!response.ok)throw apiError(response,body,request.model);
- void recordUsage(body,request.model).then(saved=>{
+ void recordUsage(body,request.model,metric.rates??modelRates(globalThis.localStorage)).then(saved=>{
   if(saved)window.dispatchEvent(new Event('airplane-ai-usage'));
  }).catch(()=>{});
  if(body?.status==='incomplete')throw Error('OpenAI 返回了未完成的响应。可以重试，原账本数据仍保留。');

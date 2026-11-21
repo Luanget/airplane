@@ -1,17 +1,38 @@
 // OpenAI Standard prices per million tokens. Costs are accumulated in picodollars.
-const prices={
+const initialRates={
  'gpt-6-luna':[0.1,0.01,0.5],
  'gpt-6.1-terra':[1,0.05,5],
  'gpt-6.2-sol':[2,0.1,10]
 };
+export const MODEL_PRICES_KEY='airplane-ai-prices-v1';
 const nonNegativeInteger=n=>Number.isSafeInteger(n)&&n>=0;
-export function estimatedCost(model,usage){
- if(!usage||!Object.hasOwn(prices,model))return null;
+const rate=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=100000;
+const validRates=values=>Array.isArray(values)&&values.length===3&&values.every(rate);
+export function modelRates(store){
+ let custom;
+ try{custom=JSON.parse(store?.getItem(MODEL_PRICES_KEY));}catch{}
+ return Object.fromEntries(Object.entries(initialRates).map(([model,rates])=>[model,
+  validRates(custom?.[model])?[...custom[model]]:[...rates]]));
+}
+export function saveModelRates(store,model,values){
+ if(!Object.hasOwn(initialRates,model)||!validRates(values))throw Error('请填写有效的美元费率。');
+ const current=modelRates(store);current[model]=[...values];
+ store.setItem(MODEL_PRICES_KEY,JSON.stringify(current));
+}
+export function usageTokens(usage){
+ if(!usage)return null;
  const {input_tokens:input,output_tokens:output,input_tokens_details:details}=usage;
- const cached=details?.cached_tokens??0,written=details?.cache_write_tokens??0;
+ const cached=details?.cached_tokens??null,written=details?.cache_write_tokens??0;
  const longWrite=details?.cache_write_tokens_details?.ttl_12h_tokens??0;
- if(![input,output,cached,written,longWrite].every(nonNegativeInteger)||cached+written>input||longWrite>written)return null;
- const [inputPrice,cachePrice,outputPrice]=prices[model];
+ if(![input,output,cached??0,written,longWrite].every(nonNegativeInteger)||(cached??0)+written>input||longWrite>written)return null;
+ return {input,output,cached,written,longWrite};
+}
+export function estimatedCost(model,usage,rates=initialRates){
+ const tokens=usageTokens(usage);
+ const price=rates[model];
+ if(!tokens||!validRates(price))return null;
+ const {input,output,written,longWrite}=tokens,cached=tokens.cached??0;
+ const [inputPrice,cachePrice,outputPrice]=price;
  const longInput=input>272000;
  const dollarsPerMillion=(longInput?2:1)*(
   (input-cached-written)*inputPrice+cached*cachePrice+(written-longWrite)*inputPrice*1.25+longWrite*inputPrice*2.5
@@ -40,8 +61,8 @@ async function usageTransaction(mode,operation){
  }finally{db.close();}
 }
 
-export async function recordUsage(response,model){
- const id=response?.id,cost=estimatedCost(model,response?.usage);
+export async function recordUsage(response,model,rates){
+ const id=response?.id,cost=estimatedCost(response?.model??model,response?.usage,rates)??estimatedCost(model,response?.usage,rates);
  if(typeof id!=='string'||!/^resp_[A-Za-z0-9_-]{1,128}$/.test(id)||cost===null)return false;
  await usageTransaction('readwrite',(store,total)=>{
   const seen=store.get(id);

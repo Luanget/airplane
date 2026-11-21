@@ -128,7 +128,7 @@ test('expense habit analysis returns only approved date buckets and spending sum
  const workspace={finance:{getItem:key=>key===STORAGE_KEY?JSON.stringify(data):null}};
  const call={type:'function_call',name:'read_expense_summary',call_id:'fixture-summary',
   arguments:'{"start":"2030-01-01","end":"2030-01-03","groupBy":"category"}'};
- const {args}=pendingLedgerRead({status:'completed',output:[call]});
+ const {args}=pendingLedgerRead({status:'completed',output:[call]},{allowRead:true});
  assert.deepEqual(await readLedger(workspace,args,'2030-01-04'),{
   start:date,end:'2030-01-03',groupBy:'category',expense:36.90,count:3,
   rows:[{label:'餐饮',expense:18.75,count:1},{label:'日用',expense:18.15,count:2}]
@@ -152,7 +152,7 @@ test('one-day food lookup sends every matching record and its full selected fiel
  assert.ok(!JSON.stringify(summary).includes('计划餐'));
  assert.equal(summarizeFoodHistory(state,date,'牛奶 11').foods.length,1);
  const call={type:'function_call',name:'read_food_history',call_id:'fixture',arguments:JSON.stringify({date,query:'牛奶'})};
- const parsed=pendingLedgerRead({status:'completed',output:[call]});
+ const parsed=pendingLedgerRead({status:'completed',output:[call]},{allowRead:true});
  assert.deepEqual(parsed.args,{scope:'foods',date,query:'牛奶'});
  const input={mode:'chat',text:'查饮食',date,photo:null,history:[]};
  const request=modelRequest(input,{allowRead:true,continuation:[{item:parsed.item,summary}]});

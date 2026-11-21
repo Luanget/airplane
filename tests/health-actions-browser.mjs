@@ -52,21 +52,26 @@ try{
   assert.equal(route.request().headers().authorization,'Bearer '+root);
   const body=route.request().postDataJSON(),input=JSON.parse(body.input[0].content[0].text);
   calls.push({body,input});
-  const full=body.tools.some(tool=>tool.name==='read_app_document');
+  const full=(body.tools??[]).some(tool=>tool.name==='read_app_document');
   assert.equal(body.store,false);
   let result;
   if(input.text===photoText){
    assert.equal(body.input[0].content.filter(row=>row.type==='input_image').length,3);
    assert.match(body.instructions,/同一菜不同角度/);
-   assert.match(body.instructions,/photos v1/);
+   assert.match(input.activeSkills??body.instructions,/photos v1/);
    result={mode:'photo_meal',date:null,result:photoPlan};
-  }else if(['',conversation,'补充购买付款截图','测试购物车','登记退款','确认顺序'].includes(input.text)){
+  }else if(['','识别购物截图，食品入库',conversation,'补充购买付款截图','测试购物车','登记退款','确认顺序'].includes(input.text)){
    const order=orderReceipt(input.date);
    const images=body.input[0].content.filter(row=>row.type==='input_image');
    assert.ok(images.length>=1);
    assert.match(body.instructions,/独立流水号/);
    let plan;
-   if(input.text===conversation){
+   if(input.text==='识别购物截图，食品入库'){
+    assert.equal(images.length,2);
+    assert.equal(body.tools,undefined);
+    assert.equal(body.model,'gpt-6.1-terra');
+    plan={steps:[receiptStep({...order,images:[1,2],orderNo:'SYNTH-BROWSER-MIX'})]};
+   }else if(input.text===conversation){
     assert.equal(images.length,2);
     plan=combinedTask({...order,images:[1,2],orderNo:'SYNTH-BROWSER-MIX'});
    }else{
@@ -89,7 +94,9 @@ try{
   }
   const value={reply:result?.mode==='agent_task'?'模型声称已全部保存。':'正在处理。',proposal:result,...(full?{saveMode:'save'}:{}),
    ...(body.text.format.schema.required.includes('memoryUpdates')?{memoryUpdates:[]}:{})};
-  await route.fulfill({headers,json:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]}});
+  const usage=input.text===''?{id:'resp_health_task_'+calls.length,
+   usage:{input_tokens:2000,output_tokens:200,input_tokens_details:{cached_tokens:1500}}}:{};
+  await route.fulfill({headers,json:{status:'completed',...usage,output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]}});
  });
  await page.goto(origin+'/assistant/');
  await page.waitForFunction(()=>typeof document.getElementById('assistant-settings')?.onclick==='function');
@@ -126,17 +133,17 @@ try{
   assert.equal(calls.length-start,requestCount);
   assert.equal(await review.isVisible(),false);
  }
- await sent('牛肉酱现在310g',/已保存。.*12.2 g/);
+ await sent('牛肉酱现在310g',/已保存。.*12.2 g/,0);
  assert.equal((await read()).sauce[0].gross,310);
- assert.deepEqual(calls.at(-1).input.healthContext.stock.map(row=>row.sku),['fixture-sauce']);
- assert.equal(calls.at(-1).body.tools.some(tool=>tool.name==='read_app_document'),false);
  console.log('PASS A package weighing automatically saves one verified difference');
- await sent('吃了20g牛肉酱',/已保存。.*20 g/);
+ await sent('吃了20g牛肉酱',/已保存。.*20 g/,0);
  let current=await read();
  assert.equal(current.sauce[0].gross,310);assert.equal(current.sauce[0].unweighedGrams,20);
  assert.equal(current.state.local.foods.at(-1).weighing,undefined);
  console.log('PASS B actual grams leave the measured gross authentic');
  await sent('喝完一盒牛奶',/已保存。.*1000 mL/);
+ assert.deepEqual(calls.at(-1).input.healthContext.stock.map(row=>row.sku),['fixture-milk']);
+ assert.equal((calls.at(-1).body.tools??[]).some(tool=>tool.name==='read_app_document'),false);
  current=await read();
  assert.deepEqual(current.milk.map(row=>row.status),['empty','empty','sealed']);
  console.log('PASS C whole carton recording automatically closes only one carton');
@@ -148,7 +155,7 @@ try{
  assert.equal(current.state.local.stockMoves.filter(row=>row.foodId==='fixture-noodles').at(-1).delta,-2);
  console.log('PASS D composite meal writes in one revision; next-meal plan runs locally');
  const oldMilk=current.state.local.foods.find(row=>row.id==='food:fixture-yesterday-milk');
- await sent('昨天牛奶少算200mL',/已保存。更正.*1200 mL/);
+ await sent('昨天牛奶少算200mL',/已保存。更正.*1200 mL/,0);
  current=await read();
  assert.equal(current.state.local.foods.find(row=>row.id===oldMilk.id).amount,1200);
  assert.deepEqual(current.milk.map(row=>row.status),['empty','empty','sealed']);
@@ -168,7 +175,7 @@ try{
   await saveState(next,state.revision);
  });
  await page.locator('[data-new]').click();
- await sent('牛肉酱现在305g',/有多个可用包装/);
+ await sent('牛肉酱现在305g',/有多个可用包装/,0);
  const before=await read();
  await page.evaluate(()=>{
   const put=IDBObjectStore.prototype.put;
@@ -221,7 +228,7 @@ try{
  await weigh.uncheck();
  await close();
  await page.locator('[data-new]').click();
- await sent('牛肉酱现在305g',/包装称重.*已停用/);
+ await sent('牛肉酱现在305g',/包装称重.*已停用/,0);
  await open();await weigh.check();await close();
  console.log('PASS profile preview and explicit calculation adoption; Skill toggle gates writes');
  await page.locator('[data-new]').click();
@@ -340,7 +347,8 @@ try{
  assert.equal((await receipts()).length,5);
  const retryCount=calls.length;
  await composer.getByRole('button',{name:'重试未完成步骤'}).click();
- await log.getByText(/已记支出 ¥34.00/).last().waitFor();
+ await page.waitForFunction(()=>JSON.parse(localStorage.getItem('airplane-pwa-v1')).transactions.filter(row=>row.receiptKey).length===8);
+ await review.waitFor({state:'hidden'});
  assert.equal(calls.length,retryCount);
  assert.equal((await receipts()).length,8);
  assert.equal((await read()).state.local.batches.length,2);
@@ -350,4 +358,17 @@ try{
  }
  assert.deepEqual(errors,[]);
  console.log('PASS failed primary finance write safely retries and compact order UI fits three mobile widths');
+ await open();
+ const taskSettings=settings.locator('[data-task-settings]');
+ await taskSettings.getByText('任务用量与费率',{exact:true}).click();
+ await taskSettings.getByText(/缓存命中 2\/2/).waitFor();
+ await taskSettings.locator('[name=model]').selectOption('gpt-6.1-terra');
+ await taskSettings.locator('[name=input]').fill('1.01');
+ await taskSettings.getByRole('button',{name:'保存本机费率'}).click();
+ assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('airplane-ai-prices-v1'))['gpt-6.1-terra'][0]),1.01);
+ const taskDownload=page.waitForEvent('download');
+ await taskSettings.getByRole('button',{name:'导出本机任务日志'}).click();
+ assert.equal((await taskDownload).suggestedFilename(),'airplane-agent-task-log.json');
+ await close();
+ console.log('PASS editable rates, returned cached-token accounting and local task export');
 }finally{await browser?.close();server.close();}
