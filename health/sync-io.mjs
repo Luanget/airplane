@@ -1,3 +1,4 @@
+import {medicalExport,MEDICAL_TABLES} from './medical.mjs';
 import {ensureContainers} from './containers.mjs';
 import {freshData,readFinance} from '../finance-storage.mjs';
 import {localDate} from '../calendar.mjs';
@@ -31,9 +32,9 @@ export async function commitHealthMerge(current,plan,expectedFinance,account){
  return saveState(plan.next,current.revision??0,account,snapshot,guard);
 }
 
-export function createSyncPackage(state,{id,version,now=new Date().toISOString()}){
+export function createSyncPackage(state,{id,version,now=new Date().toISOString(),includeMedicalAttachments=true}){
  if(!validateAppState(state)||!id)throw Error('健康账本格式无效');
- const health=ensureContainers(structuredClone(state));
+ const health=ensureContainers(structuredClone(medicalExport(state,includeMedicalAttachments)));
  const original=health.legacy.sourceSnapshot,refs=originalEventRefs(state);
  if(original?.tables&&!health.legacy.catalogs)health.legacy.catalogs=externalCatalogs(original.tables);
  for(const type of EVENT_TYPES)for(const row of health.legacy[type]){
@@ -76,6 +77,16 @@ export function createSyncPackage(state,{id,version,now=new Date().toISOString()
   for(const row of state.local[type]??[]){
    const id=row.id??row.foodId,fingerprint=hash(stable(row));
    if(fingerprint!==prior.get(id))changes.push({type,id,action:prior.has(id)?'update':'add',fingerprint});
+  }
+ }
+ for(const table of MEDICAL_TABLES){
+  const type='medical-'+table;
+  const prior=new Map(Object.values(anchors).flatMap(anchor=>Object.values(anchor.records[type]??{}))
+   .filter(record=>record.target).map(record=>[record.target,record.accepted]));
+  for(const row of health.local.medical?.[table]??[]){
+   const descriptor=table==='attachments'?(({data,...fields})=>fields)(row):row;
+   const fingerprint=hash(stable(descriptor));
+   if(fingerprint!==prior.get(row.id))changes.push({type,id:row.id,action:prior.has(row.id)?'update':'add',fingerprint});
   }
  }
  return {format:SYNC_FORMAT,source:{id,version},anchor:{revision:state.revision??0,exportedAt:now,sources:anchors},changes,health};
@@ -266,7 +277,7 @@ function projectCatalogs(tables,base,state){
  }
 }
 
-export function projectExternalLedger(raw,state,{version,id,today=localDate(),now=new Date().toISOString()}={}){
+export function projectExternalLedger(raw,state,{version,id,today=localDate(),now=new Date().toISOString(),includeMedicalAttachments=false}={}){
  if(!raw?.tables||!version||!id)throw Error('请指定外部主账、目标版本和来源');
  const tables=structuredClone(raw.tables);
  const bridged=raw.airplane_sync;
@@ -290,7 +301,8 @@ export function projectExternalLedger(raw,state,{version,id,today=localDate(),no
   const {start,end,closedDays,deficit,goal,fatEquivalent}=cycleForDate(state,date,today);
   cycles.set(start,{start,end,closedDays,deficit,goal,fatEquivalent});
  }
- const bridge=createSyncPackage(state,{id,version,now});
- return {...raw,handoff_version:version,updated_at:now,tables,
+ const bridge=createSyncPackage(state,{id,version,now,includeMedicalAttachments});
+ const medical=bridge.health.local.medical;
+ return {...raw,...(medical?{airplane_medical:medical}:{}),handoff_version:version,updated_at:now,tables,
   airplane_sync:{...bridge,cycles:[...cycles.values()],tablesHash:hash(stable(tables))}};
 }

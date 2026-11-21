@@ -13,7 +13,7 @@ const origin='http://localhost:8080';
 let calls=0;
 const mf=new Miniflare(convertV4MiniflareOptions({
   compatibilityDate:'2026-05-01',
-  modules:['worker/index.mjs','ai/responses.mjs','health/contract.mjs'].map(path=>({type:'ESModule',path,contents:readFileSync(path,'utf8')})),
+  modules:['worker/index.mjs','ai/responses.mjs','ai/medical-response.mjs','health/contract.mjs'].map(path=>({type:'ESModule',path,contents:readFileSync(path,'utf8')})),
   bindings:{ALLOWED_ORIGINS:origin,AI_USERS:JSON.stringify([a.id,b.id]),OPENAI_API_KEY:'synthetic',AI_MAX_OUTPUT_TOKENS:'4096',
     USER_RPM:'1',USER_MONTHLY_CALLS:'1',MONTHLY_BUDGET_CENTS:'11',TOTAL_BUDGET_CENTS:'11'},
   durableObjects:{QUOTA:{className:'Quota',useSQLite:true}},

@@ -1,3 +1,4 @@
+import {medicalDocumentContent,redactMedicalDocument} from '../health/medical.mjs';
 import {DRAFT_KEY,PRE_RESTORE_KEY,freshData,readFinance,validateFinanceBackup} from '../finance-storage.mjs';
 import {APP_DOCUMENTS,documentEditSchema,matches} from '../health/contract.mjs';
 import {newState,validateAppState} from '../health/core.mjs';
@@ -76,6 +77,13 @@ async function openDocument(workspace,name){
  }
 }
 
+function publicConversations(value){
+ if(!value?.threads)return value;
+ return {...value,threads:value.threads.map(thread=>({...thread,messages:thread.messages.map(row=>row.privateMedical?{role:row.role,text:'健康档案本机记录',carry:false}:row)}))};
+}
+function privateMessages(value){
+ return (value?.threads??[]).flatMap(thread=>thread.messages.filter(row=>row.privateMedical).map(row=>({id:thread.id,row})));
+}
 function shape(value){
  if(Array.isArray(value))return {type:'array',length:value.length};
  if(object(value))return {type:'object',fields:Object.fromEntries(Object.entries(value).map(([key,entry])=>
@@ -87,7 +95,9 @@ export async function readAppDocument(workspace,{document,path,view}){
  if(!hasDocumentAccess(workspace.finance))throw Error('完整数据权限已关闭');
  if(document==='catalog')return {documents:names};
  const {value}=await openDocument(workspace,document);
- const item=readDocumentPath(value,path);
+ const safe=document==='health'||document==='health_backup'?redactMedicalDocument(value):
+  document==='conversations'?publicConversations(value):value;
+ const item=readDocumentPath(safe,path);
  return {document,path,...(view==='shape'?{shape:shape(item)}:{value:item})};
 }
 
@@ -121,6 +131,10 @@ export async function prepareDocumentEdit(workspace,result,finishReview){
  const {document:name}=result;
  const {value:before}=await openDocument(workspace,name);
  const next=editDocument(before,operations)??null;
+ if((name==='health'||name==='health_backup')&&!equal(medicalDocumentContent(before),medicalDocumentContent(next)))
+  throw Error('健康档案只能在档案页面和专用助手流程中修改。');
+ if(name==='conversations'&&!equal(privateMessages(before),privateMessages(next)))
+  throw Error('请通过聊天界面删除含健康档案的对话。');
  validateDocument(name,next);
  const message=names[name]+'已保存。';
  return {name:names[name],operations,async save(){

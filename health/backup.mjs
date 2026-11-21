@@ -1,6 +1,7 @@
 import {financeBackup,readFinance,replaceFinance,validateFinanceBackup,DRAFT_KEY} from '../finance-storage.mjs';
 import {validateAppState} from './core.mjs';
 import {exportState,readRestoreSnapshot,saveState} from './storage.mjs';
+import {ensureMedical,medicalExport,verifyMedicalState} from './medical.mjs';
 import {localDate} from '../calendar.mjs';
 
 export function combinedBackup(health,finance) {
@@ -10,8 +11,9 @@ export function combinedBackup(health,finance) {
 export function unpackBackup(input) {
  if(input?.format!=='airplane-combined-v1')throw Error('请选择 Airplane 统一备份');
  const finance=input.finance?validateFinanceBackup(input.finance):null;
- const health=input.health??null;
+ const health=input.health?.local?ensureMedical(structuredClone(input.health)):input.health??null;
  if(health&&!validateAppState(health)||!health&&!finance)throw Error('备份结构无效');
+ verifyMedicalState(health);
  return {finance,health};
 }
 export function bindBackupExports(panel,{getState,notify,download}) {
@@ -20,7 +22,7 @@ export function bindBackupExports(panel,{getState,notify,download}) {
  panel.querySelector('[data-export]').onclick=()=>{
   try {
    const finance=included('finance')?readFinance(account.finance).payload:null;
-   const health=included('health')?getState():null;
+   const health=included('health')?medicalExport(getState(),included('medicalAttachments')):null;
    if(!finance&&!health)throw Error('请选择已有账本');
    if(health&&!finance)download('airplane-health-backup-'+localDate()+'.json',exportState(health));
    else if(finance&&!health)download('airplane-finance-backup-'+localDate()+'.json',JSON.stringify(financeBackup(finance),null,2));
@@ -37,6 +39,7 @@ export function bindBackupExports(panel,{getState,notify,download}) {
 }
 
 export async function restoreBackup(current,{health,finance,financeRevision},account,setState) {
+ verifyMedicalState(health);
  const previous=finance?readFinance(account.finance):null;
  if(previous&&previous.primary!==financeRevision)throw Error('财务账本已变更，请重新预览文件');
  const saved=await saveState(health??current,current.revision??0,account,combinedBackup(current,previous?.payload));

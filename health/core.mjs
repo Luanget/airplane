@@ -1,3 +1,4 @@
+import {ensureMedical,validMedical} from './medical.mjs';
 import {effectiveTdee} from './agent-rules.mjs';
 import {hasLaterPackageReading,managedFoodPackage,validContainerTables,voidPackageFood} from './container-ledger.mjs';
 import {normalizeClock} from '../calendar.mjs';
@@ -117,11 +118,11 @@ export function currentCarbReference(state){
 export function normalizeLedger(raw){
  if (!raw || !raw.tables || !Array.isArray(raw.tables.food_events) || !Array.isArray(raw.tables.weight_events) || !Array.isArray(raw.tables.food_inventory)) throw new Error('不是可识别的 health_tracker 主账 JSON（缺少必要表）');
  const result = newState();const t=raw.tables;
- for (const key of ['food_events','weight_events','food_inventory','daily_summaries','energy_balance','activity_events','rules']) {
+ for (const key of ['food_events','weight_events','food_inventory','daily_summaries','energy_balance','activity_events','rules','medical_baseline','symptom_events']) {
   if (t[key] != null && (!Array.isArray(t[key]) || t[key].some(row=>!row || typeof row!=='object' || Array.isArray(row)))) throw Error('主账表格格式无效');
  }
  // Preserve the original source in the local/private backup for lossless archival.
- // Historical medical/audit/purchase details are not used by live UI calculations.
+ // Preserve the baseline used by the independent health archive and sync workflows.
  result.legacy.sourceSnapshot = raw;
  result.importedAt=new Date().toISOString();
  result.importInfo={sourceVersion:String(raw.handoff_version||raw.schema_version||'unknown'),canonicalSource:String(raw.canonical_source||''),originalCounts:Object.fromEntries(['food_events','weight_events','activity_events','daily_summaries','energy_balance','food_inventory'].map(k=>[k, t[k]?.length || 0]))};
@@ -153,7 +154,7 @@ export function normalizeLedger(raw){
  const days=findSetting('周期天数','cycleDays');
  if (Number.isInteger(days) && days<=31) result.settings.cycleDays=days;
  const anchor=String(params['周期日期']||params['起始日期']||params.cycleAnchor||'').slice(0,10);if(validDate(anchor))result.settings.cycleAnchor=anchor;
- return recoverLegacyPortions(result);
+ return ensureMedical(recoverLegacyPortions(result),raw);
 }
 export function validateAppState(state){
  const object = x => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -169,7 +170,7 @@ export function validateAppState(state){
    && ['calorieTarget','baselineTdee','cycleTarget','proteinMin','proteinMax','fatMin','sodiumTarget'].every(k => Number.isFinite(s[k]) && s[k] >= 0)
    && (state.importedAt == null || typeof state.importedAt === 'string')
    && (state.importInfo == null || object(state.importInfo))
-   && validContainerTables(m,validDate)
+   && validContainerTables(m,validDate) && validMedical(m.medical)
    && rows(m.dayCompleteness??[],x=>dated(x)&&x.id===x.date&&['complete','partial'].includes(x.status))
    && new Set((m.dayCompleteness??[]).map(row=>row.id)).size===(m.dayCompleteness??[]).length
    && rows(m.agentReceipts??[],x=>typeof x.id==='string'&&dated(x)&&typeof x.merchant==='string'&&

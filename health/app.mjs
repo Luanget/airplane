@@ -1,3 +1,5 @@
+import {attachMedical} from './medical-ui.mjs';
+import {ensureMedical,medicalCounts,verifyMedicalState} from './medical.mjs';
 import {attachHealthMerge,renderSyncCatalog} from './sync-ui.mjs';
 import {cookPortions,ensureContainers,packagesFor} from './containers.mjs';
 import {hasLaterPackageReading,managedFoodPackage,onShelf} from './container-ledger.mjs';
@@ -27,7 +29,7 @@ let openPackage;
 const editing={};
 const dirtyEntries=new Set();
 let activeEntryType='food';
-let updatePurchases=()=>{},updateShopping=()=>{};
+let updatePurchases=()=>{},updateShopping=()=>{},updateMedical=()=>{};
 let importPreview=null,importVersion=0;
 const settingKeys=['calorieTarget','baselineTdee','cycleTarget','cycleDays','cycleAnchor','proteinMin','proteinMax','fatMin','sodiumTarget'];
 function toast(message){
@@ -48,6 +50,7 @@ function switchTab(next){
  render();window.scrollTo({top:0,behavior:'instant'});
 }
 function render(){
+ updateMedical();
  renderSyncCatalog($('sync-catalog'),state);
  if(tab==='overview')renderOverview();
  if(tab==='inventory'){updatePurchases();updateShopping();renderInventory();}
@@ -486,20 +489,22 @@ async function previewHealthImport(file){
   const panelBackup=$('combined-backup'),includes=name=>panelBackup.querySelector('[name='+name+']').checked;
   let health,finance,message='备份已恢复';
   if(raw?.format==='airplane-combined-v1')({health,finance}=unpackBackup(raw));
-  else if(raw?.appType===APP_SCHEMA)health=raw;
+  else if(raw?.appType===APP_SCHEMA)health=raw.local?ensureMedical(raw):raw;
   else if(raw?.app==='Airplane'||Array.isArray(raw?.transactions))finance=validateFinanceBackup(raw);
   else{
    if(JSON.stringify(state.legacy.sourceSnapshot)===JSON.stringify(raw)){toast('这份主账已导入');return;}
    health=normalizeLedger(raw);message='历史健康数据已导入';
   }
   if(health&&!validateAppState(health))throw Error('健康备份结构无效');
+  verifyMedicalState(health);
   health=includes('health')?health:null;finance=includes('finance')?finance:null;
   if(!health&&!finance)throw Error('文件中没有所选账本，请核对勾选范围');
   const financeRevision=finance?readFinance(window.airplaneAccount.finance).primary:null;
   importPreview={health,finance,financeRevision,message,revision:state.revision??0};
   const panel=$('import-preview');
   panel.querySelector('[data-import-summary]').textContent=[file.name,finance&&`财务 ${finance.transactions.length} 笔`,
-   health&&`健康 ${events(health,'foods').length} 条饮食 · ${events(health,'weights').length} 条称重`].filter(Boolean).join(' · ');
+   health&&`健康 ${events(health,'foods').length} 条饮食 · ${events(health,'weights').length} 条称重`,
+   health?.local.medical&&('档案 '+medicalCounts(health).measurements+' 项指标 · '+medicalCounts(health).symptoms+' 条症状 · '+medicalCounts(health).attachments+' 份附件')].filter(Boolean).join(' · ');
   panel.hidden=false;panel.scrollIntoView({block:'nearest'});
  }catch(err){if(version===importVersion)toast('导入失败：'+err.message);}
 }
@@ -536,6 +541,7 @@ function bindForm(type,update,message){
 }
 function setHealthState(next){state=ensureContainers(recoverLegacyPortions(next));rebuildFoodSelection();render();}
 function attach(){
+ updateMedical=attachMedical($('medical-entry'),$('medical-sheet'),{getState:()=>state,commit,notify:toast});
  openPackage=attachPackages($('package-sheet'),{getState:()=>state,commit,notify:toast,today:dateNow});
  $('edit-package-food').onclick=e=>{
   const food=events(state,'foods').find(row=>row.id===editing.food);

@@ -37,8 +37,8 @@ export function contextFor(thread,budget=HISTORY_OPTIONS[1]){
  const summary=valid?saved.summary:'';
  const turns=[];
  for(let index=valid?saved.through:0;index<messages.length;index++){
-  const {role,text,carry}=messages[index];
-  if(carry&&['user','assistant'].includes(role)&&typeof text==='string'&&text.trim())turns.push({role,text,index});
+  const {role,text,carry,privateMedical}=messages[index];
+  if(!privateMedical&&carry&&['user','assistant'].includes(role)&&typeof text==='string'&&text.trim())turns.push({role,text,index});
  }
  const serial=rows=>rows.map(({role,text})=>({role,text}));
  const charCount=turns.reduce((sum,turn)=>sum+turn.text.length,0);

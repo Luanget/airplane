@@ -48,6 +48,10 @@ export const HEALTH_SKILLS=Object.freeze([
   ['read_packages'],['photo_meal'],'将同餐各图作为同一份证据，分离实吃、续份、剩余和包装标签。','同一道菜不同角度合并；无明确实吃授权只预览。','逐项来源和不确定性。'),
  define('receipts','采购截图',/截图|订单|购物|实付|退款|采购/,
   ['read_packages','read_ledger'],['receipt_order'],'按订单号合并附件，提取付款状态、价格、商品与包装规格。','校验实付与分类金额，食品入库，使用待同步日志联动账本。','支出分类、库存、分摊待补及退款。'),
+ define('medical','个人健康档案',/体检|化验|检查报告|症状|健康档案|指标趋势|临床|就诊/,
+  ['medical_profile'],['medical_read','medical_extract','medical_symptom'],'从本机查指定档案，或转录本轮明确选择的 PDF 和照片。',
+  '按各次参考范围显示，保留证据；医学解释只读，医生诊断须人工录入。',
+  '体检证据、待核对项目和本机保存回执。'),
  define('finance','日常收支',/记账|记帐|支出|收入|花了|付款|报销|消费/,
   ['read_ledger','read_expense_summary'],['finance_write'],'按本机启用分类校验本轮明确的一笔收支。','使用单独的自动执行授权和限额，对原账更改需人工核对。','金额、分类和撤销。')
 ]);

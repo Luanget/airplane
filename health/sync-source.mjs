@@ -1,4 +1,5 @@
 import {APP_SCHEMA,NUTRIENTS,newState,normalizeLedger,numeric,round,sampleNutrientSum,validateAppState,validDate} from './core.mjs';
+import {ensureMedical,verifyMedicalState} from './medical.mjs';
 import {unpackBackup} from './backup.mjs';
 import {normalizeClock} from '../calendar.mjs';
 
@@ -147,7 +148,10 @@ export function importSource(input,{label,identity}={}){
   // opening portions are retained as lots for a newly introduced SKU.
   health=base;
  }
- if(!raw)health=compatibleBackup(health);
+ if(!raw){
+  health=compatibleBackup(health);
+  if(health?.local)health=ensureMedical(health);
+ }
  if(!validateAppState(health)||!Array.isArray(health.legacy.rules))throw Error('健康账本格式无效');
  const id=String(identity??(raw?sourceName(raw):packageInfo?.source.id??health.sync?.deviceId??'airplane-backup')).trim();
  if(!id)throw Error('请填写一个固定的来源名称');
@@ -157,8 +161,9 @@ export function importSource(input,{label,identity}={}){
  // importing both the net raw balance and the sidecar movements would replay them.
  if(raw?.airplane_sync?.format===SYNC_FORMAT&&raw.airplane_sync.tablesHash===hash(stable(raw.tables))&&
   validateAppState(raw.airplane_sync.health)){
-  health=raw.airplane_sync.health;packageInfo=raw.airplane_sync;
+  health=ensureMedical(structuredClone(raw.airplane_sync.health),raw);packageInfo=raw.airplane_sync;
  }
+ verifyMedicalState(health);
  const version=String(raw?.handoff_version??packageInfo?.source.version??label?.match(/health_tracker_(\d{6,8}(?:\.\d+)?)/i)?.[1]??raw?.schema_version??
   input.exportedAt??health.exportedAt??health.revision??'未标版本');
  return {id:sid,version,label:label||id,health,finance,raw:raw&&packageInfo?null:raw,packageInfo};

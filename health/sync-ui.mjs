@@ -148,7 +148,7 @@ export function attachHealthMerge(panel,{account,setState,notify,download}){
    const key='airplane-health-sync-device-v1';
    let id=account.finance.getItem(key);
    if(!id){id=crypto.randomUUID();account.finance.setItem(key,id);}
-   const pack=createSyncPackage(current,{id,version:APP_VERSION});
+   const pack=createSyncPackage(current,{id,version:APP_VERSION,includeMedicalAttachments:find('[data-sync-attachments]')?.checked??true});
    download('airplane-health-sync-'+localDate()+'.json',stringify(pack));
    try{account.finance.setItem(HEALTH_FILE_STATUS_KEY,JSON.stringify({issuedAt:pack.anchor.exportedAt,revision:current.revision??0}));}
    catch{/* Download is independent of the device's status display. */}

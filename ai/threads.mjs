@@ -57,10 +57,10 @@ export function threadBook(store){
   },
   setSummary(id,summary,through){if(activeId===id)patch(id,{context:{summary,through}});},
   setFoodDate(date){if(activeId)patch(activeId,{foodDate:date});},
-  append(role,text,carry=true,source){
+  append(role,text,carry=true,source,metadata){
    refresh();
-   const row=ensure(role==='user'?text:'新对话');
-   add(row,role,text,carry,source?{source}:{});
+   const row=ensure(metadata?.privateMedical?'健康档案':role==='user'?text:'新对话');
+   add(row,role,text,carry,{...(source?{source}:{}),...metadata});
    save(true);
   },
   begin(text,request,reuse=false){

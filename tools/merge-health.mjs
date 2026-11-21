@@ -4,10 +4,10 @@ import {externalBase,projectExternalLedger} from '../health/sync-io.mjs';
 import {planHealthMerge} from '../health/sync.mjs';
 import {importSource} from '../health/sync-source.mjs';
 
-const usage='node tools/merge-health.mjs --base 旧主账.json --incoming 手机同步包.json [--source 固定来源名称] [--choices 核对结果.json] [--out health_tracker_新版本.json --version YYMMDD.N]';
+const usage='node tools/merge-health.mjs --base 旧主账.json --incoming 手机同步包.json [--source 固定来源名称] [--choices 核对结果.json] [--out health_tracker_新版本.json --version YYMMDD.N] [--include-medical-attachments]';
 try{
  const {values}=parseArgs({options:{base:{type:'string'},incoming:{type:'string'},choices:{type:'string'},source:{type:'string'},
-  out:{type:'string'},version:{type:'string'},help:{type:'boolean'}}});
+  out:{type:'string'},version:{type:'string'},'include-medical-attachments':{type:'boolean'},help:{type:'boolean'}}});
  if(values.help){console.log(usage);}
  else {
   if(!values.base||!values.incoming||Boolean(values.out)!==Boolean(values.version))throw Error(usage);
@@ -25,7 +25,8 @@ try{
     console.log(JSON.stringify({stage:'incoming',source:{id:source.id,version:source.version},...preview(plan)},null,2));
     if(plan.unresolved.length||plan.problems.length)process.exitCode=2;
    }else{
-    const result=projectExternalLedger(raw,plan.next,{version:values.version,id:raw.ledger_id??raw.source_id??'external-health-ledger'});
+    const result=projectExternalLedger(raw,plan.next,{version:values.version,id:raw.ledger_id??raw.source_id??'external-health-ledger',
+     includeMedicalAttachments:values['include-medical-attachments']===true});
     await writeFile(values.out,JSON.stringify(result,null,2)+'\n',{flag:'wx'});
     console.log('已生成待人工采用的主账：'+values.out);
    }

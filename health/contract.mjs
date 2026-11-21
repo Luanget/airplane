@@ -202,3 +202,19 @@ export function validInput(data) {
 export function assistantInput({mode,text,photo=null,date}){
   return mode==='finance'?{mode,text,date,categories:[]}:{mode,text,photo,catalog:[],summary:null};
 }
+
+export const medicalMeasurementSchema=object({
+ name:string(180,1),code:optional(string(100,1)),value:optional(number(1e12,-1e12)),
+ result:optional(string(640,1)),unit:optional(string(80,1)),reference:optional(string(240,1)),
+ method:optional(string(160,1)),evidence:optional(string(450,1)),uncertainty:optional(string(320,1))
+});
+const medicalReportSchema=object({
+ date:optional(string(10,10)),dateEvidence:optional(string(200,1)),institution:optional(string(160,1)),
+ note:optional(string(640,1)),uncertainty:optional(string(320,1)),measurements:list(medicalMeasurementSchema,200)
+});
+export const medicalResponseSchemas={
+ extract:object({report:optional(medicalReportSchema),message:string(480,1)}),
+ explain:object({explanation:string(4400,1),uncertainty:string(1200,1)}),
+ symptom:object({date:optional(string(10,10)),time:optional(string(5,5)),description:string(1000,1),
+  change:optional(string(320,1)),visit:optional(string(320,1)),evidence:string(1200,1),uncertainty:optional(string(320,1))})
+};

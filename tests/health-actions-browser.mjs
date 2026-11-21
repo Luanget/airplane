@@ -205,7 +205,7 @@ try{
  await open();
  const agent=settings.locator('#assistant-agent');
  await agent.getByText('健康 Skills 与规则',{exact:true}).click();
- assert.equal(await agent.locator('[data-skill-list] input:checked').count(),11);
+ assert.equal(await agent.locator('[data-skill-list] input:checked').count(),12);
  const content=['# 合成工作规范',...Object.keys(CORE_RULES),
   '普通日参考约 1700 kcal。TDEE基线2900kcal，已包含日常通勤。',
   '六天缺口7700 kcal。一天通常1袋鸡胸。芹菜在午餐与晚餐分两餐。'].join(String.fromCharCode(10));

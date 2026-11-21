@@ -71,7 +71,8 @@
           <label><span class="sr-only">消息</span><textarea name="text" rows="2" maxlength="1600" placeholder="可以补充日期、数量或金额……"></textarea></label>
           <div class="chat-actions">
             <label class="secondary-button chat-attach">添加照片<input name="image" type="file" accept="image/*" multiple></label>
-            <span data-attachment></span><button type="button" class="text-button" data-remove-photo hidden>移除照片</button>
+            <label class="secondary-button chat-attach">体检附件<input name="medicalFiles" type="file" accept=".pdf,image/*" multiple></label>
+            <span data-attachment></span><button type="button" class="text-button" data-remove-photo hidden>移除附件</button>
             <button type="submit" class="primary-button">发送</button>
           </div>
           <label class="assistant-query"><input type="checkbox" name="allowRead" checked> 允许本轮查询本机数据</label>
@@ -126,6 +127,7 @@
           <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">数据权限</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
             <label class="document-access"><input type="checkbox" data-health-auto>自动执行健康记录</label>
+            <label class="document-access"><input type="checkbox" data-medical-auto>自动保存明确的健康档案记录</label>
             <label class="document-access"><input type="checkbox" data-finance-auto>日常财务自动记账</label>
             <label class="document-access">单笔上限 ¥ <input type="number" data-finance-limit min="0.01" max="1000000" step="0.01" inputmode="decimal"></label>
             <p>授权后，信息明确的饮食、包装消耗和少量更正会直接保存，可在结果中撤销。</p>

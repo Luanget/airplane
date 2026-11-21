@@ -143,7 +143,7 @@ export async function readAppData(workspace,book,{dataset,id,date,query,fields=[
  if(dataset==='conversation_messages'){
   if(!id)return {dataset,hint:'从 conversations 查会话 ID 后再查原文。可用关键词筛选。'};
   const thread=book?.list().find(row=>row.id===id);
-  const rows=(thread?.messages??[]).filter(row=>row&&(!term||
+  const rows=(thread?.messages??[]).filter(row=>row&&!row.privateMedical&&(!term||
    String(row.text).toLowerCase().includes(term)||String(row.source?.text??'').toLowerCase().includes(term)));
   return {dataset,id,title:thread?.title??null,rows:projectFields(rows.map(({role,text,source})=>({role,text,...(source?{source}:{})})),fields)};
  }

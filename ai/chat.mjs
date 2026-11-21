@@ -1,3 +1,4 @@
+import {medicalAuto,medicalIntent,renderMedicalReview,setMedicalAuto,useMedicalTurn} from './medical-chat.mjs';
 import {displayDay,localDate,localClock} from '../calendar.mjs';
 import {hydrateShell,shellIcon} from '../shell.mjs';
 import {installUpdates} from '../updates.mjs';
@@ -58,6 +59,12 @@ healthAuto.onchange=()=>{
  try{setHealthAuto(workspace.finance,healthAuto.checked);}
  catch(err){healthAuto.checked=hasHealthAuto(workspace.finance);report(err);}
 };
+const medicalSave=$('[data-medical-auto]');
+medicalSave.checked=medicalAuto(workspace.finance);
+medicalSave.onchange=()=>{
+ try{setMedicalAuto(workspace.finance,medicalSave.checked);}
+ catch(error){medicalSave.checked=medicalAuto(workspace.finance);report(error);}
+};
 const financeAuto=$('[data-finance-auto]'),financeLimit=$('[data-finance-limit]');
 function refreshFinanceAccess(){
  const grant=financeAutomation(workspace.finance);
@@ -80,6 +87,7 @@ const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.fin
 $('#assistant-settings').onclick=()=>{settings.showModal();
  automaticMemory.checked=automaticMemoryEnabled(workspace.finance);
  healthAuto.checked=hasHealthAuto(workspace.finance);
+ medicalSave.checked=medicalAuto(workspace.finance);
  documentAccess.checked=hasDocumentAccess(workspace.finance);
  refreshFinanceAccess();refreshModels();refreshMemory();refreshAgent();void refreshUsage();};
 async function refreshUsage(){
@@ -335,7 +343,8 @@ function checkpoint(save){
  };
 }
 function resetPhoto(){
- composer.elements.image.value='';$('[data-attachment]').textContent='';clearPhoto.hidden=true;
+ composer.elements.image.value='';composer.elements.medicalFiles.value='';
+ $('[data-attachment]').textContent='';clearPhoto.hidden=true;send.textContent='发送';
 }
 function clearComposer(){
  composer.elements.text.value='';composer.elements.allowRead.checked=true;resetPhoto();
@@ -348,6 +357,7 @@ function lock(){
  historyDelete.disabled=busy||saving;
  composer.elements.text.disabled=waiting;
  composer.elements.image.disabled=waiting;
+ composer.elements.medicalFiles.disabled=waiting;
  composer.elements.allowRead.disabled=waiting;
  clearPhoto.disabled=waiting;
  retryFollowUp.disabled=waiting;retryRequest.disabled=waiting;restoreReview.disabled=waiting;
@@ -399,11 +409,17 @@ newChat.onclick=()=>{
  catch(err){report(err);}
 };
 clearPhoto.onclick=resetPhoto;
-composer.elements.image.onchange=()=>{
- const files=composer.elements.image.files;
- $('[data-attachment]').textContent=files.length>1?'已选 '+files.length+' 张照片':files[0]?.name??'';
+function describeAttachments(medical){
+ const active=medical?composer.elements.medicalFiles:composer.elements.image;
+ const other=medical?composer.elements.image:composer.elements.medicalFiles;
+ other.value='';
+ const files=active.files;
+ $('[data-attachment]').textContent=files.length>1?'已选 '+files.length+' 份附件':files[0]?.name??'';
+ send.textContent=medical&&files.length?'发送所选报告识别':'发送';
  clearPhoto.hidden=!files.length;
-};
+}
+composer.elements.image.onchange=()=>describeAttachments(false);
+composer.elements.medicalFiles.onchange=()=>describeAttachments(true);
 composer.elements.text.addEventListener('keydown',e=>{
  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229&&matchMedia('(pointer:fine)').matches){
   e.preventDefault();composer.requestSubmit();
@@ -1165,14 +1181,47 @@ function memoriesFor(input,allowRead){
  const cue=/^(?:把)?(?:这条|那条|刚才|上面|继续|然后)/.test(input.text)?previous:'';
  return workspace.memory.relevant([input.text,cue].filter(Boolean).join(' '));
 }
+async function runMedicalTurn(kind,text,files){
+ clearReview();clearFollowUp();
+ const allowed=()=>composer.elements.allowRead.checked;
+ function echo(role,message,detail){
+  const source=detail?{label:'健康档案详情',text:detail}:undefined;
+  book.append(role,message,false,source,{privateMedical:true});
+  bubble(role,message,source,null,true);start.hidden=true;syncThreads();updateContext();
+ }
+ const finish=(message,detail)=>{echo('assistant',message,detail);clearReview();tell('');};
+ echo('user',text||'识别本轮选中的体检报告');
+ await useMedicalTurn(workspace,{
+  kind,text,files,allowed,show:finish,
+  ask:async(question,medical)=>{
+   if(!await readDeviceKey()){revealKeySettings();throw Error('请先导入 API Key。');}
+   tell('正在处理本轮所选健康档案…');
+   return requestReply({mode:'chat',text:question,photo:null,date:localDate(),history:[]},
+    {medical,model:readChatModel(workspace.finance).id,allowRead:false,agentQuiet:true});
+  },
+  review:draft=>{
+   tell('');
+   renderMedicalReview(review,{...draft,save:async date=>{
+    saving=true;lock();
+    try{return await draft.save(date);}
+    finally{saving=false;lock();}
+   }},finish,report,()=>busy||saving);
+  }
+ });
+ clearComposer();
+}
 composer.onsubmit=async e=>{
  e.preventDefault();if(busy||saving)return;
  const text=composer.elements.text.value.trim(),files=[...composer.elements.image.files];
+ const medicalFiles=[...composer.elements.medicalFiles.files];
+ const kind=!demo?medicalIntent(text,files.length,medicalFiles.length):null;
+ if(demo&&medicalFiles.length){tell('演示模式仅支持普通照片。');return;}
  const savedRequest=book.current?.pending;
  const resumeSaved=!!savedRequest?.healthAction&&savedRequest.request?.text===text;
- if(!text&&!files.length&&!resumeSaved){tell('请输入消息或添加照片');return;}
+ if(!text&&!files.length&&!medicalFiles.length&&!resumeSaved){tell('请输入消息或添加照片');return;}
  busy=true;lock();tell('');
  try{
+  if(kind){await runMedicalTurn(kind,text,medicalFiles.length?medicalFiles:files);return;}
   if(!demo&&!resumeSaved){
    tell('正在读取本机 API Key…');
    if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}

@@ -1,3 +1,4 @@
+import {ensureMedical,medicalData,MEDICAL_TABLES,medicalTableLabel} from './medical.mjs';
 import {ensureContainers} from './containers.mjs';
 import {managedFoodPackage,packageJournal} from './container-ledger.mjs';
 import {normalizeClock} from '../calendar.mjs';
@@ -255,8 +256,8 @@ export function verifyMergeConsistency(before,after,allowed={}){
 export function planHealthMerge(current,source,{choices={},finance=null,baseSource}={}){
  if(!validateAppState(current))throw Error('本机健康账本格式无效');
  const {id:sourceId,raw}=source;
- const incoming=ensureContainers(clone(source.health));
- const next=ensureContainers(clone(current));
+ const incoming=ensureMedical(ensureContainers(clone(source.health)));
+ const next=ensureMedical(ensureContainers(clone(current)));
  const sync=next.sync??={};
  const sources=sync.sources??={};
  const previous=sources[sourceId]??{};
@@ -788,6 +789,31 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   const row=entry('settings',key,{[field]:before},{[field]:value},changed?'conflict':'existing',changed?review:[],'采用后重新计算未来页面的目标或周期');
   if(row.chosen==='take'){next.settings[field]=value;authorization.settings.push(field);}
   if(!row.options.length||row.chosen)saveAnchor('settings',key,field,value,next.settings[field]);
+ }
+ // Medical records share source anchors but never feed the calorie/cycle calculation.
+ if(incoming.local.medical){
+  const destination=next.local.medical??=medicalData(next);
+  for(const table of MEDICAL_TABLES){
+   const kind='medical-'+table;
+   const comparable=row=>!row||table!=='attachments'?row:(({data,...descriptor})=>descriptor)(row);
+   for(const original of incoming.local.medical[table]){
+    const index=destination[table].findIndex(row=>row.id===original.id);
+    const previousRow=destination[table][index],before=comparable(previousRow),after=comparable(original);
+    const key=hash(original.id),anchor=oldMatch(kind,key);
+    const equal=table==='attachments'?Boolean(previousRow):same(before,after);
+    const status=equal?'same':anchor?.incoming===hash(stable(after))?'existing':!before?'added':
+     anchor?.accepted===hash(stable(before))?'corrected':'conflict';
+    const row=entry(kind,key,before,after,status,status==='conflict'?review:[],'仅更新个人健康档案');
+    row.label=medicalTableLabel(table);
+    const take=['added','corrected'].includes(status)||row.chosen==='take';
+    if(!row.options.length||row.chosen){
+     if(take){
+      if(index<0)destination[table].push(clone(original));else destination[table][index]=clone(original);
+     }
+     saveAnchor(kind,key,original.id,after,take?after:before);
+    }
+   }
+  }
  }
  const stockChanges=changedRows(current.local.stockMoves,next.local.stockMoves,row=>row.id);
  authorization.stockMoves=stockChanges.map(([id])=>id);

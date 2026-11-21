@@ -60,6 +60,18 @@
           <div class="cycle-meta"><span id="cycle-pct">—</span><span id="cycle-equivalent">—</span></div>
           <p class="panel-note" id="cycle-note">—</p>
         </section>
+        <details class="card form-panel medical-entry" id="medical-entry">
+          <summary class="setting-row">
+            <span class="mini-icon" data-shell-icon="health"></span>
+            <span class="setting-copy setting-title">健康档案</span><span class="chevron" data-shell-icon="chevron"></span>
+          </summary>
+          <div class="medical-nav">
+            <button type="button" data-medical-view="reports">体检<span data-shell-icon="chevron"></span></button>
+            <button type="button" data-medical-view="trends">指标趋势<span data-shell-icon="chevron"></span></button>
+            <button type="button" data-medical-view="symptoms">症状<span data-shell-icon="chevron"></span></button>
+            <button type="button" data-medical-view="profile">基础资料<span data-shell-icon="chevron"></span></button>
+          </div>
+        </details>
         <section class="health-ledger" aria-labelledby="health-ledger-title">
           <div class="section-head"><h2 id="health-ledger-title">饮食</h2><span id="health-history-period" class="muted"></span></div>
           <div id="local-events"></div>
@@ -138,6 +150,14 @@
       <button type="button" class="add-button" id="add-health" aria-label="记一笔健康" data-shell-icon="plus"></button>
       <div class="tab-group"><button type="button" class="tab" data-tab="inventory"><span data-shell-icon="bag"></span><small>库存</small></button></div>
     </nav>
+    <dialog class="modal bottom-sheet health-sheet" id="medical-sheet" aria-labelledby="medical-title">
+      <div class="modal-grabber" aria-hidden="true"></div>
+      <div class="modal-head"><button type="button" class="cancel" data-sheet-close>关闭</button><h2 id="medical-title">健康档案</h2><span></span></div>
+      <div class="medical-body" data-medical-body>
+        <div data-medical-list></div>
+        <section data-medical-editor hidden></section>
+      </div>
+    </dialog>
     <dialog class="modal bottom-sheet health-sheet" id="package-sheet" aria-labelledby="package-title">
       <div class="modal-grabber" aria-hidden="true"></div>
       <div class="modal-head"><button type="button" class="cancel" data-sheet-close>关闭</button><h2 id="package-title">包装称重</h2><span></span></div>
@@ -228,6 +248,7 @@
               <button class="btn btn-primary" type="button" data-sync-choose>选择文件并预览</button>
               <button class="btn btn-secondary" type="button" data-sync-export>导出健康同步包</button>
             </div>
+            <label class="checkbox"><input type="checkbox" data-sync-attachments> 随同步包导出体检原件</label>
             <button class="text-button" type="button" data-sync-snapshot>导出最近一次写入前的完整快照</button>
             <input type="file" accept=".json,application/json" data-sync-file hidden>
           </div>
@@ -250,6 +271,7 @@
             <div class="backup-scopes" role="group" aria-label="备份与导入范围">
               <label class="checkbox"><input type="checkbox" name="finance" checked> 财务</label>
               <label class="checkbox"><input type="checkbox" name="health" checked> 健康</label>
+              <label class="checkbox"><input type="checkbox" name="medicalAttachments" checked> 体检原件</label>
             </div>
             <div class="button-row">
               <button class="btn btn-secondary" type="button" data-export>导出备份</button>

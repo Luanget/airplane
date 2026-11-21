@@ -728,7 +728,7 @@ try {
   await chat.getByText('已保存饮食计划。',{exact:true}).waitFor();
 
   const pixels=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=40;c.height=40;return c.toDataURL('image/png').split(',')[1];});
-  await form.locator('[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(pixels,'base64')});
+  await form.locator('[name=image]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(pixels,'base64')});
   await form.getByRole('button',{name:'发送',exact:true}).click();await review.waitFor();
   assert.ok(calls[2].photo.startsWith('data:image/jpeg;base64,/9j/'));
   await review.getByRole('button',{name:'放弃'}).click();
@@ -927,7 +927,7 @@ try {
    return canvas.toDataURL('image/png').split(',')[1];
   }));
   const beforePhotos=await foodCount();
-  await form.locator('[type=file]').setInputFiles(twoImages.map((base64,i)=>({
+  await form.locator('[name=image]').setInputFiles(twoImages.map((base64,i)=>({
    name:'image-'+i+'.png',mimeType:'image/png',buffer:Buffer.from(base64,'base64')
   })));
   await say('分别识别合成两张照片');
@@ -962,7 +962,7 @@ try {
     return {qty:inventoryWithMoves(state).find(row=>row.id==='fixture-pieces').qty,
       portions:batchBalances(state,'fixture-pieces').map(batch=>batch.remaining)};
   });
-  await form.locator('[type=file]').setInputFiles({name:'portions.png',mimeType:'image/png',buffer:Buffer.from(pixels,'base64')});
+  await form.locator('[name=image]').setInputFiles({name:'portions.png',mimeType:'image/png',buffer:Buffer.from(pixels,'base64')});
   await say('记录照片里的合成分装');
   await review.getByRole('button',{name:'确认分装',exact:true}).waitFor();
   assert.deepEqual(await photographedPortions(),{qty:2,portions:[]});

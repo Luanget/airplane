@@ -1,3 +1,4 @@
+import {medicalRequest,parseMedical} from './medical-response.mjs';
 import {resultSchema,activitySchema,purchaseSchema,financeSchema,selectChatSchema,documentReadSchema,contextSchema,appDataReadSchema,ledgerReadSchema,foodHistoryReadSchema,expenseSummaryReadSchema,validFinanceEntry,validInput,matches,packageReadSchema,healthReportReadSchema,healthStatusReadSchema} from '../health/contract.mjs';
 
 export const CHAT_MODELS=[
@@ -73,7 +74,8 @@ function skillInstructions(skills){
   id+' v'+version+'｜'+tools.join('、')+'｜'+steps+' '+checks+' '+output).join('\n');
 }
 
-export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find(choice=>choice.id===model)?.effort??'none',memory=[],allowRead=false,continuation=[],applied=[],photoPosition,contextSummary,compacting,documentAccess=false,autoMemory=false,healthActions=false,healthContext,skills=[],photos=[],agentTasks=false,receiptInput=false}={}) {
+export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find(choice=>choice.id===model)?.effort??'none',memory=[],allowRead=false,continuation=[],applied=[],photoPosition,contextSummary,compacting,documentAccess=false,autoMemory=false,healthActions=false,healthContext,skills=[],photos=[],agentTasks=false,receiptInput=false,medical}={}) {
+  if(medical)return medicalRequest(data,medical,{model,effort});
   if (!validInput(data)) throw Error('请检查文字、照片和所选字段');
   if(compacting){
     return {model,instructions:compressionInstructions,store:false,service_tier:'default',reasoning:{effort},
@@ -134,11 +136,12 @@ export function pendingLedgerRead(response,{allowRead=false,documentAccess=false
    ...(typeof call.id==='string'?{id:call.id}:{}),...(call.status==='completed'?{status:call.status}:{})}};
 }
 
-export function parseResult(response, input, {compacting=false,allowRead=false,documentAccess=false,autoMemory=false,applied,photoPosition,healthActions=false,photos=[],agentTasks=false}={}) {
+export function parseResult(response, input, {compacting=false,allowRead=false,documentAccess=false,autoMemory=false,applied,photoPosition,healthActions=false,photos=[],agentTasks=false,medical}={}) {
   if (response.status !== 'completed') throw Error();
   const content = response.output.filter(o => o.type === 'message').flatMap(o => o.content);
   if (content.some(c => c.type === 'refusal')) throw Error();
   const result = JSON.parse(content.filter(c => c.type === 'output_text').map(c => c.text).join(''));
+  if(medical)return parseMedical(medical.kind,result);
   if(compacting){
     if(!matches(contextSchema,result)||!result.summary.trim())throw Error();
     return result;

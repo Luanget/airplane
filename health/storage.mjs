@@ -1,3 +1,4 @@
+import {ensureMedical,medicalExport} from './medical.mjs';
 import {ensureContainers} from './containers.mjs';
 import {newState, recoverLegacyPortions, validateAppState} from './core.mjs';
 
@@ -25,7 +26,7 @@ async function readSlot(key,account) {
 }
 
 export async function readState(account=globalThis.airplaneAccount) {
-  return ensureContainers(recoverLegacyPortions((await readSlot(slot(account),account)) ?? newState()));
+  return ensureMedical(ensureContainers(recoverLegacyPortions((await readSlot(slot(account),account)) ?? newState())));
 }
 export async function readRestoreSnapshot(account=globalThis.airplaneAccount) {
   return readSlot(slot(account)+':before-restore',account);
@@ -33,7 +34,7 @@ export async function readRestoreSnapshot(account=globalThis.airplaneAccount) {
 
 // Check the revision and replace the entire batch in one IndexedDB transaction.
 export async function saveState(state, expected, account = globalThis.airplaneAccount, snapshot = null, guard = null) {
-  ensureContainers(state);
+  ensureMedical(ensureContainers(state));
   if (!validateAppState(state)) throw Error('健康数据格式无效');
   const db = await openDb();
   const next = {...state, revision: expected + 1};
@@ -63,9 +64,9 @@ export async function saveState(state, expected, account = globalThis.airplaneAc
     return next;
   } finally { db.close(); }
 }
-export function exportState(state) {
+export function exportState(state,includeMedicalAttachments=true) {
   if (!validateAppState(state)) throw Error('健康数据格式无效');
-  return JSON.stringify({...state, exportedAt:new Date().toISOString()}, null, 2);
+  return JSON.stringify({...medicalExport(state,includeMedicalAttachments), exportedAt:new Date().toISOString()}, null, 2);
 }
 
 const purchaseSlot=account=>slot(account)+':purchase-update';

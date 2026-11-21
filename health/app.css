@@ -201,3 +201,21 @@ body[data-module="health"] [data-shell] .inline-inventory-editor :is(input,selec
 .package-options summary { cursor:pointer; padding:5px 0 }
 .package-options[open] summary { margin-bottom:6px }
 .package-form button[type=submit]:disabled { opacity:.6 }
+
+.medical-nav { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); padding:0 12px 8px; gap:2px 10px }
+.medical-nav button { background:none; border:0; border-top:1px solid var(--line); min-height:44px; padding:7px 3px; font:inherit; color:var(--text); display:flex; justify-content:space-between; align-items:center }
+.medical-nav svg { width:15px; height:15px; color:var(--muted) }
+.medical-body { overflow:auto; min-height:0; padding:10px 14px max(18px,env(safe-area-inset-bottom)); overscroll-behavior:contain }
+.medical-body h3 { font-size:14px; margin:12px 0 6px }
+.medical-body [data-medical-list] { display:grid; gap:8px }
+.medical-body [data-medical-list]>.btn { justify-self:start }
+.medical-body [data-medical-editor] { margin-top:14px; padding:12px; background:var(--surface-2); border-radius:12px }
+.medical-item { padding:9px 10px; border:1px solid var(--line); border-radius:12px; min-width:0 }
+.medical-item summary { padding:5px 0; cursor:pointer; overflow-wrap:anywhere }
+.medical-body p,.medical-body small { display:block; font-size:12px; line-height:1.5; overflow-wrap:anywhere; white-space:pre-wrap }
+.medical-row { padding:7px 0; border-bottom:1px solid var(--line) }
+.medical-result { display:flex; flex-wrap:wrap; justify-content:space-between; gap:2px 8px; font-size:14px }
+.medical-flag { font-weight:650; color:var(--danger,#b75543) }
+.medical-trend .medical-item { margin-top:8px }
+.medical-trend svg { width:100%; max-height:72px; display:block }
+.medical-trend polyline { fill:none; stroke:var(--green); stroke-width:2 }
