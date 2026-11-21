@@ -321,7 +321,7 @@ export function allocateStock(state,foodId,qty,batchId,date) {
 }
 
 export function addFood(state,fields,id) {
- const {date,meal,name,portion,cost,foodId,stockQty,time,batchId,status='actual',quality='label',uncertainty='',amount,amountUnit}=fields;
+ const {date,meal,name,portion,cost,foodId,stockQty,time,batchId,status='actual',quality='label',uncertainty='',amount,amountUnit,weighing}=fields;
  if(!validDate(date)||!name?.trim()||!['actual','plan','cancelled'].includes(status))throw Error('请检查日期、食物名称和状态');
  const nutrition=Object.fromEntries(NUTRIENTS.map(k=>[k,numeric(fields[k])]));
  if(Object.values(nutrition).some(x=>x!==null&&x<0))throw Error('营养数值不能为负');
@@ -331,7 +331,7 @@ export function addFood(state,fields,id) {
  if(id && !previous)throw Error('记录已更新，请刷新');
  const createdAt=previous?.createdAt ?? new Date().toISOString();
  const entry={id:id??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
-  foodId:foodId||null,stockQty:qty,amount:numeric(amount),...(amountUnit?{amountUnit}:{}),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:explicitCost===null?'inventory':'manual'};
+  foodId:foodId||null,stockQty:qty,amount:numeric(amount),...(amountUnit?{amountUnit}:{}),...(weighing?{weighing}:{}),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:explicitCost===null?'inventory':'manual'};
  const oldMoves=state.local.stockMoves;
  state.local.stockMoves=oldMoves.filter(m=>m.linkedFoodId!==entry.id);
  try{
@@ -349,6 +349,12 @@ export function addFood(state,fields,id) {
  if(previous?.id.startsWith('legacy-food-'))saveLegacyEdit(state,'foods',previous.id,entry);
  else state.local.foods=[...state.local.foods.filter(e=>e.id!==entry.id),entry];
  return entry;
+}
+export function changeFoodMeal(state,row,meal){
+ const next={...row,meal};
+ if(state.legacy.foods.some(entry=>entry.id===row.id))saveLegacyEdit(state,'foods',row.id,next);
+ else state.local.foods=state.local.foods.map(entry=>entry.id===row.id?next:entry);
+ return next;
 }
 function saveLegacyEdit(state,key,id,entry) {
  ((state.local.edits??={})[key]??={})[id]=entry;

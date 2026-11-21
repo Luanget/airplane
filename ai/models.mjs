@@ -1,13 +1,13 @@
 import {CHAT_MODELS} from './responses.mjs';
 
-const STORAGE_KEY='airplane-ai-model-v1';
+export const CHAT_MODEL_KEY='airplane-ai-model-v1';
 
 export function readChatModel(storage=localStorage){
- const id=storage.getItem(STORAGE_KEY);
+ const id=storage.getItem(CHAT_MODEL_KEY);
  return CHAT_MODELS.find(model=>model.id===id)??CHAT_MODELS[0];
 }
 
-export function saveChatModel(storage,id){storage.setItem(STORAGE_KEY,id);}
+export function saveChatModel(storage,id){storage.setItem(CHAT_MODEL_KEY,id);}
 
 export function mountModelSettings(panel,storage){
  const options=panel.querySelector('[data-model-options]'),current=panel.querySelector('[data-current-model]');

@@ -33,11 +33,23 @@ function convert(amount, from, to, pack, sku) {
   const pieces=to==='个'&&counted?measure.factor:1;
   if(from==='个'&&counted){from=unitOf(sku.unit);amount/=measure.factor;}
   if(to==='个'&&counted)to=unitOf(sku.unit);
-  if(from===to)return amount*pieces;
-  if (pack.size > 0 && pack.measure && packed(pack.pack)) {
-    if (from === pack.pack && to === pack.measure) return amount * pack.size * pieces;
-    if (from === pack.measure && to === pack.pack) return amount / pack.size * pieces;
+  const physical=(value,input,output)=>{
+    if(input===output)return value;
+    const density=sku?.densityGramsPerMl;
+    if(!(Number.isFinite(density)&&density>0))return null;
+    if(input==='g'&&output==='mL')return value/density;
+    if(input==='mL'&&output==='g')return value*density;
+    return null;
+  };
+  let converted=physical(amount,from,to);
+  if(converted===null&&pack.size>0&&pack.measure&&packed(pack.pack)){
+    if(from===pack.pack)converted=physical(amount*pack.size,pack.measure,to);
+    else if(to===pack.pack){
+      const inPackMeasure=physical(amount,from,pack.measure);
+      if(inPackMeasure!==null)converted=inPackMeasure/pack.size;
+    }
   }
+  if(converted!==null)return converted*pieces;
   return null;
 }
 
@@ -53,7 +65,8 @@ export function resolveItem(state, c) {
   const sku = c.sku ? inventoryWithMoves(state).find(s => s.active && s.id === c.sku) : null;
   if (c.sku && !sku) throw Error('库存食品已变更，请重新选择');
   const [n, unit] = sku ? basis(sku) : [c.basisAmount,c.basisUnit];
-  const pack = packageInfo(sku,c);
+  // A weighed container needs the saved net-size specification for stock conversion.
+  const pack = packageInfo(sku,sku&&c.weighing?{...c,packageSize:null,packageUnit:null}:c);
   const stockQty = sku ? convert(c.amount,c.unit,sku.unit,pack,sku) : null;
   const labelAmount = n>0?convert(c.amount,c.unit,unit,pack,sku):null;
   // Fill missing SKU fields only when the model supplied a convertible estimate.
@@ -88,11 +101,11 @@ export function confirmItems(current, candidates, date, meal, time=localClock())
       if (sku && stockQty === null) throw Error('份量与库存单位无法换算，请核对包装规格');
       localStockChange(next,{date,time,foodId:id,delta:(stockQty ?? amount)*(c.action==='add'?1:-1),reason:'确认智能候选'});
     } else {
-      if (c.action === 'eat' && sku && stockQty === null) throw Error('无法换算扣库数量，请调整单位或选择自定义食物');
+      if (c.action === 'eat' && sku && stockQty === null && !c.weighing) throw Error('无法换算扣库数量，请调整单位或选择自定义食物');
       const exactPortion=c.action==='eat'&&availableBatches(next,sku?.id,date).find(batch=>
         (batch.portion||batch.parent)&&Math.abs(batch.remaining-stockQty)<1e-6);
       const entry = addFood(next,{date,time,meal,name:sku?.name ?? c.name,portion:`${amount} ${unit}`,
-        ...nutrition,foodId:sku?.id,batchId:exactPortion?.id,stockQty,amount,amountUnit:unit,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
+        ...nutrition,weighing:c.weighing,foodId:sku?.id,batchId:exactPortion?.id,stockQty,amount,amountUnit:unit,quality:'estimated',uncertainty:c.uncertainty,status:c.action==='plan'?'plan':'actual'});
       entry.source = 'confirmed-assistant';
       entry.uncertainty = c.uncertainty;
     }

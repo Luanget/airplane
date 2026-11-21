@@ -9,12 +9,13 @@ export const nutrientKeys = ['kcal','protein','carbs','fat','sodium'];
 const nutrients = object(Object.fromEntries(nutrientKeys.map(k => [k, optional(number(100000))])));
 export const units = ['g','mL','包','个','份','盒','瓶','袋'];
 const unit = choice(...units);
+const weighing=optional(object({before:number(100000,0.001),after:optional(number(100000)),tare:optional(number(100000))}));
 const item = object({
   sku:optional(string(80,1)), name:string(80,1), action:choice('eat','plan','add','remove','label'),
   amount:number(100000,0.001), unit, packageSize:optional(number(100000,0.001)),
   packageUnit:optional(choice('g','mL')), basisAmount:number(100000,0.001), basisUnit:unit,
   nutrients, uncertainty:string(240,1),
-  weighing:optional(object({before:number(100000,0.001),after:optional(number(100000)),tare:optional(number(100000))}))
+  weighing
 });
 export const resultSchema = object({note:string(400), items:list(item)});
 const chatEntrySchema=object({note:string(400),items:list(object({
@@ -78,20 +79,48 @@ const ledgerOperations=[
 ];
 const dataset=choice('health_settings','foods','weights','activities','inventory','batches','stock_moves',
   'purchases','shopping','templates','legacy_days','legacy_energy','legacy_rules','transactions',
-  'categories','budgets','balances','finance_settings','skills','skill_folders','conversations','assistant_settings');
+  'categories','budgets','balances','finance_settings','memory','conversations','assistant_settings');
 export const appDataReadSchema=object({
  dataset:choice(...dataset.enum,'guide','conversation_messages','local_usage','import_info','app_info'),
  id:optional(string(240,1)),date:optional(string(10,7)),query:string(),fields:list(string(60,1))
 });
 export const appDataEditSchema=object({dataset,id:optional(string(240,1)),action:choice('add','update','delete'),changes:string()});
-export const chatSchema=object({reply:string(undefined,1),proposal:{anyOf:[
+export const APP_DOCUMENTS=['finance','health','finance_backup','health_backup','finance_draft',
+ 'memory','skills','legacy_skill','conversations','model','history','local_usage'];
+const documentName=choice(...APP_DOCUMENTS);
+export const documentReadSchema=object({document:choice('catalog',...APP_DOCUMENTS),path:string(),view:choice('shape','value')});
+export const documentEditSchema=object({document:documentName,patch:string(undefined,1)});
+const mealType=optional(choice('早餐','午餐','晚餐','加餐'));
+const deleteFields={kind:choice('food','plan','weight','activity','finance'),query:string(),meal:mealType};
+const directOperations=ledgerOperations.map(operation=>{
+ const {mode,result}=operation.properties;
+ if(mode.enum[0]==='food_edit')return proposal('food_edit',object({name:string(80,1),id:optional(string(240,1)),
+  amount:optional(number(100000,0.001)),unit:optional(unit),meal:mealType,time:optional(string(5,5)),newMeal:mealType,weighing}));
+ return ['entry','plan'].includes(mode.enum[0])?
+  proposal(mode.enum[0],object({...result.properties,meal:mealType})):operation;
+});
+const appDataEditProposal=proposal('app_data_edit',appDataEditSchema);
+const batchProposal=operations=>proposal('batch',object({operations:{...list({anyOf:operations}),minItems:1},next:choice('done','continue')}));
+const chatProposals=[
   {type:'null'},...ledgerOperations,
-  proposal('app_data_edit',appDataEditSchema),
-  proposal('delete_record',object({kind:choice('food','plan','weight','activity','finance'),
-    query:string(),meal:optional(choice('早餐','午餐','晚餐','加餐'))})),
-  proposal('skill',object({name:optional(string(60,1)),text:string(800,1)})),
-  proposal('batch',object({operations:{...list({anyOf:ledgerOperations}),minItems:1},next:choice('done','continue')}))
-]}});
+  appDataEditProposal,batchProposal(ledgerOperations)
+];
+const chatOutput=proposals=>object({reply:string(undefined,1),proposal:{anyOf:proposals}});
+export const chatSchema=chatOutput([...chatProposals,proposal('delete_record',object(deleteFields))]);
+export const documentChatSchema=object({
+ reply:string(undefined,1),
+ proposal:{anyOf:[{type:'null'},...directOperations,appDataEditProposal,batchProposal(directOperations),proposal('delete_record',object({...deleteFields,selection:choice('one','all')})),
+  proposal('document_edit',documentEditSchema)]},
+ saveMode:choice('save','review')
+});
+const memoryUpdates=list(object({name:string(120,1),text:string(800,1),evidence:string(undefined,1)}));
+const withAutomaticMemory=schema=>object({...schema.properties,memoryUpdates});
+const memoryChatSchema=withAutomaticMemory(chatSchema);
+const documentMemoryChatSchema=withAutomaticMemory(documentChatSchema);
+export function selectChatSchema({documentAccess,autoMemory}){
+ if(documentAccess)return autoMemory?documentMemoryChatSchema:documentChatSchema;
+ return autoMemory?memoryChatSchema:chatSchema;
+}
 export const ledgerReadSchema=object({scope:choice('stock','stock_alerts','meal','nutrition','expenses','balance','budget','weight','cycle'),query:string()});
 export const foodHistoryReadSchema=object({date:string(10,10),query:string()});
 export const expenseSummaryReadSchema=object({start:string(10,10),end:string(10,10),groupBy:choice('category','day','month')});

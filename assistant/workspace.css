@@ -13,37 +13,7 @@
 .assistant-prompt { margin-top:12px; font-size:13px }
 .assistant-prompt summary { color:var(--muted); cursor:pointer; padding-block:6px }
 .assistant-prompt pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; line-height:1.5 }
-.skill-group { margin-bottom:10px }
-.skill-group > summary { display:flex; align-items:center; gap:8px; min-height:44px; padding:6px 8px; border:1px solid var(--line); border-radius:10px; cursor:pointer; list-style:none; font-size:13px; font-weight:650 }
-.skill-group > summary::-webkit-details-marker { display:none }
-.skill-group > summary::after { content:'›'; color:var(--muted); font-size:16px }
-.skill-group[open] > summary::after { transform:rotate(90deg) }
-.skill-group > summary small { margin-inline-start:auto; font-size:11px; color:var(--muted); white-space:nowrap }
-.skill-folder-icon { display:grid; color:var(--green); flex:none }
-.skill-folder-icon svg { width:17px; height:17px }
-.skill-update-mark { color:var(--green); font-size:11px }
-.skill-update { padding:8px; margin:6px 0; border-radius:8px; background:var(--green-soft) }
-.skill-row { display:flex; align-items:center; justify-content:space-between; gap:8px; border-bottom:1px solid var(--line) }
-.skill-row label { display:flex; flex:1; align-items:center; gap:8px; min-width:0; min-height:44px; font-size:14px; cursor:pointer; overflow-wrap:anywhere }
-.skill-row input { flex:none; width:16px; height:16px; margin:0 }
-.skill-row button { min-width:44px; min-height:44px; flex:none }
-.skill-row button[aria-expanded=true] { color:var(--text) }
-.skill-new { padding:0 4px }
-.skill-editor { margin:6px 0 10px; padding:4px 10px 8px; background:var(--surface-2); border:1px solid var(--line); border-radius:12px }
-.skill-editor :is(input,textarea) { background:var(--surface) }
-.skill-editor [data-skill-error]:not(:empty) { color:var(--red) }
-.skill-status:empty { display:none }
-.skill-status:not(:empty) { display:block; padding:4px 6px; color:var(--muted); font-size:13px }
 .assistant-panel-body > output:not(:empty) { display:block; margin-top:6px; font-size:13px; color:var(--muted) }
-.skill-edit-review h3 { font-size:14px; margin-bottom:8px }
-.skill-edit-review :is(label,summary,p) { font-size:12px; line-height:1.5 }
-.skill-edit-review details { margin:0 0 8px }
-.skill-edit-review summary { padding-block:6px; color:var(--muted); cursor:pointer }
-.skill-edit-review p { margin:4px 0 8px; color:var(--muted); white-space:pre-wrap }
-.skill-edit-review .choice-trigger { font-size:14px }
-.assistant-workspace .skill-edit-review :is(input,textarea) { line-height:1.5 }
-.assistant-workspace .skill-edit-review :is(input,textarea):not(:focus) { font-size:14px }
-.chat-review:has(> .skill-edit-review) > .chat-actions button { font-size:13px }
 .chat-source { justify-self:start; margin-inline-start:36px; max-width:calc(100% - 36px); padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface) }
 .chat-source summary { cursor:pointer; color:var(--muted); font-size:13px }
 .chat-source pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 0; font:inherit; font-size:13px; line-height:1.55 }
@@ -160,3 +130,11 @@
 .chat-review .assistant-plan-totals p { margin:4px 0; font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums }
 
 .assistant-data-review { margin:8px 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.5 }
+
+.document-access { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600 }
+.document-review pre { max-height:16rem; overflow:auto; touch-action:pan-y }
+
+.assistant-memory-item { padding-block:10px; border-bottom:1px solid var(--line) }
+.assistant-memory-item strong { font-size:14px }
+.assistant-memory-item p { margin:4px 0; white-space:pre-wrap; overflow-wrap:anywhere }
+#assistant-memory form { padding-block:10px }

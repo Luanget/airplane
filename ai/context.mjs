@@ -1,14 +1,14 @@
-const KEY='airplane-ai-history-v1';
+export const CHAT_HISTORY_KEY='airplane-ai-history-v1';
 export const HISTORY_OPTIONS=[
  {id:'current',label:'仅本轮',messages:0,chars:0},
  {id:'rolling',label:'自动压缩',messages:40,chars:16000},
  {id:'extended',label:'更多历史',messages:72,chars:32000}
 ];
 export function readHistoryOption(storage){
- const stored=storage.getItem(KEY);
+ const stored=storage.getItem(CHAT_HISTORY_KEY);
  return HISTORY_OPTIONS.find(option=>option.id===stored)??HISTORY_OPTIONS[1];
 }
-export function saveHistoryOption(storage,id){storage.setItem(KEY,id);}
+export function saveHistoryOption(storage,id){storage.setItem(CHAT_HISTORY_KEY,id);}
 
 function fit(turns,chars,count,reverse=false){
  const rows=reverse?[...turns].reverse():turns;

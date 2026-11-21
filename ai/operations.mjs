@@ -1,10 +1,9 @@
 import {displayDay,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
-import {dayIntake,inventoryWithMoves,isOnHand,isStockReference,localStockChange,numeric,validDate} from '../health/core.mjs';
+import {dayIntake,events,inventoryWithMoves,isOnHand,isStockReference,localStockChange,numeric,validDate} from '../health/core.mjs';
 import {matchFoodRecords,reviseFoodPortion} from '../health/food-history.mjs';
 import {setShoppingItem} from '../health/shopping.mjs';
-import {displayStockQuantity,portionSources,registerPortions,stockMeasure,storedStockQuantity} from '../health/inventory.mjs';
+import {displayStockQuantity,measuredGrams,portionSources,registerPortions,stockMeasure,storedStockQuantity} from '../health/inventory.mjs';
 import {quantityInUnit} from '../health/candidates.mjs';
-import {SKILL_LIMIT,SKILL_NAME_LIMIT,skillText} from './skills.mjs';
 
 function field(parent,name,control){
  const label=document.createElement('label');
@@ -12,36 +11,6 @@ function field(parent,name,control){
 }
 function heading(parent,text){
  const title=document.createElement('h3');title.textContent=text;parent.append(title);
-}
-export function skillReview(container,items,suggested,fixedId){
- const card=document.createElement('section');
- card.className='skill-edit-review';container.append(card);
- heading(card,'核对 Skill 修改');
- const target=field(card,'保存到',document.createElement('select'));
- target.dataset.pickerVerbatim='';
- target.add(new Option('新建并启用个人 Skill',''));
- for(const item of items)target.add(new Option(item.name,item.id));
- const match=items.filter(item=>fixedId?item.id===fixedId:item.name===suggested.name);
- if(match.length===1)target.value=match[0].id;
- if(fixedId)target.disabled=true;
- const name=field(card,'名称',document.createElement('input'));
- name.maxLength=SKILL_NAME_LIMIT;name.value=suggested.name??'我的偏好';
- const before=document.createElement('details'),summary=document.createElement('summary'),previous=document.createElement('p');
- summary.textContent='查看原规则';before.append(summary,previous);card.append(before);
- const edit=field(card,'新规则',document.createElement('textarea'));
- edit.maxLength=SKILL_LIMIT;edit.rows=4;edit.value=suggested.text;edit.required=true;
- const selected=()=>items.find(item=>item.id===target.value);
- function update(){
-  const item=selected();
-  name.parentElement.hidden=!!item;
-  before.hidden=!item;name.required=!item;
-  previous.textContent=item?.text??'';
- }
- target.onchange=update;update();
- return ()=>{
-  const current=selected();
-  return {changes:{id:current?.id,name:current?.name??name.value,text:skillText(edit.value)},current};
- };
 }
 export function portionReview(container,proposal,current,today){
  const {name,quantities,unit}=proposal.result;
@@ -131,11 +100,12 @@ export function inventoryReview(container,proposal,current,today){
 }
 
 export function foodEditReview(container,proposal,current,today,lastFoodDate){
- const date=proposal.date??lastFoodDate;
+ const {name,id,amount,unit,meal,time,newMeal,weighing}=proposal.result;
+ const target=id?events(current,'foods').find(row=>row.id===id):null;
+ const date=proposal.date??target?.date??lastFoodDate;
  if(!validDate(date)||date>today)throw Error('请先指定日期，或查询那天的饮食记录');
- const {name,amount,unit,meal,time}=proposal.result;
  if(!name.trim())throw Error('请指定要更正的食品');
- const rows=matchFoodRecords(current,date,name).filter(row=>
+ const rows=(id?(target?.date===date?[target]:[]):matchFoodRecords(current,date,name)).filter(row=>
   (!meal||row.meal===meal)&&(!time||normalizeClock(row.time)===time));
  if(!rows.length)throw Error(displayDay(date)+'没有找到匹配的「'+name+'」记录，请核对日期或餐次');
  heading(container,'更正原饮食记录');
@@ -143,13 +113,20 @@ export function foodEditReview(container,proposal,current,today,lastFoodDate){
  if(rows.length>1)selection.add(new Option('找到多条，请选择一条',''));
  for(const row of rows)selection.add(new Option([row.name,row.meal,normalizeClock(row.time),row.portion].filter(Boolean).join(' · '),row.id));
  selection.required=true;
- const quantity=field(container,'新份量（'+unit+'）',document.createElement('input'));
- Object.assign(quantity,{type:'number',required:true,min:'0.001',max:'100000',step:'any',value:amount});
+ const quantity=amount!=null||weighing?field(container,'新份量（'+(weighing?'g':unit)+'）',document.createElement('input')):null;
+ if(quantity)Object.assign(quantity,{type:'number',required:true,min:'0.001',max:'100000',step:'any',
+  value:weighing?measuredGrams(weighing):amount,readOnly:!!weighing});
+ const mealField=newMeal?field(container,'新餐次',document.createElement('select')):null;
+ if(mealField){
+  for(const label of ['早餐','午餐','晚餐','加餐'])mealField.add(new Option(label,label));
+  mealField.value=newMeal;
+ }
  const preview=document.createElement('div');
  preview.className='food-edit-diff';preview.setAttribute('aria-live','polite');
  container.append(preview);
  function calculate(state=current){
-  return reviseFoodPortion(state,{id:selection.value,date,amount:quantity.valueAsNumber,unit});
+  if(!selection.value)throw Error('找到多条匹配的饮食，请指明餐次或时间。');
+  return reviseFoodPortion(state,{id:selection.value,date,amount:quantity?.valueAsNumber,unit,newMeal:mealField?.value,weighing});
  }
  function update(){
   preview.replaceChildren();
@@ -163,21 +140,29 @@ export function foodEditReview(container,proposal,current,today,lastFoodDate){
    };
    const calories=v=>v===null?'未知':v+' kcal';
    pair('日期',[displayDay(date,true),before.meal,normalizeClock(before.time)].filter(Boolean).join(' · '));
-   pair('份量',before.portion+' → '+after.portion);
+   if(before.meal!==after.meal)pair('餐次',before.meal+' → '+after.meal);
+   if(before.portion!==after.portion)pair('份量',before.portion+' → '+after.portion);
    pair('热量',calories(before.nutrition.kcal)+' → '+calories(after.nutrition.kcal));
    for(const [key,label,measure] of [['protein','蛋白质','g'],['carbs','碳水','g'],['fat','脂肪','g'],['sodium','钠','mg']]){
     if(after.nutrition[key]!==null)pair(label,before.nutrition[key]+' → '+after.nutrition[key]+' '+measure);
    }
    pair('当日热量',calories(dayIntake(current,date).totals.kcal)+' → '+calories(dayIntake(next,date).totals.kcal));
    const sku=stock&&inventoryWithMoves(current).find(row=>row.id===before.foodId);
-   pair('库存',stock?stock.name+' '+displayStockQuantity(sku,stock.before)+' → '+displayStockQuantity(sku,stock.after)+' '+stockMeasure(sku).unit:'原记录无关联扣库流水，库存不变');
+   if(weighing?.after!=null)pair('剩余毛重',weighing.after+' g（含包装）');
+   pair('库存',stock?stock.name+' '+displayStockQuantity(sku,stock.before)+' → '+displayStockQuantity(sku,stock.after)+' '+stockMeasure(sku).unit:'库存扣减数量未变');
    preview.append(list);
   }catch(err){preview.textContent=err.message;}
  }
- selection.onchange=update;quantity.oninput=update;update();
+ selection.onchange=update;if(quantity)quantity.oninput=update;if(mealField)mealField.onchange=update;update();
  return {
   apply:state=>calculate(state).next,
   label:'确认更正',
-  saved:'已更正原饮食记录，并重新计算当日营养和关联库存。'
+  saved:'已更正原饮食记录，并重新计算当日营养和关联库存。',
+  receipt(state){
+   const {before,after}=calculate(state);
+   const changes=[before.portion!==after.portion&&before.portion+' → '+after.portion,
+    before.meal!==after.meal&&before.meal+' → '+after.meal,weighing?.after!=null&&'剩余 '+weighing.after+' g（含包装）'].filter(Boolean);
+   return '已更正'+displayDay(date)+'的'+after.name+' · '+changes.join(' · ')+'。';
+  }
  };
 }

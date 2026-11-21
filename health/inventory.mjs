@@ -51,10 +51,12 @@ export function saveSku(state,fields) {
   if(pieces!==null&&(!Number.isSafeInteger(pieces)||pieces<1||!['包','盒','袋','瓶'].includes(unit)))throw Error('请核对每包装的件数');
   const nutrition=Object.fromEntries(NUTRIENTS.map(k=>[k,numeric(fields[k])]));
   if(Object.values(nutrition).some(v=>v!==null&&v<0))throw Error('营养数值不能为负');
+  const density=Object.hasOwn(fields,'densityGramsPerMl')?numeric(fields.densityGramsPerMl):previous?.densityGramsPerMl;
+  if(density!=null&&density<=0)throw Error('请核对食品密度');
   const preservePrice=price===null&&previous?.priceBasis&&previous.priceBasis!==unit;
   const row={...previous,id:id||makeId('sku'),name:name.trim(),unit,basisUnit,basisAmount:quantity,stage,stockStage,
     packageSize,packageUnit:packageSize?fields.packageUnit:null,pack:packageSize?unit:null,piecesPerPack:pieces,
-    nutritionBasis:'custom',standard:quantity+' '+basisUnit,qty:previous?previous.qty:0,
+    densityGramsPerMl:density??null,nutritionBasis:'custom',standard:quantity+' '+basisUnit,qty:previous?previous.qty:0,
     pricePerUnit:preservePrice?previous.pricePerUnit:price,priceBasis:preservePrice?previous.priceBasis:unit,minimum,source,quality,nutrition,active:true};
   if(previous)Object.assign(previous,row);else local.push(row);
   return row;

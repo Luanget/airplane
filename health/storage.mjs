@@ -85,6 +85,25 @@ async function purchaseWrite(account,operation){
   });
  }finally{db.close();}
 }
+export async function replaceRestoreSnapshot(account,expected,next){
+ const db=await openDb();
+ try{
+  await new Promise((resolve,reject)=>{
+   const tx=db.transaction('kv','readwrite'),store=tx.objectStore('kv');
+   const key=slot(account)+':before-restore',request=store.get(key);
+   let failure;
+   request.onsuccess=()=>{
+    try{
+     if(JSON.stringify(unpack(account,request.result)??null)!==expected)throw Error('恢复快照已变更，请重新查询');
+     if(next===null)store.delete(key);
+     else store.put(pack(account,next),key);
+    }catch(err){failure=err;tx.abort();}
+   };
+   tx.oncomplete=resolve;
+   tx.onabort=()=>reject(failure??tx.error??Error('无法保存恢复快照'));
+  });
+ }finally{db.close();}
+}
 export function stagePurchaseUpdate(account,state,expected,change){
  if(!validateAppState(state))throw Error('采购更新后的健康账本无效');
  return purchaseWrite(account,(store,current,pending)=>{

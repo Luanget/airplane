@@ -420,7 +420,6 @@ try {
   const caloriesBefore=Number(await page.locator('#hero-calories').textContent());
 
   const calls=[],testKey='sk-fixture-browser-only';
-  const enabledSkills=['L · 数据与纠错规范','L · 记录与纠错','L · 配餐与营养','L · 库存与采购','原有个人偏好','测试个人 Skill'];
   await page.evaluate(()=>localStorage.setItem('airplane-ai-skill-v1','合成旧用户偏好'));
   const batchText='盘点合成新食品为 90g，补记 43 元午餐，再查更新后的库存';
   let resumeAttempts=0;
@@ -448,12 +447,10 @@ try {
       assert.match(input.older[0].text,/合成历史0/);
       return mockResult({summary:'测试摘要：使用合成饮食规则。'});
     }
-    const connectionTest=input.text.startsWith('这是连接测试');
     const fields=['date','history','text'];
-    if(!connectionTest){
-      fields.push('skills');
-      assert.deepEqual(input.skills.map(item=>item.name),enabledSkills);
-      assert.ok(input.skills.every(item=>Object.keys(item).sort().join(',')==='name,text'));
+    if(input.memory){
+      fields.push('memory');
+      assert.ok(input.memory.every(item=>Object.keys(item).sort().join(',')==='name,text'));
     }
     if(input.applied)fields.push('applied');
     if(input.contextSummary)fields.push('contextSummary');
@@ -461,7 +458,10 @@ try {
     assert.ok(!content[0].text.includes('synthetic legacy entry'));
     assert.ok(!content[0].text.includes('private synthetic'));
     calls.push({...input,photo:content[1]?.image_url});
-    if(input.text==='合成餐点')assert.ok(body.tools.some(tool=>tool.name==='read_ledger'));
+    if(input.text==='合成餐点'){
+      assert.ok(body.tools.some(tool=>tool.name==='read_ledger'));
+      assert.deepEqual(input.memory.map(row=>row.name),['测试个人记忆','原有个人偏好']);
+    }
     if(input.text==='验证压缩后接续'){
       assert.equal(input.contextSummary,'测试摘要：使用合成饮食规则。');
       assert.ok(input.history.some(row=>row.text.startsWith('合成历史49')));
@@ -475,6 +475,69 @@ try {
       assert.deepEqual(Object.keys(balance).sort(),['balance','currency']);
       assert.equal(balance.currency,'CNY');
       return mockResult({reply:'当前总余额 '+balance.balance+' 元。',proposal:null});
+    }
+    if(input.text==='我平时用牛肉酱喜欢少放一点'){
+      assert.ok(body.text.format.schema.required.includes('memoryUpdates'));
+      return mockResult({reply:'给你搭配食材时会少放牛肉酱。',proposal:null,memoryUpdates:[
+       {name:'酱料用量偏好',text:'牛肉酱少放一点',evidence:input.text}
+      ]});
+    }
+    if(input.text==='晚餐用库存里的合成牛肉酱，初始360g，吃到322.2g'){
+      assert.ok(body.tools.some(tool=>tool.name==='read_app_document'));
+      assert.ok(input.memory.some(item=>item.name==='酱料用量偏好'));
+      return mockResult({reply:'会按同一瓶的两次称重记用量。',saveMode:'save',memoryUpdates:[],proposal:{
+       mode:'entry',date:input.date,result:{meal:'晚餐',note:'',items:[{
+        sku:null,name:'合成牛肉酱',action:'eat',stockSource:'inventory',amount:37.8,unit:'g',packageSize:null,packageUnit:null,
+        basisAmount:100,basisUnit:'g',nutrients:{kcal:200,protein:null,carbs:null,fat:null,sodium:800},
+        uncertainty:'合成标签',weighing:{before:360,after:322.2,tare:null}
+       }]}
+      }});
+    }
+    if(input.text==='把合成餐点从90g改成50g并挪到晚餐'){
+      return mockResult({reply:'我会更正原饮食。',saveMode:'save',proposal:{mode:'food_edit',date:input.date,
+       result:{name:'合成餐点',id:null,amount:50,unit:'g',meal:'午餐',time:null,newMeal:'晚餐',weighing:null}}});
+    }
+    if(input.text==='直接记合成支出再告诉我金额'){
+      assert.ok(body.tools.some(tool=>tool.name==='read_app_document'));
+      if(input.applied){
+        assert.deepEqual(input.applied,['finance']);
+        return mockResult({reply:'刚才记了 11 元。',proposal:null,saveMode:'review'});
+      }
+      return mockResult({reply:'我会记录这笔支出。',saveMode:'save',proposal:{
+       mode:'batch',date:null,result:{next:'continue',operations:[{mode:'finance',date:null,result:{
+        note:'',entry:{type:'expense',amount:11,date:input.date,note:'合成直接支出',categoryId:'餐饮'}
+       }}]}
+      }});
+    }
+    if(input.text==='直接删除合成直接支出'){
+      return mockResult({reply:'我会删除匹配的支出。',saveMode:'save',proposal:{mode:'delete_record',date:input.date,
+       result:{kind:'finance',query:'合成直接支出',meal:null,selection:'one'}}});
+    }
+    if(input.text==='只看看运动候选'){
+      assert.ok(body.tools.some(tool=>tool.name==='read_app_document'));
+      return mockResult({reply:'这是运动预览。',saveMode:'review',proposal:{mode:'activity',date:null,result:{note:'',
+       activity:{name:'合成运动',km:1,minutes:10,kcal:40,energyKind:'activity',quality:'estimated',includedInBase:'no',uncertainty:'合成样例'}
+      }}});
+    }
+    if(input.text==='权限关掉后拒绝本次保存'){
+      return mockResult({reply:'我会记录候选支出。',saveMode:'save',proposal:{mode:'finance',date:null,result:{note:'',
+       entry:{type:'expense',amount:30,date:input.date,note:'合成撤销权限支出',categoryId:'餐饮'}
+      }}});
+    }
+    if(input.text==='修改原始会话备注'){
+      assert.ok(body.tools.some(tool=>tool.name==='read_app_document'));
+      if(body.input.length===1)return route.fulfill({headers,json:{status:'completed',output:[
+        {type:'function_call',name:'read_app_document',call_id:'fixture-document',
+         arguments:JSON.stringify({document:'conversations',path:'/active',view:'value'})}
+      ]}});
+      const raw=JSON.parse(body.input.at(-1).output);
+      assert.deepEqual(Object.keys(raw).sort(),['document','path','value']);
+      assert.equal(raw.path,'/active');
+      assert.match(raw.value,/^[a-f0-9-]{36}$/);
+      return mockResult({reply:'已找到当前会话。',saveMode:'save',proposal:{mode:'document_edit',date:null,
+       result:{document:'conversations',patch:JSON.stringify([
+        {op:'test',path:'/active',value:raw.value},{op:'add',path:'/customNotes',value:{topic:'合成备注'}}
+       ])}}});
     }
     if(input.text==='把周期改为六天'){
       if(body.input.length===1)return route.fulfill({headers,json:{status:'completed',output:[
@@ -608,34 +671,21 @@ try {
   await page.mouse.click(8,8);
   await assistantSettings.waitFor({state:'hidden'});
   await openAssistantSettings();
-  const skillSettings=assistantSettings.locator('#assistant-skill');
-  await skillSettings.getByText('Skill',{exact:true}).click();
-  const builtInFolder=skillSettings.locator('[data-folder-id=l-series]');
-  await builtInFolder.getByText('L 系列 · 栾云煦创',{exact:true}).waitFor();
-  assert.equal(await builtInFolder.evaluate(folder=>folder.open),false);
-  await builtInFolder.locator('summary').click();
-  assert.ok(await skillSettings.getByRole('checkbox',{name:'原有个人偏好',exact:true}).isChecked());
-  assert.equal(await skillSettings.getByRole('checkbox',{name:'L · 餐食偏好',exact:true}).isChecked(),false);
-  await skillSettings.getByRole('checkbox',{name:'L · 运动与周期',exact:true}).uncheck();
-  const skillEditor=skillSettings.locator('#skill-editor');
-  const firstEdit=skillSettings.getByRole('button',{name:'编辑 L · 数据与纠错规范',exact:true});
-  const secondEdit=skillSettings.getByRole('button',{name:'编辑 L · 配餐与营养',exact:true});
-  for(const trigger of [firstEdit,secondEdit]){
-    await trigger.click();
-    assert.equal(await trigger.getAttribute('aria-expanded'),'true');
-    assert.ok(await trigger.evaluate(button=>button.parentElement.nextElementSibling?.id==='skill-editor'));
-    assert.ok(await skillEditor.isVisible());
-  }
-  assert.equal(await firstEdit.getAttribute('aria-expanded'),'false');
-  await skillEditor.getByRole('button',{name:'收起'}).click();
-  assert.equal(await secondEdit.getAttribute('aria-expanded'),'false');
-  assert.equal(await skillEditor.isVisible(),false);
-  await skillSettings.getByRole('button',{name:'新建 Skill',exact:true}).click();
-  await skillSettings.getByLabel('名称',{exact:true}).fill('测试个人 Skill');
-  await skillSettings.getByLabel('工作规则',{exact:true}).fill('合成个人规则，验证启用情况。');
-  await skillSettings.getByRole('button',{name:'保存并启用'}).click();
-  assert.ok(await skillSettings.getByRole('checkbox',{name:'测试个人 Skill',exact:true}).isChecked());
-  await skillSettings.getByText('Skill',{exact:true}).click();
+  const memorySettings=assistantSettings.locator('#assistant-memory');
+  await memorySettings.getByText('记忆',{exact:true}).click();
+  const autoMemory=memorySettings.getByRole('checkbox',{name:'自动记住长期偏好'});
+  assert.ok(await autoMemory.isChecked());
+  await autoMemory.uncheck();
+  await memorySettings.getByText('合成旧用户偏好',{exact:true}).waitFor();
+  await memorySettings.getByRole('button',{name:'添加记忆',exact:true}).click();
+  await memorySettings.getByLabel('名称',{exact:true}).fill('测试个人记忆');
+  await memorySettings.getByLabel('记忆内容',{exact:true}).fill('合成餐点优先配蔬菜。');
+  await memorySettings.getByRole('button',{name:'保存记忆',exact:true}).click();
+  await memorySettings.getByText('合成餐点优先配蔬菜。',{exact:true}).waitFor();
+  await memorySettings.getByRole('button',{name:'编辑 测试个人记忆'}).click();
+  assert.ok(await memorySettings.getByLabel('记忆内容',{exact:true}).isVisible());
+  await memorySettings.getByRole('button',{name:'收起',exact:true}).click();
+  await memorySettings.getByText('记忆',{exact:true}).click();
   await assistantSettings.getByText('API Key',{exact:true}).click();
   await access.getByText('请导入 OpenAI API Key').waitFor();
   assert.equal(await chat.isVisible(),true);assert.equal(calls.length,0);
@@ -806,6 +856,64 @@ try {
   assert.equal(calls.at(-1).applied.length,2);
   assert.equal(await ledger(),savedBatch);
   console.log('PASS batch save before fresh read, minimal follow-up context and no duplicate writes on retry');
+  await openAssistantSettings();
+  const dataPermissions=assistantSettings.getByText('数据权限',{exact:true});
+  await dataPermissions.click();
+  const rootPermission=assistantSettings.getByRole('checkbox',{name:'完整数据权限'});
+  assert.equal(await rootPermission.isChecked(),false);
+  await rootPermission.check();
+  await closeAssistantSettings();
+  await say('修改原始会话备注');
+  const conversations=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('airplane-ai-conversations-v1')));
+  await chat.getByRole('log').getByText('完整对话已保存。 新增 /customNotes。',{exact:true}).waitFor();
+  assert.equal(await review.isVisible(),false);
+  assert.deepEqual((await conversations()).customNotes,{topic:'合成备注'});
+  await page.reload();
+  assert.deepEqual((await conversations()).customNotes,{topic:'合成备注'});
+  assert.equal(await form.getByRole('button',{name:'继续核对上次候选'}).isVisible(),false);
+  await say('直接记合成支出再告诉我金额');
+  await chat.getByText('刚才记了 11 元。',{exact:true}).waitFor();
+  assert.deepEqual(calls.at(-1).applied,['finance']);
+  assert.equal(JSON.parse(await ledger()).transactions.at(-1).amount,11);
+  assert.equal(await review.isVisible(),false);
+  await say('直接删除合成直接支出');
+  await chat.getByText(/已删除 1 条收支记录。.*合成直接支出/).waitFor();
+  assert.equal(await ledger(),savedBatch);
+  assert.equal(await review.isVisible(),false);
+  await say('把合成餐点从90g改成50g并挪到晚餐');
+  await chat.getByText(/已更正.*合成餐点.*90 g → 50 g.*午餐 → 晚餐/).waitFor();
+  await page.evaluate(async(id)=>{
+    const {readState,saveState}=await import('../health/storage.mjs');
+    const state=await readState(),row=state.local.foods.find(row=>row.id===id);
+    if(row?.portion!=='50 g'||row.meal!=='晚餐'||row.nutrition.kcal!==50)throw Error('incorrect food correction');
+    const {reviseFoodPortion}=await import('../health/food-history.mjs');
+    await saveState(reviseFoodPortion(state,{id,date:row.date,amount:90,unit:'g',newMeal:'午餐'}).next,state.revision);
+  },food.id);
+  assert.equal(await review.isVisible(),false);
+  await say('只看看运动候选');
+  await review.getByText('运动记录',{exact:true}).waitFor();
+  await review.getByRole('button',{name:'放弃'}).click();
+  await page.evaluate(()=>{
+    const fetchRequest=window.fetch.bind(window);
+    window.fetch=async(url,options)=>{
+      const response=await fetchRequest(url,options);
+      if(url==='https://api.openai.com/v1/responses'&&
+         JSON.parse(JSON.parse(options.body).input[0].content[0].text).text==='权限关掉后拒绝本次保存'){
+        await new Promise(resolve=>{window.releaseRevokedRequest=resolve;});
+      }
+      return response;
+    };
+  });
+  await say('权限关掉后拒绝本次保存');
+  await page.waitForFunction(()=>window.releaseRevokedRequest);
+  await openAssistantSettings();
+  await dataPermissions.click();
+  await rootPermission.uncheck();
+  await closeAssistantSettings();
+  await page.evaluate(()=>window.releaseRevokedRequest());
+  await chat.getByText('无法完成本轮写入。完整数据权限已关闭。',{exact:true}).waitFor();
+  assert.equal(await ledger(),savedBatch);
+  console.log('PASS opt-in direct raw and typed writes, explicit deletion, read-only preview and revocation');
   await form.locator('[name=allowRead]').check();
   const beforeAnalysis=calls.length;
   await say('分析合成月度分类支出');
@@ -884,6 +992,7 @@ try {
   await review.getByText('核对要删除的收支记录',{exact:true}).waitFor();
   await review.getByRole('checkbox',{name:/午餐.*¥28/}).check();
   await review.getByRole('button',{name:'确认删除'}).click();
+  await review.waitFor({state:'hidden'});
   await chat.getByText('已删除 1 条收支记录。',{exact:true}).waitFor();
   const afterFinanceDeletion=JSON.parse(await ledger());
   assert.equal(afterFinanceDeletion.transactions.length,beforeFinanceDeletion.transactions.length-1);
@@ -1136,12 +1245,49 @@ try {
   await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
   assert.deepEqual(JSON.parse(await ledger()),backup.data);
   // The demo uses its own stored thread and ledger through the same review UI.
+  await page.goto(base+'assistant/');
+  await openAssistantSettings();
+  await memorySettings.getByText('记忆',{exact:true}).click();
+  await autoMemory.check();
+  await assistantSettings.getByText('API Key',{exact:true}).click();
+  await access.locator('[name=key]').fill(testKey);
+  await access.locator('[type=submit]').click();
+  await access.getByText('已保存 Key',{exact:true}).waitFor();
+  await closeAssistantSettings();
+  const beforeAuto=calls.length;
+  await say('我平时用牛肉酱喜欢少放一点');
+  await chat.getByText('已记住 「酱料用量偏好」。',{exact:true}).waitFor();
+  assert.equal(calls.length,beforeAuto+1);
+  await chat.getByRole('button',{name:'新对话',exact:true}).click();
+  await openAssistantSettings();
+  await dataPermissions.click();
+  await rootPermission.check();
+  await closeAssistantSettings();
+  const sauceId=await page.evaluate(async()=>{
+    const {readState,saveState}=await import('../health/storage.mjs');
+    const {saveSku}=await import('../health/inventory.mjs');
+    const state=await readState();
+    const sauce=saveSku(state,{name:'合成牛肉酱',unit:'瓶',basisUnit:'g',basisAmount:100,kcal:200,sodium:800});
+    sauce.qty=1;
+    await saveState(state,state.revision??0);
+    return sauce.id;
+  });
+  await say('晚餐用库存里的合成牛肉酱，初始360g，吃到322.2g');
+  await chat.getByText('记录已保存。 合成牛肉酱 用了 37.8 g，剩余 322.2 g（含瓶）。',{exact:true}).waitFor();
+  assert.equal(await review.isVisible(),false);
+  await page.getByRole('link',{name:'健康',exact:true}).click();
+  await page.locator('[data-tab="inventory"]').click();
+  const sauceRow=page.locator('[data-stock-id="'+sauceId+'"]');
+  await sauceRow.getByText('已开封 · 剩余 322.2 g（含瓶）',{exact:true}).waitFor();
+  await sauceRow.getByText('1 瓶',{exact:true}).waitFor();
+  console.log('PASS automatic memory in one request across chats and direct sauce-bottle gross weighing');
+
   await page.goto(base+'assistant/?demo=1');
   for(const viewport of [{width:320,height:568},{width:1280,height:800}]){
     await page.setViewportSize(viewport);
     assert.ok(await form.evaluate(form=>form.getBoundingClientRect().bottom<=innerHeight));
     await openAssistantSettings();
-    assert.ok(await assistantSettings.locator('#assistant-skill .chevron svg').evaluate(icon=>icon.getBoundingClientRect().width===16));
+    assert.ok(await assistantSettings.locator('#assistant-memory .chevron svg').evaluate(icon=>icon.getBoundingClientRect().width===16));
     await assistantSettings.getByText('本轮上下文',{exact:true}).click();
     await assistantSettings.getByText(/历史 0 条/).waitFor();
     assert.ok(await assistantSettings.evaluate(sheet=>sheet.scrollWidth===sheet.clientWidth));
@@ -1236,51 +1382,23 @@ try {
   await chat.getByText('已保存饮食计划。',{exact:true}).waitFor();
   assert.deepEqual(await demoLedger(),stagedLedger);
   console.log('PASS invalid batch leaves both ledgers intact, interrupted local commit settles once and dinner uses fresh inventory');
-  await say('帮我修改 Skill');
-  await review.getByRole('button',{name:'确认更新 Skill'}).waitFor();
-  assert.ok(await chat.evaluate(page=>page.scrollWidth===page.clientWidth));
-  assert.ok(await review.locator('button[type=submit]').evaluate(button=>
-    button.getBoundingClientRect().bottom<=button.closest('.chat-thread').getBoundingClientRect().bottom));
-  const skillText=review.getByLabel('新规则',{exact:true});
-  assert.equal(await skillText.evaluate(field=>getComputedStyle(field).fontSize),'14px');
-  await skillText.focus();
-  assert.equal(await skillText.evaluate(field=>getComputedStyle(field).fontSize),'16px');
-  await review.getByRole('button',{name:/^保存到/}).click();
-  await review.locator('.inline-picker-panel').getByRole('button',{name:'L · 餐食偏好',exact:true}).click();
-  await review.getByRole('button',{name:'确认更新 Skill'}).click();
-  await chat.getByText('Skill 已更新。',{exact:true}).waitFor();
-  await page.reload();
   await openAssistantSettings();
-  await skillSettings.getByText('Skill',{exact:true}).click();
-  await skillSettings.locator('[data-folder-id=l-series] > summary').click();
-  assert.equal(await skillSettings.getByRole('checkbox',{name:'L · 餐食偏好',exact:true}).isChecked(),false);
-  await skillSettings.getByRole('button',{name:'编辑 L · 餐食偏好',exact:true}).click();
-  assert.match(await skillSettings.getByLabel('工作规则',{exact:true}).inputValue(),/搭配易采购的蔬菜/);
-  await page.evaluate(async()=>{
-    const {demoWorkspace}=await import('../ai/demo.mjs'),{localDate}=await import('../calendar.mjs');
-    const workspace=await demoWorkspace(localDate()),key='airplane-ai-skills-v2';
-    const saved=JSON.parse(workspace.finance.getItem(key));
-    saved.overrides['l-food-preferences'].baseText='上一版内置餐食规则';
-    workspace.finance.setItem(key,JSON.stringify(saved));
-  });
-  await page.reload();
-  await openAssistantSettings();
-  await skillSettings.getByText('Skill',{exact:true}).click();
-  const updateFolder=skillSettings.locator('[data-folder-id=l-series]');
-  await updateFolder.getByText('1 项有新版',{exact:true}).waitFor();
-  await updateFolder.locator('summary').click();
-  await updateFolder.getByRole('button',{name:'编辑 L · 餐食偏好',exact:true}).click();
-  await skillSettings.getByRole('button',{name:'让 AI 融合',exact:true}).click();
-  await review.getByRole('button',{name:'确认更新 Skill'}).click();
-  await chat.getByText('Skill 已更新。',{exact:true}).last().waitFor();
-  await openAssistantSettings();
-  assert.equal(await updateFolder.getByText('1 项有新版',{exact:true}).count(),0);
-  await skillSettings.getByRole('button',{name:'新建文件夹',exact:true}).click();
-  await skillSettings.getByLabel('文件夹名称',{exact:true}).fill('我的个人规则');
-  await skillSettings.getByRole('button',{name:'建立文件夹',exact:true}).click();
-  await skillSettings.getByText('我的个人规则',{exact:true}).waitFor();
+  await dataPermissions.click();
+  await rootPermission.check();
   await closeAssistantSettings();
-  console.log('PASS skill migration, selected request context and targeted edits');
+  await say('记住我晚餐优先配蔬菜');
+  await chat.getByText('已记住「晚餐偏好」。',{exact:true}).waitFor();
+  assert.equal(await review.isVisible(),false);
+  await chat.getByRole('button',{name:'新对话',exact:true}).click();
+  await page.reload();
+  await openAssistantSettings();
+  await memorySettings.getByText('记忆',{exact:true}).click();
+  await memorySettings.getByText('我晚餐优先配蔬菜',{exact:true}).waitFor();
+  await memorySettings.getByRole('button',{name:'删除 晚餐偏好',exact:true}).click();
+  await memorySettings.getByText('已删除记忆。',{exact:true}).waitFor();
+  assert.equal(await memorySettings.getByText('我晚餐优先配蔬菜',{exact:true}).count(),0);
+  await closeAssistantSettings();
+  console.log('PASS explicit memory writes persist across threads and reload, with local deletion');
   assert.deepEqual(errors,[]);
   console.log('PASS dated food lookup, thread reload, confirmed in-place correction and health timeline');
   console.log('PASS damaged finance recovery and synthetic-only fixtures');

@@ -1,3 +1,5 @@
+import {editDocument,readDocumentPath} from '../ai/document-patch.mjs';
+import {prepareDocumentEdit,readAppDocument,setDocumentAccess} from '../ai/documents.mjs';
 import {threadBook} from '../ai/threads.mjs';
 import {modelRequest,parseResult,pendingLedgerRead} from '../ai/responses.mjs';
 import {readResponseStream,ResponseStreamError} from '../ai/stream.mjs';
@@ -5,13 +7,13 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {addDays,addFood,batchBalances,newState,normalizeLedger,validDate,validateAppState,inventoryWithMoves,dayIntake,energyForDay,cycleForDate} from '../health/core.mjs';
 import {addBatch,saveSku} from '../health/inventory.mjs';
-import {summarizeFoodHistory,reviseFoodPortion} from '../health/food-history.mjs';
+import {remainingGrossWeights,summarizeFoodHistory,reviseFoodPortion} from '../health/food-history.mjs';
 import {readLedger} from '../ai/workspace.mjs';
 import {contextFor,HISTORY_OPTIONS} from '../ai/context.mjs';
 import {dataEdit,readAppData} from '../ai/data.mjs';
 import {healthDeletion} from '../ai/deletion.mjs';
 import {estimatedCost,displayUsage} from '../ai/usage.mjs';
-import {skillLibrary} from '../ai/skills.mjs';
+import {MEMORY_KEY,memoryLibrary,setAutomaticMemory} from '../ai/memory.mjs';
 import {confirmItems,resolveItem} from '../health/candidates.mjs';
 import {matches,resultSchema,validInput,assistantInput} from '../health/contract.mjs';
 import {accountKeys,privateAccount} from '../account.mjs';
@@ -25,28 +27,21 @@ const nutrition={kcal:100,protein:10,carbs:8,fat:3,sodium:20};
 const part={name:'样品',sku:null,amount:2,unit:'包',action:'eat',basisAmount:100,basisUnit:'g',
   packageSize:50,packageUnit:'g',nutrients:nutrition,uncertainty:'合成标签'};
 const date='2030-01-01';
-test('default rules, legacy preferences and individual Skills remain independent',()=>{
- const data=new Map([['airplane-ai-skill-v1','保留旧的个人偏好']]);
- const library=skillLibrary({getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value)});
- const defaults=library.list().filter(item=>item.preset);
- assert.equal(defaults.length,6);
- assert.equal(library.active().length,6);
- assert.equal(library.active().at(-1).text,'保留旧的个人偏好');
- assert.equal(data.size,1);
- const stock=defaults.find(item=>item.id==='l-stock');
- library.enable(stock.id,false);
- library.save({id:stock.id,name:stock.name,text:'本机修改的库存规则'},stock);
- assert.equal(library.active().some(row=>row.name===stock.name),false);
- assert.throws(()=>library.save({id:stock.id,name:stock.name,text:'旧编辑器'},stock),/已变更/);
- library.restore(stock.id);
- library.enable(stock.id,true);
- assert.equal(library.active().find(row=>row.name===stock.name).text,stock.text);
- library.save({name:'新偏好',text:'回答先给结论'});
- const input={mode:'chat',text:'下一餐怎么吃',date,photo:null,history:[]};
- const payload=JSON.parse(modelRequest(input,{skills:library.active()}).input[0].content[0].text);
- assert.deepEqual(payload.skills,library.active());
- assert.equal(payload.skills.some(row=>row.name==='L · 餐食偏好'),false);
- assert.deepEqual(payload.skills.at(-1),{name:'新偏好',text:'回答先给结论'});
+test('individual memories migrate and only relevant enabled preferences enter the next model request',()=>{
+ const data=new Map([['airplane-ai-skill-v1','回答先给结论']]);
+ const storage={getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value)};
+ const library=memoryLibrary(storage);
+ assert.equal(library.list()[0].text,'回答先给结论');
+ library.prepare(null,{name:'牛奶习惯',text:'晚餐喝无糖牛奶'},'add').commit();
+ library.prepare(null,{name:'通勤分类',text:'地铁支出归为交通'},'add').commit();
+ const input={mode:'chat',text:'牛奶怎么安排',date,photo:null,history:[]};
+ const memory=library.relevant(input.text);
+ assert.deepEqual(memory,[{name:'牛奶习惯',text:'晚餐喝无糖牛奶'}]);
+ const payload=JSON.parse(modelRequest(input,{allowRead:true,memory}).input[0].content[0].text);
+ assert.deepEqual(payload.memory,memory);
+ assert.ok(!JSON.stringify(payload).includes('通勤分类'));
+ assert.equal(library.relevant('地铁最近花多少').length,1);
+ assert.ok(!Object.hasOwn(JSON.parse(modelRequest(input,{memory}).input[0].content[0].text),'memory'));
 });
 
 test('scoped progress queries use local weight and cycle reports without exporting history',async()=>{
@@ -459,34 +454,166 @@ test('leaving a thread preserves its partial reply and only the matching ticket 
  assert.deepEqual(threadBook(store).current.messages.map(row=>row.text),['测试消息','完成']);
 });
 
-test('skill folders migrate old rules and AI can move rules into a new folder',async()=>{
- const values=new Map([['airplane-ai-skill-v1','旧偏好']]);
- const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
- const skills=skillLibrary(storage),personal=skills.list().find(row=>!row.preset);
- assert.equal(personal.folderId,'personal');
- const request={dataset:'skill_folders',action:'add',id:null,changes:JSON.stringify({name:'我的训练',skillIds:[personal.id]})};
- await (await dataEdit({skills},null,request,date)).commit();
- const folder=skills.folders().find(row=>row.name==='我的训练');
- assert.equal(skills.list().find(row=>row.id===personal.id).folderId,folder.id);
- const add={dataset:'skills',action:'add',id:null,changes:JSON.stringify({name:'训练安排',text:'优先查询近期记录',folderId:folder.id})};
- await (await dataEdit({skills},null,add,date)).commit();
- assert.equal(skills.list().filter(row=>row.folderId===folder.id).length,2);
-});
-
-test('a changed default only prompts a merge for a customized preset and the baseline advances on confirmation',()=>{
- const initial={overrides:{'l-stock':{text:'保留自己的盘点规则',baseText:'先前的默认版本'}},personal:[]};
+test('migration retains personal and customized built-in rules without restoring deleted memories',async()=>{
+ const initial={overrides:{'l-stock':{text:'保留自己的盘点规则',baseText:'先前的默认版本',enabled:false}},
+  personal:[{id:'personal',name:'旧个人规则',text:'晚餐优先高蛋白',enabled:true,folderId:'a'}]};
  const values=new Map([['airplane-ai-skills-v2',JSON.stringify(initial)]]);
  const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
- const skills=skillLibrary(storage);
- const info=skills.mergeInfo('l-stock');
- assert.equal(info.previous,'先前的默认版本');
- assert.equal(info.personal,'保留自己的盘点规则');
- assert.ok(info.current.includes('同款标签'));
- assert.equal(skills.mergeInfo('l-progress'),null);
- const request=modelRequest({mode:'chat',text:'融合 Skill',date,history:[],photo:null},{skillMerge:info,allowRead:true});
- assert.equal(request.tools,undefined);
- assert.deepEqual(Object.keys(JSON.parse(request.input[0].content[0].text).skillMerge),['name','previous','current','personal']);
- skills.resolveDefault(info,'沿用自己的盘点规则，也核对同款标签');
- assert.equal(skills.mergeInfo('l-stock'),null);
- assert.equal(skills.list().find(row=>row.id==='l-stock').text,'沿用自己的盘点规则，也核对同款标签');
+ const memory=memoryLibrary(storage);
+ assert.deepEqual(memory.list().map(row=>[row.id,row.text,row.enabled]),[
+  ['l-stock','保留自己的盘点规则',false],['personal','晚餐优先高蛋白',true]
+ ]);
+ assert.equal(memory.relevant('盘点').length,0);
+ const action={dataset:'memory',action:'update',id:'personal',changes:JSON.stringify({text:'午餐优先高蛋白'})};
+ await (await dataEdit({memory},null,action,date)).commit();
+ memory.prepare('l-stock',{},'delete').commit();
+ memory.prepare('personal',{},'delete').commit();
+ assert.deepEqual(memoryLibrary(storage).list(),[]);
+ assert.equal(values.get(MEMORY_KEY),'[]');
+});
+
+test('complete mode gates raw reads and proposals and sends only data returned by the selected path',async()=>{
+ const input={mode:'chat',date,text:'读取某字段',photo:null,history:[]};
+ const options={allowRead:true,documentAccess:true};
+ const args={document:'finance',path:'/prefs/example',view:'value'};
+ const response={status:'completed',output:[{type:'function_call',name:'read_app_document',call_id:'fixture-doc',
+  arguments:JSON.stringify(args)}]};
+ assert.throws(()=>pendingLedgerRead(response));
+ assert.throws(()=>pendingLedgerRead(response,{documentAccess:true}));
+ const call=pendingLedgerRead(response,options);
+ assert.deepEqual(call.args,{...args,scope:'app_document'});
+ assert.ok(!modelRequest(input,{allowRead:true}).tools.some(tool=>tool.name==='read_app_document'));
+ const request=modelRequest(input,{...options,continuation:[{item:call.item,summary:{value:42}}]});
+ assert.ok(request.tools.some(tool=>tool.name==='read_app_document'));
+ assert.deepEqual(JSON.parse(request.input.at(-1).output),{value:42});
+ const value={reply:'将按指令修改。',saveMode:'save',proposal:{mode:'document_edit',date:null,result:{document:'finance',patch:'[]'}}};
+ const candidate={status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(value)}]}]};
+ assert.throws(()=>parseResult(candidate,input));
+ assert.deepEqual(parseResult(candidate,input,options),value);
+ assert.equal(parseResult(candidate,{...input,text:''},options).saveMode,'review');
+});
+
+test('raw JSON patches edit nested, previously unknown fields and roots without mutating their input',()=>{
+ const original={'a/b':{'~x':[1,2]},missing:null};
+ const edits=[{op:'test',path:'/a~1b/~0x/1',value:2},{op:'replace',path:'/a~1b/~0x/1',value:3},
+  {op:'add',path:'/a~1b/~0x/-',value:4},{op:'remove',path:'/missing'}];
+ assert.equal(readDocumentPath(original,'/a~1b/~0x/0'),1);
+ assert.deepEqual(editDocument(original,edits),{'a/b':{'~x':[1,3,4]}});
+ assert.deepEqual(original,{'a/b':{'~x':[1,2]},missing:null});
+ assert.deepEqual(editDocument(original,[{op:'replace',path:'',value:{newField:true}}]),{newField:true});
+ assert.throws(()=>editDocument(original,[{op:'test',path:'/missing',value:42}]),/原值/);
+ assert.throws(()=>editDocument(original,[{op:'add',path:'/__proto__/polluted',value:true}]),/原型/);
+ assert.throws(()=>editDocument(original,[{op:'add',path:'/payload',value:JSON.parse('{"__proto__":{}}')}]),/原型/);
+});
+
+test('root document saves check format, revision conflicts and access revocation',async()=>{
+ const data=new Map();
+ const finance={getItem:key=>data.get(key)??null,setItem:(key,value)=>data.set(key,value),removeItem:key=>data.delete(key)};
+ let health=newState();
+ const workspace={finance,account:{finance},readHealth:()=>structuredClone(health),saveHealth:(next,expected)=>{
+  assert.equal(expected,health.revision??0);
+  health={...next,revision:expected+1};
+ }};
+ const args={document:'health',path:'/settings',view:'shape'};
+ await assert.rejects(readAppDocument(workspace,args),/权限/);
+ setDocumentAccess(finance,true);
+ assert.equal((await readAppDocument(workspace,args)).shape.fields.cycleDays,'number');
+ const proposal=(op,path,value)=>({document:'health',patch:JSON.stringify([{op,path,value}])});
+ const draft=await prepareDocumentEdit(workspace,proposal('add','/local/custom',{'by day':[10,12]}));
+ assert.equal(health.local.custom,undefined);
+ await draft.save();
+ assert.deepEqual(health.local.custom,{'by day':[10,12]});
+ await assert.rejects(prepareDocumentEdit(workspace,proposal('remove','/settings')),/格式无效/);
+ const stale=await prepareDocumentEdit(workspace,proposal('replace','/local/custom',{}));
+ health.revision++;
+ await assert.rejects(stale.save(),/已有更新/);
+ const revoked=await prepareDocumentEdit(workspace,proposal('replace','/local/custom',{}));
+ setDocumentAccess(finance,false);
+ await assert.rejects(revoked.save(),/权限/);
+ assert.deepEqual(health.local.custom,{'by day':[10,12]});
+});
+
+test('food correction updates the original ID, recalculates a 60-to-50g deduction, and leaves moves untouched on a meal-only edit',()=>{
+ const state=newState();
+ const sku=saveSku(state,{name:'合成鸡胸',unit:'g',basisUnit:'g',basisAmount:100,kcal:120,protein:24});
+ sku.qty=150;
+ const row=addFood(state,{date,time:'12:12',meal:'午餐',name:sku.name,portion:'60 g',amount:60,amountUnit:'g',
+  foodId:sku.id,stockQty:60,kcal:72,protein:14.4});
+ const resized=reviseFoodPortion(state,{id:row.id,date,amount:50,unit:'g'});
+ assert.equal(resized.after.id,row.id);
+ assert.equal(resized.after.nutrition.kcal,60);
+ assert.equal(inventoryWithMoves(resized.next)[0].qty,100);
+ const moved=reviseFoodPortion(resized.next,{id:row.id,date,newMeal:'晚餐'});
+ assert.equal(moved.after.meal,'晚餐');
+ assert.deepEqual(moved.after.nutrition,resized.after.nutrition);
+ assert.deepEqual(moved.next.local.stockMoves,resized.next.local.stockMoves);
+ assert.equal(moved.next.local.foods.length,1);
+});
+
+test('gross readings preserve the measured 480 g consumed and 600 g remaining for milk inventoried in mL',()=>{
+ const state=newState(),weighing={before:1080,after:600,tare:null};
+ const sku=saveSku(state,{name:'合成牛奶',unit:'mL',basisUnit:'mL',basisAmount:100,kcal:60});
+ sku.qty=1000;
+ const sample={...part,sku:sku.id,name:sku.name,action:'eat',amount:480,unit:'g',weighing};
+ const weighed=confirmItems(state,[sample],date,'晚餐');
+ const row=weighed.local.foods[0];
+ assert.equal(row.portion,'480 g');
+ assert.deepEqual(row.weighing,weighing);
+ assert.equal(row.nutrition.kcal,null);
+ assert.equal(remainingGrossWeights(weighed).get(sku.id),600);
+ assert.equal(inventoryWithMoves(weighed)[0].qty,1000);
+ const revised=reviseFoodPortion(weighed,{id:row.id,date,weighing:{before:1080,after:650,tare:null}});
+ assert.equal(revised.after.portion,'430 g');
+ assert.equal(remainingGrossWeights(revised.next).get(sku.id),650);
+ sku.densityGramsPerMl=1.2;
+ const convertible=confirmItems(state,[sample],date,'晚餐');
+ assert.equal(convertible.local.foods[0].nutrition.kcal,240);
+ assert.equal(inventoryWithMoves(convertible)[0].qty,600);
+});
+
+test('automatic memory uses the current message as evidence and safely upserts longitudinal preferences',()=>{
+ const values=new Map();
+ const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
+ const memory=memoryLibrary(storage),source='我平时吃牛肉酱喜欢少放一点。';
+ const update={name:'牛肉酱口味',text:'吃牛肉酱时优先少放一点。',evidence:'我平时吃牛肉酱喜欢少放一点'};
+ const input={mode:'chat',text:source,date,photo:null,history:[]};
+ const options={allowRead:true,autoMemory:true};
+ assert.ok(modelRequest(input,options).text.format.schema.required.includes('memoryUpdates'));
+ assert.ok(!modelRequest(input,{autoMemory:true}).text.format.schema.required.includes('memoryUpdates'));
+ const proposal={reply:'配餐时可以按你平常的量。',proposal:null,memoryUpdates:[update]};
+ const answer={status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(proposal)}]}]};
+ assert.equal(parseResult(answer,input,options).memoryUpdates[0].name,update.name);
+ assert.throws(()=>parseResult(answer,input,{allowRead:true}));
+ assert.deepEqual(memory.rememberFromTurn([update],'我今天吃了牛肉酱。'),[]);
+ assert.deepEqual(memory.rememberFromTurn([update],source),[update.name]);
+ assert.deepEqual(memory.rememberFromTurn([update],source),[]);
+ const id=memory.list()[0].id;
+ const later='现在我平时喜欢牛肉酱放两勺。';
+ const newPreference={...update,text:'牛肉酱优先放两勺。',evidence:later};
+ assert.deepEqual(memory.rememberFromTurn([newPreference],later),[update.name]);
+ assert.equal(memory.list()[0].id,id);
+ assert.equal(memory.list()[0].text,newPreference.text);
+ assert.deepEqual(memory.rememberFromTurn([update],source+'不过别记这条。'),[]);
+ setAutomaticMemory(storage,false);
+ assert.deepEqual(memory.rememberFromTurn([update],source),[]);
+ assert.deepEqual(memoryLibrary(storage).list().map(m=>m.text),[newPreference.text]);
+});
+
+test('sauce used from a bottle preserves fractional gram precision, bottle count and observed gross remainder',()=>{
+ const state=newState();
+ const sauce=saveSku(state,{name:'合成牛肉酱',unit:'瓶',basisUnit:'g',basisAmount:100,kcal:200,sodium:800});
+ sauce.qty=1;
+ const candidate={...part,sku:sauce.id,name:sauce.name,action:'eat',amount:1,unit:'g',
+  packageSize:360,packageUnit:'g',weighing:{before:360,after:322.2,tare:null}};
+ const next=confirmItems(state,[candidate],date,'晚餐','18:00');
+ const saved=next.local.foods[0];
+ assert.equal(saved.portion,'37.8 g');
+ assert.equal(saved.nutrition.kcal,75.6);
+ assert.equal(saved.nutrition.sodium,302.4);
+ assert.equal(inventoryWithMoves(next)[0].qty,1);
+ assert.equal(remainingGrossWeights(next).get(sauce.id),322.2);
+ const corrected=reviseFoodPortion(next,{date,id:saved.id,weighing:{before:360,after:324.2,tare:null}});
+ assert.equal(corrected.after.portion,'35.8 g');
+ assert.equal(remainingGrossWeights(corrected.next).get(sauce.id),324.2);
+ assert.equal(corrected.next.local.foods.length,1);
 });

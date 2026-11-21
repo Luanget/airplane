@@ -55,6 +55,15 @@ export async function recordUsage(response,model){
 }
 
 export function totalUsage(){return usageTransaction('readonly',()=>{});}
+export async function replaceUsage(expected,value){
+ let changed=false;
+ await usageTransaction('readwrite',(store,total)=>{
+  if(total!==(expected??0))return;
+  if(value===null)store.delete('total');else store.put(value,'total');
+  changed=true;
+ });
+ if(!changed)throw Error('用量记录已变更，请重新读取');
+}
 
 export function displayUsage(cost){
  if(cost===null)return '';

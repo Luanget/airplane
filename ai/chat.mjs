@@ -6,16 +6,16 @@ import {validInput} from '../health/contract.mjs';
 import {healthReview,jpeg} from '../health/assistant.mjs';
 import {recognize,mountKeyForm,readDeviceKey} from './client.mjs';
 import {financeReview} from './finance.mjs';
-import {chatInstructions} from './responses.mjs';
 import {localWorkspace,readLedger,readLabels,expenseGroupLabels} from './workspace.mjs';
-import {foodEditReview,inventoryReview,portionReview,skillReview} from './operations.mjs';
-import {mountSkillSettings} from './skills.mjs';
+import {foodEditReview,inventoryReview,portionReview} from './operations.mjs';
+import {automaticMemoryEnabled,mountMemorySettings,setAutomaticMemory} from './memory.mjs';
 import {mountModelSettings,readChatModel} from './models.mjs';
 import {threadBook} from './threads.mjs';
 import {demoWorkspace} from './demo.mjs';
 import {batchReview} from './batch.mjs';
 import {contextFor,HISTORY_OPTIONS,readHistoryOption,saveHistoryOption} from './context.mjs';
 import {appDataReview,readAppData} from './data.mjs';
+import {hasDocumentAccess,prepareDocumentEdit,readAppDocument,setDocumentAccess} from './documents.mjs';
 import {deleteReview} from './deletion.mjs';
 import {displayUsage,totalUsage} from './usage.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
@@ -37,8 +37,23 @@ const keyPanel=$('#assistant-key-panel'),settings=$('#assistant-settings-sheet')
 let busy=false,saving=false,activeRequest=null,deletingThread=null,followUp=null,photoRun=null,photoBatch=null;
 
 hydrateShell();
+const automaticMemory=$('[data-automatic-memory]');
+automaticMemory.checked=automaticMemoryEnabled(workspace.finance);
+automaticMemory.onchange=()=>{
+ try{setAutomaticMemory(workspace.finance,automaticMemory.checked);}
+ catch(err){automaticMemory.checked=automaticMemoryEnabled(workspace.finance);report(err);}
+};
+const documentAccess=$('[data-document-access]');
+documentAccess.checked=hasDocumentAccess(workspace.finance);
+documentAccess.onchange=()=>{
+ try{setDocumentAccess(workspace.finance,documentAccess.checked);}
+ catch(err){documentAccess.checked=hasDocumentAccess(workspace.finance);report(err);}
+};
 const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
-$('#assistant-settings').onclick=()=>{settings.showModal();refreshModels();refreshSkills();void refreshUsage();};
+$('#assistant-settings').onclick=()=>{settings.showModal();
+ automaticMemory.checked=automaticMemoryEnabled(workspace.finance);
+ documentAccess.checked=hasDocumentAccess(workspace.finance);
+ refreshModels();refreshMemory();void refreshUsage();};
 async function refreshUsage(){
  if(demo)return;
  const node=$('[data-local-usage]');
@@ -106,7 +121,8 @@ async function requestReply(input,options,savePartial=()=>{}){
  const controller=new AbortController();
  activeRequest=controller;stop.hidden=false;stop.disabled=false;
  try{
-  const result=await respond(input,{...options,signal:controller.signal,onReply,onTool});
+  const result=await respond(input,{...options,documentAccess:options.documentAccess&&hasDocumentAccess(workspace.finance),
+   autoMemory:options.autoMemory&&automaticMemoryEnabled(workspace.finance),signal:controller.signal,onReply,onTool});
   if(demo&&result.reply){
    let text='';
    for(const part of result.reply.match(/[\s\S]{1,3}/gu)??[]){
@@ -132,10 +148,9 @@ function updateContext(){
  const {history:turns,summary,compact}=contextFor(book.current,budget);
  [...historyOptions.children].forEach((button,index)=>button.setAttribute('aria-pressed',String(budget===HISTORY_OPTIONS[index])));
  const chars=turns.reduce((n,row)=>n+row.text.length,0);
- const skills=workspace.skills.active();
  $('[data-context-size]').textContent='历史 '+turns.length+' 条 · '+chars+'/'+budget.chars+' 字'+
-  (summary?' · 已压缩 '+summary.length+' 字':'')+' · '+skills.length+' 个 Skill';
- return {turns,summary,compact,skills};
+  (summary?' · 已压缩 '+summary.length+' 字':'');
+ return {turns,summary,compact};
 }
 async function prepareContext(date,model){
  const current=updateContext();
@@ -244,8 +259,8 @@ function append(role,text,carry=true,source){
 }
 function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;delete review.dataset.syncPending;}
 function clearFollowUp(){followUp=null;retryFollowUp.hidden=true;}
-function sessionFlow({input,options}){
- return {input:{...input,history:[],photo:null},options:{...options,skills:undefined,contextSummary:undefined},steps:[]};
+function sessionFlow({id,input,options}){
+ return {id,input:{...input,history:[],photo:null},options:{...options,memory:undefined,contextSummary:undefined},steps:[]};
 }
 function checkpoint(save){
  let text='',timer;
@@ -298,11 +313,16 @@ function showPending(){
  if(pending.partial)bubble('assistant',pending.partial);
  tell(pending.partial?'上次回复中断，已保留收到的部分。':'上次消息已保留，可以重试。');
 }
-function renderThread(){
+function renderThread(previousPhotos){
  const current=book.current;
  renderTranscript();photoResults.replaceChildren();
  clearReview();clearFollowUp();clearComposer();
- photoBatch=null;if(current?.photos)renderPhotoBatch(current.photos);
+ photoBatch=null;
+ if(current?.photos){
+  const files=current.photos.id===previousPhotos?.id?
+   current.photos.jobs.map(job=>previousPhotos.jobs.find(old=>old.index===job.index)?.file):[];
+  renderPhotoBatch(current.photos,files);
+ }
  showPending();
  restoreReview.hidden=!current?.review;
  if(current?.followUp){
@@ -311,8 +331,7 @@ function renderThread(){
  }
  syncThreads();updateContext();lock();
 }
-$('#assistant-skill pre').textContent=chatInstructions;
-const refreshSkills=mountSkillSettings($('#assistant-skill'),workspace.skills,updateContext,mergeDefault);
+const refreshMemory=mountMemorySettings($('#assistant-memory'),workspace.memory,updateContext);
 renderThread();
 newChat.onclick=()=>{
  try{book.start();openHistory(false);tell('');renderThread();}
@@ -336,68 +355,152 @@ for(const button of document.querySelectorAll('[data-example]')){
  };
 }
 
-async function makeReview(proposal,flow,photoJob){
+function directWrite(response,flow){
+ return response.saveMode==='save'&&!!response.proposal&&!!flow.input.text.trim()&&
+  flow.options.allowRead&&flow.options.documentAccess;
+}
+async function makeReview(proposal,flow,photoJob,direct=false){
  clearReview();if(!proposal)return;
+ const panel=direct?document.createElement('form'):review;
  if(photoJob){
   const label=document.createElement('p');
-  label.className='photo-review-title';label.textContent=photoJob.label;review.append(label);
+  label.className='photo-review-title';label.textContent=photoJob.label;panel.append(label);
  }
  const {mode,result}=proposal,today=flow.input.date;
+ const editsConversation=mode==='document_edit'&&result.document==='conversations';
  const willContinue=mode==='batch'&&result.next==='continue';
  let confirm,label;
  if(mode==='batch'){
-  confirm=await batchReview(review,result,workspace,today,book.current?.foodDate);
+  confirm=await batchReview(panel,result,workspace,today,book.current?.foodDate);
   label=willContinue?'确认全部并继续':'确认全部';
+ }else if(mode==='document_edit'){
+  const activeId=book.current?.id,batchId=photoBatch?.id;
+  const draft=await prepareDocumentEdit(workspace,result,editsConversation?(next,message)=>{
+   const row=next?.threads?.find(thread=>thread?.id===activeId);
+   if(!row)return;
+   const same=proposal=>proposal?.mode==='document_edit'&&proposal.result?.patch===result.patch;
+   if(!photoJob&&same(row.review?.proposal))row.review=null;
+   if(photoJob&&row.photos?.id===batchId){
+    const job=row.photos.jobs.find(item=>item.index===photoJob.index);
+    if(!same(job?.proposal))return;
+    job.proposal=null;job.stage='settled';job.reply+='\n'+message;
+    const summaryLine=row.messages[row.photos.summaryIndex];
+    const previousSummary=row.photos.summary;
+    row.photos.summary=photoSummary(row.photos.jobs);
+    if(summaryLine?.text===previousSummary)summaryLine.text=row.photos.summary;
+   }
+  }:undefined);
+  const title=document.createElement('p');
+  title.textContent='原始数据 · '+draft.name;
+  const details=document.createElement('details');details.className='assistant-prompt document-review';
+  const summary=document.createElement('summary');
+  summary.textContent='查看 '+draft.operations.filter(row=>row.op!=='test').length+' 项修改';
+  const patch=document.createElement('pre');patch.textContent=JSON.stringify(draft.operations,null,2);
+  details.append(summary,patch);panel.append(title,details);
+  confirm=async()=>{
+   const message=await draft.save();
+   if(editsConversation){
+    const previousPhotos=photoBatch;
+    book.reload();renderThread(previousPhotos);
+   }
+   if(result.document==='memory')refreshMemory();
+   if(result.document==='model')refreshModels();
+   if(result.document==='history')updateContext();
+   if(result.document==='local_usage')void refreshUsage();
+   return direct&&message.endsWith('已保存。')?message+' '+draft.operations.filter(row=>row.op!=='test')
+    .map(row=>({add:'新增',replace:'替换',remove:'删除'}[row.op])+' '+(row.path||'整份文档')).join('、')+'。':message;
+  };
+  label='确认保存原始数据';
  }else if(mode==='app_data_edit'){
-  const apply=await appDataReview(review,workspace,book,result,today);
+  const apply=await appDataReview(panel,workspace,book,result,today);
   confirm=async()=>{
    const message=await apply();
-   if(result.dataset==='conversations')renderThread();
    if(result.dataset==='assistant_settings'){refreshModels();updateContext();}
-   if(['skills','skill_folders'].includes(result.dataset))refreshSkills();
+   if(result.dataset==='memory')refreshMemory();
    return message;
   };
   label=result.action==='delete'?'确认撤销或删除':'确认更新';
  }else if(mode==='delete_record'){
-  confirm=await deleteReview(review,proposal,workspace,today,book.current?.foodDate);
+  confirm=await deleteReview(panel,proposal,workspace,today,book.current?.foodDate,direct);
   label='确认删除';
  }else if(mode==='finance'){
-  confirm=financeReview(review,result.entry,today,workspace.finance);
+  confirm=financeReview(panel,result.entry,today,workspace.finance,direct);
   label='确认记账';
- }else if(mode==='skill'){
-  const merge=flow.options.skillMerge;
-  const read=skillReview(review,workspace.skills.list(),result,merge?.id);
-  label='确认更新 Skill';
-  confirm=()=>{
-   const {changes,current}=read();
-   if(merge)workspace.skills.resolveDefault(merge,changes.text);
-   else workspace.skills.save(changes,current);
-   refreshSkills();
-   return current?'Skill 已更新。':'Skill 已新增并启用。';
-  };
  }else{
   const current=await workspace.readHealth();
   let draft;
   if(mode==='inventory'){
-   const apply=inventoryReview(review,proposal,current,today);
+   const apply=inventoryReview(panel,proposal,current,today);
    draft=result.operation==='shopping'?
     {apply,label:'确认加入补货清单',saved:'补货清单已更新。'}:
     {apply,label:'确认盘点',saved:'库存已按盘点结果更新。'};
-  }else if(mode==='food_edit')draft=foodEditReview(review,proposal,current,today,book.current?.foodDate);
-  else if(mode==='portions')draft=portionReview(review,proposal,current,today);
-  else draft=healthReview(review,proposal,current,today);
+  }else if(mode==='food_edit')draft=foodEditReview(panel,proposal,current,today,book.current?.foodDate);
+  else if(mode==='portions')draft=portionReview(panel,proposal,current,today);
+  else draft=healthReview(panel,proposal,current,today);
   if(draft){
    label=draft.label;
    confirm=async()=>{
-    await workspace.saveHealth(draft.apply(current),current.revision??0);
-    return draft.saved;
+    const next=draft.apply(current);
+    const message=direct&&draft.receipt?draft.receipt(current,next):draft.saved;
+    await workspace.saveHealth(next,current.revision??0);
+    return message;
    };
   }
  }
  if(!confirm){
+  if(direct)throw Error('缺少可以保存的记录，请补充信息。');
   if(photoJob)settlePhoto(photoJob,'此照片没有可保存的记录。');
   return;
  }
+
+ async function save(continueRequested){
+  if(direct&&!hasDocumentAccess(workspace.finance))throw Error('完整数据权限已关闭。');
+  const operations=mode==='batch'?result.operations:[proposal];
+  const fingerprints=operations.map(operation=>JSON.stringify(operation));
+  const previouslySaved=flow.options.savedOperations??[];
+  if(direct&&fingerprints.some(item=>previouslySaved.includes(item)))throw Error('检测到本轮已经保存的操作，请检查账本后再继续。');
+  if(!photoJob&&!editsConversation&&book.current?.review)book.setReview({...book.current.review,applying:true});
+  if(photoJob&&!editsConversation){photoJob.stage='applying';savePhotoBatch();}
+  let message;
+  try{message=await confirm();}
+  catch(err){
+   if(direct&&err instanceof AssistantSyncPending){
+    await resumePurchaseUpdate(workspace.account);
+    message='财务与健康账本已同步。';
+   }else{
+    if(photoJob&&!editsConversation){photoJob.stage='done';savePhotoBatch();}
+    else if(book.current?.review?.applying)book.setReview({...book.current.review,applying:false});
+    throw err;
+   }
+  }
+  if(editsConversation){
+   if(!direct||!book.current)tell(message);
+  }
+  else if(photoJob)settlePhoto(photoJob,message);
+  else book.setReview(null);
+  if(mode==='app_data_edit'&&result.dataset==='conversations')renderThread(photoBatch);
+  restoreReview.hidden=true;clearReview();
+  if(!editsConversation){
+   if(mode==='app_data_edit'&&result.dataset==='conversations'&&!book.current)tell(message);
+   else if(!photoJob||direct)append('assistant',photoJob?'照片 '+photoJob.index+' · '+message:message,false);
+  }else if(direct&&book.current){
+   append('assistant',photoJob?'照片 '+photoJob.index+' · '+message:message,false);
+  }
+  if(continueRequested&&book.current){
+   followUp={
+    id:crypto.randomUUID(),input:{...flow.input,date:localDate(),text:flow.input.text||'继续完成刚才照片中的请求。',history:[],photo:null},
+    options:{...flow.options,contextSummary:'',applied:[...(flow.options.applied??[]),...operations.map(operation=>operation.mode)],
+     savedOperations:[...previouslySaved,...fingerprints]},
+    steps:[]
+   };
+   book.setFollowUp(sessionFlow(followUp));
+  }
+ }
+ if(direct){
+  await save(willContinue);
+  return;
+ }
+
  const actions=document.createElement('div');actions.className='chat-actions';
  const apply=document.createElement('button');apply.type='submit';apply.className='primary-button';apply.textContent=label;
  if(mode==='delete_record'||mode==='app_data_edit'&&result.action==='delete')apply.classList.add('delete-apply');
@@ -405,6 +508,7 @@ async function makeReview(proposal,flow,photoJob){
  discard.onclick=()=>{
   if(photoJob)settlePhoto(photoJob,'已放弃候选。');
   else book.setReview(null);
+  if(mode==='app_data_edit'&&result.dataset==='conversations')renderThread(photoBatch);
   restoreReview.hidden=true;clearReview();
  };
  actions.append(discard);
@@ -420,28 +524,8 @@ async function makeReview(proposal,flow,photoJob){
   e.preventDefault();if(saving||busy)return;
   if(review.dataset.syncPending!=='yes')continuationApproved=willContinue&&e.submitter===apply;
   saving=true;lock();out.textContent='';
-  let resume=false;
-  try{
-   if(!photoJob&&book.current?.review)book.setReview({...book.current.review,applying:true});
-   if(photoJob){photoJob.stage='applying';savePhotoBatch();}
-   const message=await confirm();
-   if(photoJob)settlePhoto(photoJob,message);
-   else book.setReview(null);
-   restoreReview.hidden=true;clearReview();
-   if(mode==='app_data_edit'&&result.dataset==='conversations'&&!book.current)tell(message);
-   else append('assistant',message,false);
-   if(continuationApproved){
-    followUp={
-     input:{...flow.input,date:localDate(),text:flow.input.text||'继续完成刚才照片中的请求。',history:[],photo:null},
-     options:{...flow.options,contextSummary:'',applied:result.operations.map(operation=>operation.mode)},
-     steps:[]
-    };
-    book.setFollowUp(sessionFlow(followUp));
-    resume=true;
-   }
-  }catch(err){
-   if(photoJob){photoJob.stage='done';savePhotoBatch();}
-   else if(book.current?.review?.applying)book.setReview({...book.current.review,applying:false});
+  try{await save(continuationApproved);}
+  catch(err){
    out.textContent=err.message;
    if(err instanceof AssistantSyncPending){
     review.dataset.syncPending='yes';apply.textContent='继续同步';discard.hidden=true;
@@ -449,18 +533,29 @@ async function makeReview(proposal,flow,photoJob){
    }
   }
   finally{saving=false;lock();}
-  if(resume)await continueAfterSave();
+  if(continuationApproved)await continueAfterSave();
  };
  for(const select of review.querySelectorAll('select'))select.dataset.picker='';
  syncChoiceFields(review);
  review.hidden=false;
- const contextAbove=mode==='plan'||mode==='skill'?10:88;
+ const contextAbove=mode==='plan'?10:88;
  thread.scrollTop=Math.max(0,thread.scrollTop+review.getBoundingClientRect().top-thread.getBoundingClientRect().top-contextAbove);
 }
 
+function rememberAutomatically(response,flow){
+ if(!flow.options.autoMemory||!flow.options.allowRead||!response.memoryUpdates?.length)return;
+ const {mode,result}=response.proposal??{};
+ if(['app_data_edit','document_edit'].includes(mode)&&(result.dataset??result.document)==='memory')return;
+ let names;
+ try{names=workspace.memory.rememberFromTurn(response.memoryUpdates,flow.input.text);}
+ catch(err){tell('自动记忆未保存。'+err.message);return;}
+ if(names.length){
+  refreshMemory();
+  append('assistant','已记住 '+names.map(name=>'「'+name+'」').join('、')+'。',false);
+ }
+}
 async function complete(response,flow,source,ticket){
  clearReview();tell('');
- if(flow.options.skillMerge&&response.proposal?.mode!=='skill')throw Error('没有收到可核对的融合结果');
  const candidate=response.proposal?{proposal:response.proposal,flow:sessionFlow(flow)}:null;
  if(ticket){
   if(!book.finish(ticket,response.reply,source,candidate))return;
@@ -469,8 +564,16 @@ async function complete(response,flow,source,ticket){
   append('assistant',response.reply,!source,source);book.setReview(candidate);
  }
  retryRequest.hidden=true;restoreReview.hidden=true;
- try{await makeReview(response.proposal,flow);}
- catch(err){clearReview();report(err);}
+ const direct=directWrite(response,flow);
+ try{await makeReview(response.proposal,flow,undefined,direct);}
+ catch(err){
+  clearReview();
+  if(direct){
+   if(book.current?.review&&!book.current.review.applying)book.setReview(null);
+   append('assistant',err instanceof AssistantSyncPending?err.message:'无法完成本轮写入。'+err.message,false);
+  }else report(err);
+ }
+ rememberAutomatically(response,flow);
 }
 function describeSummary(scope,summary){
  if(scope==='app_data')return JSON.stringify(summary,null,2);
@@ -539,6 +642,8 @@ function describeSummary(scope,summary){
 }
 function querySource(steps){
  if(!steps.length)return null;
+ if(steps.every(step=>step.scope==='app_document'))return null;
+ steps=steps.filter(step=>step.scope!=='app_document');
  const first=steps[0];
  const label=steps.length>1?'查看本轮 '+steps.length+' 次查询的数据':
   first.scope==='foods'?'查看本次饮食记录 · '+first.summary.foods.length+' 条':'查看本次查询数据';
@@ -553,9 +658,13 @@ async function resolveResponse(response,flow,savePartial){
    const key=JSON.stringify(Object.entries(args).sort(([a],[b])=>a.localeCompare(b)));
    if(queried.has(key))throw Error('助手重复查询同一范围，请重试或缩小问题。');
    queried.add(key);
-   tell('正在查询'+readLabels[args.scope]+'…');
-   const summary=args.scope==='app_data'?await readAppData(workspace,book,args):
-    await readLedger(workspace,args,input.date);
+   tell(args.scope==='app_document'?'正在查询指定的原始数据…':'正在查询'+readLabels[args.scope]+'…');
+   let summary;
+   if(args.scope==='app_document'){
+    if(!options.documentAccess)throw Error('本轮未开启完整数据权限');
+    summary=await readAppDocument(workspace,args);
+   }else if(args.scope==='app_data')summary=await readAppData(workspace,book,args);
+   else summary=await readLedger(workspace,args,input.date);
    steps.push({item,summary,scope:args.scope});
    response=await requestReply(input,{...options,continuation:steps},savePartial);
    if(args.scope==='foods')try{book.setFoodDate(summary.date);}catch{}
@@ -566,26 +675,35 @@ async function showResponse(response,flow,ticket,savePartial){
  const resolved=await resolveResponse(response,flow,savePartial);
  await complete(resolved,flow,querySource(flow.steps),ticket);
 }
+async function runFollowUp(){
+ while(followUp){
+  const next=followUp;
+  retryFollowUp.hidden=true;
+  tell('账本已保存，正在继续本轮…');
+  renderTranscript();
+  const saved=checkpoint(text=>{
+   if(followUp!==next&&(!next.id||followUp?.id!==next.id))return;
+   next.partial=text;book.setFollowUp({...sessionFlow(next),partial:text});
+  });
+  try{
+   const flow={...next,options:{...next.options,memory:memoriesFor(next.input,next.options.allowRead)},steps:[]};
+   const response=await requestReply(flow.input,flow.options,saved.update);
+   await showResponse(response,flow,undefined,saved.update);
+   if(followUp===next||next.id&&followUp?.id===next.id){clearFollowUp();book.setFollowUp(null);}
+  }catch(err){
+   saved.stop();
+   if(next.partial)bubble('assistant',next.partial);
+   tell('账本已保存。'+err.message);
+   retryFollowUp.hidden=false;
+   break;
+  }finally{saved.stop();}
+ }
+}
 async function continueAfterSave(){
  if(!followUp||busy||saving)return;
- busy=true;retryFollowUp.hidden=true;lock();
- tell('账本已保存，正在继续本轮…');
- renderTranscript();
- const saved=checkpoint(text=>{
-  if(!followUp)return;
-  followUp.partial=text;book.setFollowUp({...sessionFlow(followUp),partial:text});
- });
- try{
-  const flow={...followUp,options:{skills:workspace.skills.active(),...followUp.options},steps:[]};
-  const response=await requestReply(flow.input,flow.options,saved.update);
-  await showResponse(response,flow,undefined,saved.update);
-  clearFollowUp();book.setFollowUp(null);
- }catch(err){
-  saved.stop();
-  if(followUp?.partial)bubble('assistant',followUp.partial);
-  tell('账本已保存。'+err.message);
-  retryFollowUp.hidden=false;
- }finally{saved.stop();busy=false;lock();}
+ busy=true;lock();
+ try{await runFollowUp();}
+ finally{busy=false;lock();}
 }
 retryFollowUp.onclick=continueAfterSave;
 function photoSummary(jobs){
@@ -634,8 +752,11 @@ async function recognizePhotos(jobs,flow,total){
  const run={stopped:false};
  photoRun=run;stop.textContent='停止本组识别';
  try{
-  for(const job of jobs){
-   if(run.stopped)break;
+  const batchId=photoBatch?.id;
+  for(const index of jobs.map(job=>job.index)){
+   if(run.stopped||photoBatch?.id!==batchId)break;
+   const job=photoBatch?.jobs.find(item=>item.index===index);
+   if(!job?.file)continue;
    showPhoto(job,'识别中…');
    tell('正在识别照片 '+job.index+' / '+total+'…');
    stop.hidden=false;stop.disabled=false;
@@ -649,6 +770,18 @@ async function recognizePhotos(jobs,flow,total){
     const source=querySource(steps);
     remember('assistant','照片 '+job.index+'\n'+reply.reply,!source,source);
     showPhoto(job,reply.reply,job.proposal?'核对':'');
+    if(index===1)rememberAutomatically(reply,{input,options});
+    if(directWrite(reply,{input,options})){
+     savePhotoBatch();
+     try{
+      await makeReview(job.proposal,{input,options,steps},job,true);
+      await runFollowUp();
+     }catch(err){
+      if(job.stage==='applying'){
+       showPhoto(job,job.reply+'\n'+err.message);
+      }else settlePhoto(job,'无法完成写入。'+err.message);
+     }
+    }
    }catch(err){
     saved.stop();
     const reason=run.stopped?'识别已停止。':err.name==='EncodingError'?'无法读取这张照片，请重新选择。':err.message;
@@ -681,7 +814,7 @@ function renderPhotoBatch(batch,files=[]){
    if(busy||saving)return;
    busy=true;lock();
    try{
-    const flow={...batch.flow,options:{skills:workspace.skills.active(),...batch.flow.options}};
+    const flow={...batch.flow,options:{...batch.flow.options,memory:memoriesFor(batch.flow.input,batch.flow.options.allowRead)}};
     if(job.file)await recognizePhotos([job],flow,jobs.length);
     else await makeReview(job.proposal,flow,job);
    }catch(err){clearReview();report(err);}
@@ -722,7 +855,7 @@ async function sendMessage(input,options,files){
  const previous=book.current?.pending?.request;
  const hasPhoto=!!input.photo;
  const reuse=previous?.text===input.text&&previous.hasPhoto===hasPhoto;
- const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto,skillMerge:options.skillMerge},reuse);
+ const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto},reuse);
  const saved=checkpoint(text=>book.checkpoint(ticket,text));
  clearReview();restoreReview.hidden=true;retryRequest.hidden=true;photoResults.replaceChildren();
  renderTranscript();syncThreads();
@@ -730,6 +863,8 @@ async function sendMessage(input,options,files){
  try{
   const response=await requestReply(input,options,saved.update);
   await showResponse(response,{input,options,steps:[]},ticket,saved.update);
+  saved.stop();
+  await runFollowUp();
   clearComposer();
  }catch(err){
   saved.stop();
@@ -757,16 +892,11 @@ restoreReview.onclick=async()=>{
  catch(err){clearReview();report(err);}
  finally{busy=false;lock();}
 };
-async function mergeDefault(info){
- if(!info||busy||saving)return;
- busy=true;lock();
- try{
-  if(!demo&&!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
-  settings.close();
-  const input={mode:'chat',text:'融合新版 Skill：'+info.name,photo:null,date:localDate(),history:[]};
-  await sendMessage(input,{model:readChatModel(workspace.finance).id,allowRead:false,skillMerge:info},[]);
- }catch(err){report(err);}
- finally{busy=false;lock();}
+function memoriesFor(input,allowRead){
+ if(!allowRead)return [];
+ const previous=input.history.filter(message=>message.role==='user').at(-1)?.text;
+ const cue=/^(?:把)?(?:这条|那条|刚才|上面|继续|然后)/.test(input.text)?previous:'';
+ return workspace.memory.relevant([input.text,cue].filter(Boolean).join(' '));
 }
 composer.onsubmit=async e=>{
  e.preventDefault();if(busy||saving)return;
@@ -779,14 +909,15 @@ composer.onsubmit=async e=>{
    if(!await readDeviceKey()){revealKeySettings();tell('请先导入 API Key');return;}
   }
   const pending=book.current?.pending?.request;
-  const retry=pending?.text===text,skillMerge=retry?pending.skillMerge:undefined;
+  const retry=pending?.text===text;
   const photo=files.length===1?await jpeg(files[0]):null,date=(retry?pending.date:null)??localDate();
   const model=readChatModel(workspace.finance).id;
-  const {turns,skills,summary}=await prepareContext(date,model);
-  const history=skillMerge?[]:retry&&turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
+  const {turns,summary}=await prepareContext(date,model);
+  const history=retry&&turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
   const input={mode:'chat',text,photo,date,history};
-  const options=skillMerge?{model,allowRead:false,skillMerge}:
-   {model,skills,contextSummary:summary,allowRead:composer.elements.allowRead.checked};
+  const allowRead=composer.elements.allowRead.checked;
+  const options={model,contextSummary:summary,allowRead,memory:memoriesFor(input,allowRead),
+   documentAccess:hasDocumentAccess(workspace.finance),autoMemory:automaticMemoryEnabled(workspace.finance)};
   if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
  }catch(err){report(err);}

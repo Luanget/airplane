@@ -2,7 +2,7 @@ import {localClock,syncCalendarFields} from '../calendar.mjs';
 import {addConfirmedTransactions,freshData,readFinance,replaceFinance} from '../finance-storage.mjs';
 import {validFinanceEntry} from '../health/contract.mjs';
 
-export function financeReview(container,entry,today,store=localStorage){
+export function financeReview(container,entry,today,store=localStorage,direct=false){
  if(!entry)return null;
  const {primary,payload}=readFinance(store);
  const read=financeFields(container,entry,today,payload??freshData());
@@ -10,9 +10,11 @@ export function financeReview(container,entry,today,store=localStorage){
   const current=readFinance(store);
   if(current.primary!==primary)throw Error('账本已变更，请重新生成候选');
   const next=current.payload??freshData();
-  addConfirmedTransactions(next,[read()]);
+  const saved=read();
+  addConfirmedTransactions(next,[saved]);
   replaceFinance(store,next,primary);
-  return '财务记录已保存。';
+  return direct?'已记录'+(saved.type==='income'?'收入':'支出')+' ¥'+saved.amount.toFixed(2)+' · '+saved.categoryName+
+   (saved.note?' · '+saved.note:'')+'（'+saved.date+'）。':'财务记录已保存。';
  };
 }
 export function financeFields(container,entry,today,ledger){
@@ -44,8 +46,9 @@ export function financeFields(container,entry,today,ledger){
  function applyType(){
   const options=categories.filter(c=>c.type===type.value);
   category.replaceChildren(new Option('请选择分类',''),...options.map(c=>new Option(c.name,c.id)));
-  const match=options.find(c=>c.name===entry.categoryId||c.id===entry.categoryId);
-  if(match)category.value=match.id;
+  const exactId=options.find(c=>c.id===entry.categoryId);
+  const names=options.filter(c=>c.name===entry.categoryId);
+  if(exactId||names.length===1)category.value=(exactId??names[0]).id;
   applyBudget();
  }
  applyType();type.onchange=applyType;category.onchange=applyBudget;syncCalendarFields(container);

@@ -1,3 +1,4 @@
+import {remainingGrossWeights} from './food-history.mjs';
 import {bindDayPicker,displayDay,localDate as dateNow,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
 import {attachShopping} from './shopping.mjs';
 import {attachPurchases} from './purchase-ui.mjs';
@@ -244,13 +245,14 @@ function renderInventory(){
  if(inlineStock)inlineStock.home.append(inlineStock.form);
  const filter=$('inventory-search').value.trim().toLowerCase(),stock=inventoryWithMoves(state);
  const list=stock.filter(i=>i.active&&i.qty!==0&&!isStockReference(i)&&(i.name.toLowerCase().includes(filter)||i.id.toLowerCase().includes(filter)));
+ const gross=remainingGrossWeights(state);
  const groups=stockGroups(list),known=groups.filter(g=>g.rows.some(i=>i.qty!==null)),unknown=groups.filter(g=>g.rows.every(i=>i.qty===null));
  const batches=batchBalances(state), byId=new Map(stock.map(s=>[s.id,s]));
  function renderGroups(entries){
   const button=(row,label,secondary='')=>{
    const portions=batches.filter(batch=>batch.foodId===row.id&&batch.remaining>0&&(batch.portion||batch.parent));
    return `<div class="stock-item" data-stock-id="${E(row.id)}"><button type="button" class="inventory-food" data-stock-expand aria-expanded="false" aria-label="${E(label)}">
-    <span class="stock-name"><strong>${E(label)}</strong>${secondary?`<small>${E(secondary)}</small>`:''}</span>
+    <span class="stock-name"><strong>${E(label)}</strong>${secondary?`<small>${E(secondary)}</small>`:''}${gross.has(row.id)?`<small>${row.unit==='瓶'?'已开封 · 剩余':'实称剩余'} ${fmt(gross.get(row.id),1)} g（${row.unit==='瓶'?'含瓶':'含包装'}）</small>`:''}</span>
     <span class="stock-qty ${row.qty<0?'low':''}">${row.qty===null?'数量未知':fmtStock(row)}</span></button>
     <div class="stock-actions" hidden>
      ${portions.length?`<p>${portions.map(batch=>fmtStock(row,batch.remaining)).join(' · ')}</p>`:''}

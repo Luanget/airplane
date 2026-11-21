@@ -2,16 +2,16 @@ import {readState,saveState} from '../health/storage.mjs';
 import {readFinance} from '../finance-storage.mjs';
 import {currentBalanceFor,monthlyMetrics} from '../finance-metrics.mjs';
 import {batchBalances,currentCarbReference,cycleForDate,dayIntake,energyForDay,inventoryWithMoves,isStockReference,round,validDate,weightTrend} from '../health/core.mjs';
-import {summarizeFoodHistory} from '../health/food-history.mjs';
+import {remainingGrossWeights,summarizeFoodHistory} from '../health/food-history.mjs';
 import {expenseSummaryReadSchema,foodHistoryReadSchema,ledgerReadSchema,matches} from '../health/contract.mjs';
 import {displayStockQuantity,stockAlerts,stockMeasure} from '../health/inventory.mjs';
-import {skillLibrary} from './skills.mjs';
+import {memoryLibrary} from './memory.mjs';
 export function localWorkspace(){
  const account={finance:localStorage};
  return {
   account,finance:account.finance,readHealth:()=>readState(account),
   saveHealth:(next,expected)=>saveState(next,expected,account),
-  skills:skillLibrary(account.finance)
+  memory:memoryLibrary(account.finance)
  };
 }
 export const readLabels={balance:'当前总余额',budget:'月预算与支出进度',nutrition:'指定日期的营养和热量缺口',
@@ -106,7 +106,9 @@ export async function readLedger(workspace,args,today){
   const weights=portions.get(batch.foodId)??[];
   weights.push(batch.remaining);portions.set(batch.foodId,weights);
  }
+ const gross=remainingGrossWeights(state);
  const result={stock:inventory.map(s=>({name:s.name,qty:displayStockQuantity(s,s.qty),unit:stockMeasure(s).unit,
+  ...(gross.has(s.id)?{remainingGrossGrams:gross.get(s.id)}:{}),
   ...(portions.has(s.id)?{portions:portions.get(s.id).map(qty=>displayStockQuantity(s,qty))}:{})}))};
  if(args.scope==='stock')return result;
  return {...result,today:dietSummary(state,dayIntake(state,today))};

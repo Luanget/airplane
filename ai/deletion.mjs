@@ -17,8 +17,8 @@ export function healthDeletion(state,key,ids){
  return next;
 }
 
-export async function deleteReview(container,proposal,workspace,today,foodDate){
- const {kind,query,meal}=proposal.result;
+export async function deleteReview(container,proposal,workspace,today,foodDate,direct=false){
+ const {kind,query,meal,selection}=proposal.result;
  const key=lists[kind];
  const state=await workspace.readHealth();
  const finance=kind==='finance'?readFinance(workspace.finance):null;
@@ -73,6 +73,12 @@ export async function deleteReview(container,proposal,workspace,today,foodDate){
     ...(row.details??[]),row.linked?'到库存页撤销关联采购':''].filter(Boolean).join(' · ');
    text.append(name,sub);item.append(check,text);rows.append(item);
   }
+  if(direct){
+   if(!matches.length)throw Error('找不到要删除的原记录，请补充日期或名称。');
+   if(selection!=='all'&&matches.length!==1)throw Error('找到多条匹配的记录，请指明要删哪条。');
+   if(matches.some(row=>row.linked))throw Error('该支出关联采购，请指定撤销对应的采购订单。');
+   for(const check of rows.querySelectorAll('input'))check.checked=true;
+  }
   if(matches.length)updatePreview();
   else preview.textContent='没有找到符合条件的记录。可核对日期或换个关键词。';
  }
@@ -83,6 +89,10 @@ export async function deleteReview(container,proposal,workspace,today,foodDate){
   if(!ids.length)throw Error('请先勾选要删除的记录');
   if(key)await workspace.saveHealth(healthDeletion(state,key,ids),state.revision??0);
   else await deleteUnlinkedTransactions(workspace.account,ids,finance.primary);
-  return '已删除 '+ids.length+' 条'+kinds[kind]+'。';
+  const receipt='已删除 '+ids.length+' 条'+kinds[kind]+'。';
+  if(!direct)return receipt;
+  const dropped=candidates.filter(row=>ids.includes(row.id));
+  return receipt+' '+dropped.map(row=>[displayDay(row.date),row.meal,row.title??row.name??(row.kg+' kg')]
+   .filter(Boolean).join(' · ')).join('、')+'。';
  };
 }

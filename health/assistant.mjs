@@ -192,7 +192,7 @@ export function healthReview(container, proposal, state, today) {
   date.required=true;
   if(mode==='plan')date.dataset.shortDate='';
   const meal=result.items?.some(c=>['eat','plan'].includes(c.action))?
-    field(dates,'餐次',{choices:pairs(['早餐','午餐','晚餐','加餐']),value:mode==='plan'?'晚餐':'午餐'}):null;
+    field(dates,'餐次',{choices:pairs(['早餐','午餐','晚餐','加餐']),value:result.meal??(mode==='plan'?'晚餐':'午餐')}):null;
   const extras=document.createElement('div');extras.className='form-grid';container.append(extras);
   const activities=mode==='activity'?editActivity(extras,result.activity):null;
   const totalField=mode==='purchase'?field(extras,'实付总额 ¥',{type:'number',value:result.total}):null;
@@ -234,6 +234,7 @@ export function healthReview(container, proposal, state, today) {
     updatePlan();
   }
   syncCalendarFields(container);
+  const saved=mode==='purchase'?'采购已入库，可在库存页关联支出。':mode==='plan'?'已保存饮食计划。':'记录已保存。';
   return {
     label:mode==='plan'?'保存为饮食计划':mode==='purchase'?'确认采购入库':'确认保存',
     apply(current) {
@@ -253,6 +254,18 @@ export function healthReview(container, proposal, state, today) {
       if(purchase&&total===null)throw Error('请填写订单实付总额');
       return purchase?approvedPurchase(current,items,date.value,time,total):confirmItems(current,items,date.value,meal?.value??'午餐',time);
     },
-    saved:mode==='purchase'?'采购已入库，可在库存页关联支出。':mode==='plan'?'已保存饮食计划。':'记录已保存。'
+    saved,
+    receipt(current,next){
+      if(mode!=='entry')return saved;
+      const weighed=next.local.foods.slice(current.local.foods.length).filter(row=>row.weighing);
+      if(!weighed.length)return saved;
+      const stockById=new Map(inventoryWithMoves(next).map(row=>[row.id,row]));
+      return saved+' '+weighed.map(row=>{
+        const remaining=row.weighing.after;
+        const bottled=stockById.get(row.foodId)?.unit==='瓶';
+        const detail=remaining==null?'':'，剩余 '+remaining+' g（'+(bottled?'含瓶':'含包装')+'）';
+        return row.name+' 用了 '+row.portion+detail;
+      }).join('；')+'。';
+    }
   };
 }

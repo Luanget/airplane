@@ -119,7 +119,7 @@ export async function recognize(input,{signal,onReply,onTool,...options}={}) {
  if(body?.status==='incomplete')throw Error('OpenAI 返回了未完成的响应。可以重试，原账本数据仍保留。');
  if(body?.status==='failed')throw Error('OpenAI 在生成回复时失败，请稍后重试。');
  try{
-  const call=pendingLedgerRead(body);
+  const call=pendingLedgerRead(body,options);
   if(call){
    if(!options.allowRead)throw Error();
    return {call};

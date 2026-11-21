@@ -1,9 +1,9 @@
-const KEY='airplane-ai-conversations-v1';
+export const THREADS_KEY='airplane-ai-conversations-v1';
 
 export function threadBook(store){
  let raw,stored,threads=[],activeId;
  function refresh(){
-  const current=store?.getItem(KEY)??null;
+  const current=store?.getItem(THREADS_KEY)??null;
   if(current===raw)return;
   raw=current;
   try{stored=JSON.parse(current);}catch{stored=null;}
@@ -13,9 +13,9 @@ export function threadBook(store){
  refresh();activeId=stored?.active??null;
  const current=()=>threads.find(thread=>thread.id===activeId)??null;
  function save(select=false){
-  const value={active:select?activeId:stored?.active??null,threads};
+  const value={...stored,active:select?activeId:stored?.active??null,threads};
   const next=JSON.stringify(value);
-  try{store?.setItem(KEY,next);}
+  try{store?.setItem(THREADS_KEY,next);}
   catch(err){raw=undefined;refresh();throw err;}
   raw=next;stored=value;
  }
@@ -36,6 +36,7 @@ export function threadBook(store){
  return {
   get current(){return current();},
   list:()=>threads,
+  reload(){refresh();activeId=stored?.active??null;},
   start(){refresh();activeId=null;save(true);},
   select(id){refresh();activeId=threads.some(row=>row.id===id)?id:null;save(true);},
   rename(id,title){

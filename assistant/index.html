@@ -60,7 +60,7 @@
               <button type="button" class="secondary-button" data-example="查一下燕麦，然后盘点为 300 g">盘点库存</button>
               <button type="button" class="secondary-button" data-example="用库存安排晚餐">安排晚餐</button>
               <button type="button" class="secondary-button" data-example="午餐花了 28 元">记一笔账</button>
-              <button type="button" class="secondary-button" data-example="帮我修改 Skill，以后晚餐优先推荐高蛋白">修改 Skill</button>
+              <button type="button" class="secondary-button" data-example="我平时晚餐喜欢搭配高蛋白食物">分享晚餐偏好</button>
             </div>
           </section>
           <div class="chat-transcript" role="log" aria-label="对话" aria-live="polite"></div>
@@ -74,7 +74,7 @@
             <span data-attachment></span><button type="button" class="text-button" data-remove-photo hidden>移除照片</button>
             <button type="submit" class="primary-button">发送</button>
           </div>
-          <label class="assistant-query"><input type="checkbox" name="allowRead" checked> 允许本轮查询账本</label>
+          <label class="assistant-query"><input type="checkbox" name="allowRead" checked> 允许本轮查询本机数据</label>
           <div class="assistant-request-status"><output data-status aria-live="polite"></output><button type="button" class="text-button" data-stop-request hidden>停止等待</button></div>
           <button type="button" class="text-button" data-retry-request hidden>重试这条消息</button>
           <button type="button" class="text-button" data-restore-review hidden>继续核对上次候选</button>
@@ -103,34 +103,29 @@
             <output role="status"></output>
           </div>
         </details>
-        <details class="card assistant-panel" id="assistant-skill">
-          <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">Skill</span><span class="chevron" data-shell-icon="chevron"></span></summary>
+        <details class="card assistant-panel" id="assistant-memory">
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">记忆</span><span class="chevron" data-shell-icon="chevron"></span></summary>
           <div class="assistant-panel-body">
-            <div data-skill-items></div>
-            <button type="button" class="text-button skill-new" data-new-skill>新建 Skill</button>
-            <button type="button" class="text-button skill-new" data-new-folder>新建文件夹</button>
-            <form class="assistant-fields skill-editor" data-skill-folder-form hidden>
-              <label>文件夹名称<input name="name" required maxlength="60"></label>
-              <output role="status"></output>
-              <div class="chat-actions"><button type="button" class="text-button" data-close-folder>收起</button><button type="submit" class="primary-button">建立文件夹</button></div>
-            </form>
-            <form id="skill-editor" class="assistant-fields skill-editor" hidden>
-              <label>名称<input name="name" required></label>
-              <label>Skill 文件夹<select data-picker="" name="folderId"></select></label>
-              <div class="skill-update" data-skill-update hidden>
-                <p>内置规则有新版，要用 AI 融合你改过的内容吗？</p>
-                <div class="chat-actions"><button type="button" class="text-button" data-keep>保留我的规则</button><button type="button" class="text-button" data-merge>让 AI 融合</button></div>
-              </div>
-              <label>工作规则<textarea name="text" rows="5" placeholder="例如：优先安排库存里的食材，份量用克。" required></textarea></label>
-              <output role="status" data-skill-error></output>
+            <label class="document-access"><input type="checkbox" data-automatic-memory>自动记住长期偏好</label>
+            <div class="assistant-memory-list" data-memory-list></div>
+            <button type="button" class="text-button" data-add-memory>添加记忆</button>
+            <output role="status"></output>
+            <form class="assistant-fields" hidden>
+              <label>名称<input name="name"></label>
+              <label>记忆内容<textarea name="text" rows="3" required></textarea></label>
+              <label class="document-access"><input type="checkbox" name="enabled" checked>启用这条记忆</label>
               <div class="chat-actions">
-                <button type="button" class="text-button" data-close-skill>收起</button>
-                <button type="button" class="text-button" data-restore-skill hidden>恢复原版</button>
-                <button type="submit" class="primary-button">保存 Skill</button>
+                <button type="button" class="text-button" data-cancel-memory>收起</button>
+                <button type="submit" class="primary-button">保存记忆</button>
               </div>
             </form>
-            <output class="skill-status" role="status" data-skill-status></output>
-            <details class="assistant-prompt"><summary>查看内置提示词</summary><pre></pre></details>
+          </div>
+        </details>
+        <details class="card assistant-panel">
+          <summary class="setting-row"><span class="mini-icon" data-shell-icon="list"></span><span class="setting-copy setting-title">数据权限</span><span class="chevron" data-shell-icon="chevron"></span></summary>
+          <div class="assistant-panel-body">
+            <label class="document-access"><input type="checkbox" data-document-access>完整数据权限</label>
+            <p>开启后，助手会按你本轮的指令直接写入本机 Airplane 数据，包括覆盖和删除。关闭「允许本轮查询本机数据」会暂停直接写入。</p>
           </div>
         </details>
         <details class="card assistant-panel assistant-context">

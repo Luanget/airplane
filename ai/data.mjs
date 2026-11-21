@@ -25,7 +25,7 @@ const healthSets={
   energyKind:'energyKind',includedInBase:'bool',quality:'text',uncertainty:'text'}],
  inventory:['食品资料',{name:'name',unit:'unit',basisAmount:'positive',basisUnit:'unit',nutrition:'nutrition',
   source:'text',quality:'text',active:'bool',pricePerUnit:'?nonnegative',minimum:'?nonnegative',
-  packageSize:'?positive',packageUnit:'?packUnit',piecesPerPack:'?integer',stage:'stage',stockStage:'stage'}],
+  packageSize:'?positive',densityGramsPerMl:'?positive',packageUnit:'?packUnit',piecesPerPack:'?integer',stage:'stage',stockStage:'stage'}],
  batches:['库存批次',{expires:'?date',raw:'?positive',cooked:'?positive'}],
  stock_moves:['库存流水',{reason:'name'}],
  purchases:['采购',{date:'date',time:'time',totalCents:'cents',note:'text',items:'purchaseItems'}],
@@ -45,8 +45,7 @@ const financeSets={
  finance_settings:['财务设置',{initialBalance:'?number',lastIncomeCategoryId:'?name',lastExpenseCategoryId:'?name'}]
 };
 const otherSets={
- skills:['Skill',{name:'name',text:'name',enabled:'bool',folderId:'name',folderName:'name'}],
- skill_folders:['Skill 文件夹',{name:'name',skillIds:'identifiers'}],
+ memory:['记忆',{name:'name',text:'name',enabled:'bool'}],
  conversations:['对话',{title:'name'}],
  assistant_settings:['助手设置',{model:'name',history:'name'}]
 };
@@ -158,13 +157,12 @@ export async function readAppData(workspace,book,{dataset,id,date,query,fields=[
  if(dataset==='app_info')return {dataset,version:APP_VERSION};
 
  const shape=dataShape(dataset);
- if(!id&&!date&&!term&&!singletons.has(dataset)&&!['categories','skills','skill_folders','budgets','legacy_rules'].includes(dataset))
+ if(!id&&!date&&!term&&!singletons.has(dataset)&&!['categories','memory','budgets','legacy_rules'].includes(dataset))
   return {...shape,hint:'请选择 ID、记录日期、月份或关键词后查询。'};
  let found;
  if(Object.hasOwn(healthSets,dataset))found=healthRows(await workspace.readHealth(),dataset);
  else if(Object.hasOwn(financeSets,dataset))found=financeRows(readFinance(workspace.finance).payload??freshData(),dataset);
- else if(dataset==='skills')found=workspace.skills.list();
- else if(dataset==='skill_folders')found=workspace.skills.folders();
+ else if(dataset==='memory')found=workspace.memory.list();
  else if(dataset==='conversations')found=book.list().map(({id,title,updatedAt})=>({id,title,updatedAt}));
  else found=[currentSettings(workspace.finance)];
  const filtered=found.filter(row=>{
@@ -374,18 +372,9 @@ export async function dataEdit(workspace,book,result,today){
   check(action!=='add'||!id||dataset==='budgets','记录 ID 由本机生成');
   updated=updateFinance(next,dataset,id,previous,fields,action);
   commit=()=>writeFinanceWithPurchaseCheck(workspace.account,primary,dataset==='transactions'&&previous?[id]:[],()=>next);
- }else if(dataset==='skills'){
-  previous=workspace.skills.list().find(row=>row.id===id);validate(previous);
-  if(action==='add')check(!id&&fields.name&&fields.text,'新增 Skill 需要名称和工作规则');
-  if(previous?.preset)check(action!=='delete'&&!fields.name,'预置 Skill 可以改规则或关闭');
-  updated=action==='delete'?null:{...previous,...fields};
-  commit=()=>workspace.skills.applyChanges(id,fields,previous,action);
- }else if(dataset==='skill_folders'){
-  previous=workspace.skills.folders().find(row=>row.id===id);validate(previous);
-  check(!previous?.preset,'请选自己的 Skill 文件夹');
-  if(action==='add')check(!id&&fields.name,'新文件夹需要名称');
-  updated=action==='delete'?null:{...previous,...fields};
-  commit=()=>workspace.skills.saveFolder(id,fields,action);
+ }else if(dataset==='memory'){
+  const draft=workspace.memory.prepare(id,fields,action);
+  ({previous,updated,commit}=draft);
  }else if(dataset==='conversations'){
   previous=book.list().map(({id,title})=>({id,title})).find(row=>row.id===id);validate(previous);
   check(action!=='add','开始对话请发送一条新消息');
@@ -421,5 +410,5 @@ export async function appDataReview(container,workspace,book,result,today){
  const content=(object)=>JSON.stringify(Object.fromEntries([...keys].filter(k=>own(object,k)).map(k=>[k,object[k]])),null,2);
  compare.textContent=(draft.previous?'原记录\n'+content(prev):'新增记录')+'\n\n'+(draft.updated?'确认后\n'+content(next):'撤销或删除本条');
  container.append(compare);
- return async()=>{await draft.commit();return draft.label+'已更新。';};
+ return async()=>{await draft.commit();return result.dataset==='memory'?(draft.updated?'已记住「'+draft.updated.name+'」。':'已删除记忆「'+draft.previous.name+'」。'):draft.label+'已更新。';};
 }
