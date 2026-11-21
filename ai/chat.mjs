@@ -1,4 +1,4 @@
-import {displayDay,localDate} from '../calendar.mjs';
+import {displayDay,localDate,localClock} from '../calendar.mjs';
 import {hydrateShell,shellIcon} from '../shell.mjs';
 import {installUpdates} from '../updates.mjs';
 import {AssistantSyncPending,resumePurchaseUpdate} from '../health/purchase-sync.mjs';
@@ -18,6 +18,8 @@ import {appDataReview,readAppData} from './data.mjs';
 import {hasDocumentAccess,prepareDocumentEdit,readAppDocument,setDocumentAccess} from './documents.mjs';
 import {deleteReview} from './deletion.mjs';
 import {displayUsage,totalUsage} from './usage.mjs';
+import {executeHealthAction,healthActionReceipt,healthActionPreview,healthContext,hasHealthAuto,readPackages,READ_LIMIT,
+ setHealthAuto,undoHealthAction} from './health-actions.mjs';
 import {syncChoiceFields} from '../choice-picker.mjs';
 
 const demo=new URLSearchParams(location.search).get('demo')==='1';
@@ -43,6 +45,12 @@ automaticMemory.onchange=()=>{
  try{setAutomaticMemory(workspace.finance,automaticMemory.checked);}
  catch(err){automaticMemory.checked=automaticMemoryEnabled(workspace.finance);report(err);}
 };
+const healthAuto=$('[data-health-auto]');
+healthAuto.checked=hasHealthAuto(workspace.finance);
+healthAuto.onchange=()=>{
+ try{setHealthAuto(workspace.finance,healthAuto.checked);}
+ catch(err){healthAuto.checked=hasHealthAuto(workspace.finance);report(err);}
+};
 const documentAccess=$('[data-document-access]');
 documentAccess.checked=hasDocumentAccess(workspace.finance);
 documentAccess.onchange=()=>{
@@ -52,6 +60,7 @@ documentAccess.onchange=()=>{
 const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
 $('#assistant-settings').onclick=()=>{settings.showModal();
  automaticMemory.checked=automaticMemoryEnabled(workspace.finance);
+ healthAuto.checked=hasHealthAuto(workspace.finance);
  documentAccess.checked=hasDocumentAccess(workspace.finance);
  refreshModels();refreshMemory();void refreshUsage();};
 async function refreshUsage(){
@@ -240,14 +249,28 @@ function messageNode(role,text){
  row.append(mark,body);
  return row;
 }
-function bubble(role,text,source){
- transcript.append(messageNode(role,text));
+function bubble(role,text,source,healthActionId,preserveScroll=false){
+ const scroll=thread.scrollTop;
+ const follow=thread.scrollHeight-scroll-thread.clientHeight<48;
+ const node=messageNode(role,text);
+ transcript.append(node);
+ if(healthActionId){
+  const undo=document.createElement('button');
+  undo.type='button';undo.className='text-button health-write-undo';undo.textContent='撤销这次记录';
+  undo.onclick=async()=>{
+   if(busy||saving||undo.disabled)return;
+   undo.disabled=true;
+   try{undo.textContent=await undoHealthAction(workspace,healthActionId);}
+   catch(err){report(err);undo.disabled=false;}
+  };
+  node.querySelector('.chat-bubble').after(undo);
+ }
  if(typeof source?.label==='string'&&typeof source.text==='string'){
   const details=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');
   details.className='chat-source';title.textContent=source.label;body.textContent=source.text;
   details.append(title,body);transcript.append(details);
  }
- thread.scrollTop=thread.scrollHeight;
+ thread.scrollTop=!preserveScroll||follow?thread.scrollHeight:scroll;
 }
 function remember(role,text,carry,source){
  try{book.append(role,text,carry,source);}
@@ -260,7 +283,7 @@ function append(role,text,carry=true,source){
 function clearReview(){review.hidden=true;review.replaceChildren();review.onsubmit=null;delete review.dataset.syncPending;}
 function clearFollowUp(){followUp=null;retryFollowUp.hidden=true;}
 function sessionFlow({id,input,options}){
- return {id,input:{...input,history:[],photo:null},options:{...options,memory:undefined,contextSummary:undefined},steps:[]};
+ return {id,input:{...input,history:[],photo:null},options:{...options,memory:undefined,contextSummary:undefined,healthContext:undefined,healthReference:undefined},steps:[]};
 }
 function checkpoint(save){
  let text='',timer;
@@ -303,7 +326,7 @@ function renderTranscript(){
  start.hidden=messages.length>0;
  for(const [index,m] of messages.entries()){
   if(index===current?.photos?.summaryIndex)continue;
-  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source);
+  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source,m.healthActionId);
  }
 }
 function showPending(){
@@ -355,9 +378,26 @@ for(const button of document.querySelectorAll('[data-example]')){
  };
 }
 
+function requiresConfirmation(proposal){
+ const {mode,result}=proposal;
+ if(mode==='document_edit'){
+  // Conversation-only metadata edits have a narrowly scoped shortcut.
+  if(result.document!=='conversations')return true;
+  try{
+   const patch=JSON.parse(result.patch);
+   return !Array.isArray(patch)||patch.filter(row=>row.op!=='test').length!==1||
+    patch.some(row=>row.op!=='test'&&!(/^\/threads\/\d+\/title$/.test(row.path)&&row.op==='replace'||
+     row.path==='/customNotes'&&row.op==='add'));
+  }catch{return true;}
+ }
+ if(mode==='batch')return result.operations.some(requiresConfirmation);
+ if(mode==='delete_record')return result.selection!=='one'||!result.query.trim();
+ if(mode==='app_data_edit')return ['health_settings','finance_settings','assistant_settings','legacy_rules','balances','budgets'].includes(result.dataset);
+ return false;
+}
 function directWrite(response,flow){
  return response.saveMode==='save'&&!!response.proposal&&!!flow.input.text.trim()&&
-  flow.options.allowRead&&flow.options.documentAccess;
+  flow.options.allowRead&&flow.options.documentAccess&&!requiresConfirmation(response.proposal);
 }
 async function makeReview(proposal,flow,photoJob,direct=false){
  clearReview();if(!proposal)return;
@@ -554,8 +594,71 @@ function rememberAutomatically(response,flow){
   append('assistant','已记住 '+names.map(name=>'「'+name+'」').join('、')+'。',false);
  }
 }
+function healthOptions(flow,ticket,confirmed=false){
+ const options=flow.options,auto=!!options.healthAuto&&hasHealthAuto(workspace.finance);
+ return {id:ticket.operationId??ticket.id,text:flow.input.text,today:flow.input.date,
+  clock:options.healthClock??localClock(),reference:options.healthReference??book.current?.healthReference,
+  foodDate:book.current?.foodDate,auto,confirmed,
+  guard:()=>{
+   if(!flow.options.allowRead||!composer.elements.allowRead.checked)throw Error('本轮本机数据权限已关闭，账本未更改。');
+   if(!confirmed&&(!options.healthAuto||!hasHealthAuto(workspace.finance)))throw Error('健康自动执行权限已关闭，账本未更改。');
+  }};
+}
+function echoHealth(ticket,result,source){
+ const record=result.record,id=record&&!record.undone?record.id:null;
+ if(record?.reference&&!record.undone)book.setHealthReference(record.reference);
+ if(!book.finish(ticket,result.text,source,null,id?{healthActionId:id}:undefined))return;
+ retryRequest.hidden=true;restoreReview.hidden=true;
+ bubble('assistant',result.text,source,id,true);syncThreads();updateContext();
+}
+async function saveHealthProposal(plan,flow,ticket,source,confirmed=false){
+ const controller=new AbortController();
+ activeRequest=controller;stop.hidden=false;stop.disabled=false;
+ tell('正在本机保存并核对健康记录…');
+ try{
+  const options=healthOptions(flow,ticket,confirmed);
+  const base=flow.healthBase??await workspace.readHealth();
+  return await executeHealthAction(workspace,base,plan,{...options,signal:controller.signal});
+ }finally{
+  activeRequest=null;stop.hidden=true;
+ }
+}
+async function completeHealth(plan,flow,source,ticket){
+ const options=healthOptions(flow,ticket);
+ const base=flow.healthBase??await workspace.readHealth();
+ const previously=healthActionReceipt(base,options);
+ if(previously){echoHealth(ticket,previously,source);tell('');return;}
+ let prepared;
+ try{prepared=healthActionPreview(base,plan,options);}
+ catch(err){echoHealth(ticket,{text:err.message},source);tell('');return;}
+ if(!prepared.execute){echoHealth(ticket,{text:prepared.preview},source);tell('');return;}
+ if(!book.stageHealth(ticket,plan))return;
+ if(!options.auto){
+  if(flow.options.healthAuto){tell('健康自动执行权限已关闭，账本未更改。');showPending();return;}
+  const body=document.createElement('p');body.textContent='待保存 · '+prepared.preview;
+  const apply=document.createElement('button');apply.type='submit';apply.textContent='确认健康记录';apply.className='primary-button';
+  const cancel=document.createElement('button');cancel.type='button';cancel.className='text-button';cancel.textContent='取消';
+  cancel.onclick=()=>{echoHealth(ticket,{text:'已取消健康记录。'},source);clearReview();};
+  review.append(body,apply,cancel);review.hidden=false;
+  review.onsubmit=async event=>{
+   event.preventDefault();if(busy||saving)return;
+   saving=true;lock();
+   try{const result=await saveHealthProposal(plan,flow,ticket,source,true);echoHealth(ticket,result,source);clearReview();tell('');}
+   catch(err){report(err);retryRequest.hidden=false;}
+   finally{saving=false;lock();}
+  };
+  return;
+ }
+ const result=await saveHealthProposal(plan,flow,ticket,source);
+ echoHealth(ticket,result,source);tell('');
+}
 async function complete(response,flow,source,ticket){
  clearReview();tell('');
+ if(ticket&&response.proposal?.mode==='health_action'){
+  await completeHealth(response.proposal.result,flow,source,ticket);
+  rememberAutomatically(response,flow);
+  return;
+ }
  const candidate=response.proposal?{proposal:response.proposal,flow:sessionFlow(flow)}:null;
  if(ticket){
   if(!book.finish(ticket,response.reply,source,candidate))return;
@@ -576,7 +679,7 @@ async function complete(response,flow,source,ticket){
  rememberAutomatically(response,flow);
 }
 function describeSummary(scope,summary){
- if(scope==='app_data')return JSON.stringify(summary,null,2);
+ if(scope==='app_data'||scope==='packages')return JSON.stringify(summary,null,2);
  if(scope==='balance')return '当前总余额 '+new Intl.NumberFormat('zh-CN',{style:'currency',currency:summary.currency}).format(summary.balance);
  if(scope==='budget')return [
   summary.month+' · 月预算 ¥'+summary.budget+' · 剩余 ¥'+summary.remainingBudget,
@@ -654,16 +757,18 @@ async function resolveResponse(response,flow,savePartial){
  const queried=new Set();
  while(response.call){
    if(!options.allowRead)throw Error('本轮未允许账本查询');
+   if(steps.length>=READ_LIMIT)throw Error('本轮查询步骤过多，账本未更改。请缩小问题或重试。');
    const {args,item}=response.call;
    const key=JSON.stringify(Object.entries(args).sort(([a],[b])=>a.localeCompare(b)));
    if(queried.has(key))throw Error('助手重复查询同一范围，请重试或缩小问题。');
    queried.add(key);
-   tell(args.scope==='app_document'?'正在查询指定的原始数据…':'正在查询'+readLabels[args.scope]+'…');
+   tell(args.scope==='app_document'?'正在查询指定的原始数据…':'正在查询'+(args.scope==='packages'?'独立包装':readLabels[args.scope])+'…');
    let summary;
    if(args.scope==='app_document'){
     if(!options.documentAccess)throw Error('本轮未开启完整数据权限');
     summary=await readAppDocument(workspace,args);
    }else if(args.scope==='app_data')summary=await readAppData(workspace,book,args);
+   else if(args.scope==='packages')summary=readPackages(flow.healthBase??await workspace.readHealth(),args);
    else summary=await readLedger(workspace,args,input.date);
    steps.push({item,summary,scope:args.scope});
    response=await requestReply(input,{...options,continuation:steps},savePartial);
@@ -855,14 +960,32 @@ async function sendMessage(input,options,files){
  const previous=book.current?.pending?.request;
  const hasPhoto=!!input.photo;
  const reuse=previous?.text===input.text&&previous.hasPhoto===hasPhoto;
- const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto},reuse);
+ const ticket=book.begin(userText,{text:input.text,date:input.date,allowRead:options.allowRead,hasPhoto,
+  healthClock:options.healthClock},reuse);
  const saved=checkpoint(text=>book.checkpoint(ticket,text));
  clearReview();restoreReview.hidden=true;retryRequest.hidden=true;photoResults.replaceChildren();
  renderTranscript();syncThreads();
  tell(demo?'正在生成演示回复…':'正在等待 OpenAI 回复…');
  try{
-  const response=await requestReply(input,options,saved.update);
-  await showResponse(response,{input,options,steps:[]},ticket,saved.update);
+  const flow={input,options,steps:[]};
+  const staged=book.current?.pending?.healthAction;
+  if(options.healthActions&&(options.healthAuto||staged)){
+   flow.healthBase=await workspace.readHealth();
+   if(options.healthAuto){
+    const context=healthContext(flow.healthBase,input,options.healthReference);
+    if(Object.keys(context).length>1)options.healthContext=context;
+   }
+  }
+  const existing=flow.healthBase&&healthActionReceipt(flow.healthBase,healthOptions(flow,ticket));
+  if(existing){
+   echoHealth(ticket,existing);tell('');
+  }else if(staged){
+   if(!options.healthActions)throw Error('本轮未允许本机健康数据操作。');
+   await completeHealth(staged,flow,null,ticket);
+  }else{
+   const response=await requestReply(input,options,saved.update);
+   await showResponse(response,flow,ticket,saved.update);
+  }
   saved.stop();
   await runFollowUp();
   clearComposer();
@@ -917,7 +1040,9 @@ composer.onsubmit=async e=>{
   const input={mode:'chat',text,photo,date,history};
   const allowRead=composer.elements.allowRead.checked;
   const options={model,contextSummary:summary,allowRead,memory:memoriesFor(input,allowRead),
-   documentAccess:hasDocumentAccess(workspace.finance),autoMemory:automaticMemoryEnabled(workspace.finance)};
+   documentAccess:hasDocumentAccess(workspace.finance),autoMemory:automaticMemoryEnabled(workspace.finance),
+   healthActions:!demo&&allowRead&&!files.length&&!!text,healthAuto:allowRead&&hasHealthAuto(workspace.finance),
+   healthClock:(retry?pending.healthClock:null)??localClock(),healthReference:book.current?.healthReference};
   if(files.length<2&&!validInput(input))throw Error('请检查消息或照片');
   await sendMessage(input,options,files);
  }catch(err){report(err);}

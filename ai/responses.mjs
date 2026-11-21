@@ -1,4 +1,4 @@
-import {resultSchema,activitySchema,purchaseSchema,financeSchema,selectChatSchema,documentReadSchema,contextSchema,appDataReadSchema,ledgerReadSchema,foodHistoryReadSchema,expenseSummaryReadSchema,validFinanceEntry,validInput,matches} from '../health/contract.mjs';
+import {resultSchema,activitySchema,purchaseSchema,financeSchema,selectChatSchema,documentReadSchema,contextSchema,appDataReadSchema,ledgerReadSchema,foodHistoryReadSchema,expenseSummaryReadSchema,validFinanceEntry,validInput,matches,packageReadSchema} from '../health/contract.mjs';
 
 export const CHAT_MODELS=[
  {id:'gpt-6-luna',name:'Luna',title:'GPT-6 Luna',effort:'none'},
@@ -42,6 +42,13 @@ const expenseSummaryTool={type:'function',name:'read_expense_summary',strict:tru
  description:'查询指定日期范围（含首尾）的支出汇总，按分类、天或月返回合计和笔数。适用于分析消费习惯。'};
 const appDataTool={type:'function',name:'read_app_data',strict:true,parameters:appDataReadSchema,
  description:'读取应用中的原始记录或设置。在同一数据集按 ID、日期 YYYY-MM-DD、月份 YYYY-MM 或关键词选择。fields 是本次所需字段，空数组返回匹配记录的详情。guide 的 query 留空列出数据目录，也可填数据集名、fields、calculations、workflow 或 exceptions。要找旧聊天先查 conversations 再按会话 ID 查 conversation_messages。local_usage 查本机费用。页面汇总优先用 read_ledger。'};
+const packageTool={type:'function',name:'read_packages',strict:true,parameters:packageReadSchema,
+ description:'查询实际包装。用食品关键词或 SKU、containerId 获取开封状态、各份净重、最近实称毛重、批次成本和原饮食 ID。只有明确要查历史包装才 includeClosed=yes。'};
+const healthInstructions=`对于纯文字健康对话，health_action 优先于旧 entry、activity、food_edit、portions。每个步骤 evidence 必须逐字引用本轮用户的原话，例如各食物短语。只列实际涉及的步骤。intent=execute 仅用于用户明确报告实际发生或要求执行，intent=preview 用于假设、只查询、估算或明确要求先看；授权由应用处理。尚未写入时不要说已保存。
+食品来源默认 auto，家中已有的食品优先用库存；外食、外卖、现买现吃填 one_off。不要把猜测的克重传作用户实称，whole=yes 用于明确吃完整包装，不知道克重可留空。两包面填 amount=2、unit=包；吃一袋鸡胸可填 whole=yes，应用以实称分装决定。食品名尽量使用用户词汇或本轮匹配名称，不能虚构 SKU 或包装 ID。
+表述「牛肉酱现在310g」用 weigh.gross=310，只报最新毛重时 initialGross=null；应用会匹配唯一已开包装并计算差值。「吃了20g牛肉酱」用 eat.amount=20、unit=g、whole=no，不能生成毛重。多包装仅在用户已指定或有明确对应上下文时传具体 ID；袋重不同且无依据不猜。明确扔掉才给 discard。分装逐份保留实称数字和估算状态。喝完一盒用 eat.whole=yes，保留原包装单位，不把 g 与 mL 当成一样。
+相对日期以设备日期为准。已有饮食的纠错用 correct；体重或运动更正用 correct_weight 或 correct_activity，优先原记录 ID。「昨天牛奶少算200mL」是 delta=200、unit=mL，不是新记录，也不是最终总量200。只有明确提供最终份量才填 amount，只有用户提供毛重才填 gross。餐次日期无实质歧义可留空。用户要求吃完后安排一餐，在同一 health_action 的最后附 next_meal；cycle 用本地规则重算查询。两者由本机在写入并重新查询后计算，不要用 batch 的 continue 再次请求模型。匹配的 healthContext 已在本轮输入里，够用时不另调用查询。
+未获得本机回执时只说明准备执行的动作或真正缺少的资料。健康自动执行授权不涵盖财务、原始文档、规则或批量删除。`;
 const readTools=[ledgerTool,foodHistoryTool,expenseSummaryTool,appDataTool];
 const documentTool={type:'function',name:'read_app_document',strict:true,parameters:documentReadSchema,
  description:'按 JSON Pointer 读取任一本机 Airplane 数据文档。document 为 catalog 时列出目录。空 path 为根。view 为 shape 时只返回字段名或数组长度，为 value 时返回指定路径的完整值。优先检索必要部分。'};
@@ -50,9 +57,9 @@ const documentInstructions=`完整数据权限已开启，这一段的保存规�
 const automaticMemoryInstructions=`自动记忆已开启。正常回答并单独填写 memoryUpdates。同一用户本轮自然表达的长期偏好、稳定习惯或将来反复适用的规则，即使没说「记住」，也可写成简短条目。每条 evidence 原样引用本轮 text 中能证明这条记忆的句子片段，不能引用图片、历史、助手或工具。条目名称简短具体，更新已有偏好时沿用条目名，并保留仍适用的内容。提问、假设、举例、当日吃了什么、一次性账目、品牌营养标签、具体库存、密码、API Key、住址或其他隐私身份信息都不自动记忆。用户表示不要记时返回空数组。本轮已经用 proposal 管理记忆时也返回空数组。没有新增长期信息时填 []。不要在 reply 声称记忆已保存，应用会反馈保存结果。`;
 const learnThisTurn=(data,{allowRead,autoMemory,applied=[],photoPosition})=>
  Boolean(data.mode==='chat'&&allowRead&&autoMemory&&data.text.trim()&&!applied.length&&(!photoPosition||photoPosition.index===1));
-const toolScopes={read_food_history:'foods',read_expense_summary:'expense_summary',read_app_data:'app_data',read_app_document:'app_document'};
+const toolScopes={read_food_history:'foods',read_expense_summary:'expense_summary',read_app_data:'app_data',read_packages:'packages',read_app_document:'app_document'};
 
-export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find(choice=>choice.id===model)?.effort??'none',memory=[],allowRead=false,continuation=[],applied=[],photoPosition,contextSummary,compacting,documentAccess=false,autoMemory=false}={}) {
+export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find(choice=>choice.id===model)?.effort??'none',memory=[],allowRead=false,continuation=[],applied=[],photoPosition,contextSummary,compacting,documentAccess=false,autoMemory=false,healthActions=false,healthContext}={}) {
   if (!validInput(data)) throw Error('请检查文字、照片和所选字段');
   if(compacting){
     return {model,instructions:compressionInstructions,store:false,service_tier:'default',reasoning:{effort},
@@ -63,7 +70,7 @@ export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find
   const rawAccess=allowRead&&documentAccess;
   const learn=learnThisTurn(data,{allowRead,autoMemory,applied,photoPosition});
   const task={
-    chat:['airplane_chat',selectChatSchema({documentAccess:rawAccess,autoMemory:learn}),chatInstructions],
+    chat:['airplane_chat',selectChatSchema({documentAccess:rawAccess,autoMemory:learn,healthActions:allowRead&&healthActions}),chatInstructions],
     activity:['activity_candidate',activitySchema,'只提取一项已发生运动。返回名称、公里、分钟、热量与来源。区分设备全天总消耗与本次活动，未知数值为 null。'],
     purchase:['purchase_candidate',purchaseSchema,'提取一张实付订单的食品和份量。总金额、分项价格只按用户明示，未知为 null。食品动作使用 add。'],
   }[data.mode];
@@ -72,7 +79,7 @@ export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find
     '\n本次仅识别一组照片中的第 '+photoPosition.index+' 张（共 '+photoPosition.total+' 张）。只输出当前图可支持的候选。若消息按张编号，只采用当前张对应的要求，避免把同组其他照片的内容重复记入。':'';
   const {photo,mode,text,date}=data;
   const chat=data.mode==='chat';
-  const fields=chat?{text,date,history:data.history,...(contextSummary?{contextSummary}:{}),...(allowRead&&memory.length?{memory}:{}),...(applied.length?{applied}:{})}:finance?{mode,text,date}:{mode,text};
+  const fields=chat?{text,date,history:data.history,...(contextSummary?{contextSummary}:{}),...(allowRead&&memory.length?{memory}:{}),...(applied.length?{applied}:{}),...(allowRead&&healthActions&&healthContext?{healthContext}:{})}:finance?{mode,text,date}:{mode,text};
   const content = [{type:'input_text',text:JSON.stringify(fields)}];
   if (photo) content.push({type:'input_image',image_url:photo,detail:chat?'auto':'high'});
   const input=[{role:'user',content}];
@@ -80,10 +87,10 @@ export function modelRequest(data,{model=MODEL,maxOutput,effort=CHAT_MODELS.find
     input.push(item,{type:'function_call_output',call_id:item.call_id,output:JSON.stringify(summary)});
   }
   const tools=chat&&allowRead?{
-    tools:rawAccess?[...readTools,documentTool]:readTools,parallel_tool_calls:false,tool_choice:'auto'
+    tools:[...readTools,packageTool,...(rawAccess?[documentTool]:[])],parallel_tool_calls:false,tool_choice:'auto'
   }:{};
   const outputLimit=maxOutput??(chat?null:4096);
-  return {model, instructions:prompt+photoInstruction+(chat&&rawAccess?'\n'+documentInstructions:'')+(learn?'\n'+automaticMemoryInstructions:''), input, ...tools,store:false,
+  return {model, instructions:prompt+photoInstruction+(chat&&rawAccess?'\n'+documentInstructions:'')+(learn?'\n'+automaticMemoryInstructions:'')+(chat&&allowRead&&healthActions?'\n'+healthInstructions:''), input, ...tools,store:false,
     service_tier:'default',reasoning:{effort},...(outputLimit===null?{}:{max_output_tokens:outputLimit}),
     text:{format:{type:'json_schema',name:task?.[0]??(finance?'transaction_candidate':'food_candidates'),strict:true,schema:task?.[1]??(finance?financeSchema:resultSchema)}}};
 }
@@ -92,7 +99,8 @@ export function pendingLedgerRead(response,{allowRead=false,documentAccess=false
  const calls=response.output?.filter(o=>o.type==='function_call')??[];
  if(!calls.length)return null;
  const call=calls[0];
- const tool=allowRead&&documentAccess&&call.name===documentTool.name?documentTool:readTools.find(t=>t.name===call.name);
+ const tool=allowRead&&documentAccess&&call.name===documentTool.name?documentTool:
+  call.name===packageTool.name?(allowRead?packageTool:null):readTools.find(t=>t.name===call.name);
  if(response.status!=='completed'||calls.length!==1||!tool||
     typeof call.call_id!=='string'||!call.call_id||typeof call.arguments!=='string')throw Error();
  const args=JSON.parse(call.arguments);
@@ -102,7 +110,7 @@ export function pendingLedgerRead(response,{allowRead=false,documentAccess=false
    ...(typeof call.id==='string'?{id:call.id}:{}),...(call.status==='completed'?{status:call.status}:{})}};
 }
 
-export function parseResult(response, input, {compacting=false,allowRead=false,documentAccess=false,autoMemory=false,applied,photoPosition}={}) {
+export function parseResult(response, input, {compacting=false,allowRead=false,documentAccess=false,autoMemory=false,applied,photoPosition,healthActions=false}={}) {
   if (response.status !== 'completed') throw Error();
   const content = response.output.filter(o => o.type === 'message').flatMap(o => o.content);
   if (content.some(c => c.type === 'refusal')) throw Error();
@@ -113,7 +121,7 @@ export function parseResult(response, input, {compacting=false,allowRead=false,d
   }
   if(input.mode==='chat'){
     const schema=selectChatSchema({documentAccess:allowRead&&documentAccess,
-     autoMemory:learnThisTurn(input,{allowRead,autoMemory,applied,photoPosition})});
+     autoMemory:learnThisTurn(input,{allowRead,autoMemory,applied,photoPosition}),healthActions:allowRead&&healthActions});
     if(!matches(schema,result))throw Error();
     const p=result.proposal;
     if(result.saveMode==='save'&&(!p||!input.text.trim()))result.saveMode='review';

@@ -138,3 +138,5 @@
 .assistant-memory-item strong { font-size:14px }
 .assistant-memory-item p { margin:4px 0; white-space:pre-wrap; overflow-wrap:anywhere }
 #assistant-memory form { padding-block:10px }
+
+.health-write-undo { grid-column:2; justify-self:start; font-size:12px; min-height:32px; }

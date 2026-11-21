@@ -373,9 +373,9 @@ export function changeFoodMeal(state,row,meal){
 function saveLegacyEdit(state,key,id,entry) {
  ((state.local.edits??={})[key]??={})[id]=entry;
 }
-export function recordEvent(state,key,item,id) {
+export function recordEvent(state,key,item,id,newId) {
  if(id && !events(state,key).some(e=>e.id===id))throw Error('记录已更新，请刷新');
- const entry={...item,id:id??makeId(key),createdAt:new Date().toISOString(),source:'manual'};
+ const entry={...item,id:id??newId??makeId(key),createdAt:new Date().toISOString(),source:'manual'};
  if(id && state.legacy[key].some(e=>e.id===id))saveLegacyEdit(state,key,id,entry);
  else state.local[key]=[...state.local[key].filter(e=>e.id!==entry.id),entry];
  return entry;

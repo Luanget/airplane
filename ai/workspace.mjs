@@ -10,7 +10,7 @@ export function localWorkspace(){
  const account={finance:localStorage};
  return {
   account,finance:account.finance,readHealth:()=>readState(account),
-  saveHealth:(next,expected)=>saveState(next,expected,account),
+  saveHealth:(next,expected,guard)=>saveState(next,expected,account,null,guard),
   memory:memoryLibrary(account.finance)
  };
 }

@@ -90,7 +90,7 @@ export function portionSources(state,sku,date){
   return [...(loose>0?[{id:'',remaining:loose}]:[]),...batches.filter(batch=>batch.remaining>0&&batch.date<=date)];
 }
 
-export function registerPortions(state,{foodId,batchId='',date,quantities,estimated=false}){
+export function registerPortions(state,{foodId,batchId='',date,quantities,estimated=false,id=makeId('split')}){
   const sku=inventoryWithMoves(state).find(row=>row.id===foodId);
   const source=portionSources(state,sku,date).find(part=>part.id===batchId);
   const invalid=()=>Error('请核对各份数量与原库存余量');
@@ -99,7 +99,6 @@ export function registerPortions(state,{foodId,batchId='',date,quantities,estima
   const total=round(portions.reduce((sum,quantity)=>sum+quantity,0),6);
   if(total>source.remaining||total>sku.qty)throw invalid();
   const [{costCents}]=allocateStock(state,foodId,total,batchId,date);
-  const id=makeId('split');
   state.local.stockMoves.push({id,batchId:batchId||null,foodId,date,delta:-total,costCents,reason:'分装转出',createdAt:new Date().toISOString()});
   let cumulative=0,assigned=0;
   return portions.map((quantity,i)=>{

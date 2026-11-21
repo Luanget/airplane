@@ -13,6 +13,7 @@ export function packageReading(container,rows){
  const revisions=new Map(rows.filter(row=>row.type==='correct').map(row=>[row.target,row]));
  const voids=new Map(rows.filter(row=>row.type==='void').map(row=>[row.target,row]));
  const measurements=[],foodIds=[],unassigned=[];
+ let unweighedGrams=0;
  let eaten=0,volumeMl=0,lost=0,spent=0,lossCost=0,unknownCost=false,unknownLoss=false;
  for(const row of rows){
   if(row.type==='correct'||row.type==='void'){
@@ -28,11 +29,12 @@ export function packageReading(container,rows){
    initialGross??=event.gross;
    status='open';
   }
-  if(event.gross!=null)gross=event.gross;
+  if(event.gross!=null){gross=event.gross;unweighedGrams=0;}
   if(event.type==='portion'){net=event.grams;estimated=event.estimated===true;}
   if(event.type==='eat'||event.type==='net'){
    status='open';
    if(net!=null)net=rounded(net-event.grams);
+   if(event.type==='net'&&event.gross==null)unweighedGrams=rounded(unweighedGrams+(event.grams??0));
    if(voided)unassigned.push(row.id);
    else {
     eaten+=event.grams??0;
@@ -54,10 +56,10 @@ export function packageReading(container,rows){
   if(event.type==='empty'||event.type==='discard')status=event.type==='empty'?'empty':'discarded';
   if(event.gross!=null)measurements.push({id:row.id,date:event.date,gross:event.gross,type:event.type,revised:!!revision});
  }
- if(tare!=null&&gross!=null)net=rounded(gross-tare),estimated=false;
+ if(tare!=null&&gross!=null)net=rounded(gross-tare-unweighedGrams),estimated=false;
  if(net!==null&&net<0)net=null;
  if(!onShelf({status}))net=0,estimated=false;
- return {...container,status,initialGross,gross,tare,net,estimated,measurements,
+ return {...container,status,initialGross,gross,unweighedGrams,tare,net,estimated,measurements,
   eaten:rounded(eaten),volumeMl:rounded(volumeMl),lost:rounded(lost),unknownLoss,spent,lossCost,unknownCost,foodIds,unassigned,head:rows.at(-1)?.id??null};
 }
 
@@ -78,6 +80,8 @@ export function voidPackageFood(state,id,date){
  const correction={id:'void:'+event.id,containerId:event.containerId,previousId:last.id,target:event.id,
   type:'void',date,keepGross:retained,reason:'关联饮食撤销'};
  state.local.containerEvents.push(correction);
+ const closed=journal.find(row=>row.derivedFrom===event.id&&row.stockMoveId);
+ if(closed&&!retained)state.local.stockMoves=state.local.stockMoves.filter(row=>row.id!==closed.stockMoveId);
  if(retained)for(const move of state.local.stockMoves.filter(row=>row.linkedFoodId===id)){
   delete move.linkedFoodId;
   move.reason='称重差待核对';
@@ -99,7 +103,7 @@ export function validContainerTables(local,validDate){
   if(row.derivedFrom&&seen.get(row.derivedFrom)?.containerId!==row.containerId)return false;
   if(row.type==='correct'||row.type==='void'){
    if(seen.get(row.target)?.containerId!==row.containerId)return false;
-   if(row.type==='correct'&&(!row.values||![row.values.gross,row.values.grams,row.values.costCents].every(amount)))return false;
+   if(row.type==='correct'&&(!row.values||![row.values.gross,row.values.grams,row.values.volumeMl,row.values.costCents].every(amount)))return false;
   }
   seen.set(row.id,row);heads.set(row.containerId,row.id);
   return true;

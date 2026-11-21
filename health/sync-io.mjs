@@ -38,6 +38,7 @@ export function createSyncPackage(state,{id,version,now=new Date().toISOString()
  const lineage=inheritedLineage(state);
  if(lineage)(health.sync??={}).lineage=lineage;
  delete health.legacy.sourceSnapshot;
+ delete health.local.assistantActions;
  const anchors={};
  for(const [name,source] of Object.entries(state.sync?.sources??{}))
   anchors[name]={version:source.version,records:source.anchors??{}};

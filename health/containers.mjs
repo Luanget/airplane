@@ -1,4 +1,4 @@
-import {addFood,allocateStock,actualFood,batchBalances,events,inventoryWithMoves,isStockReference,makeId,numeric,round,
+import {addFood,allocateStock,actualFood,batchBalances,changeFoodMeal,events,inventoryWithMoves,isStockReference,makeId,numeric,round,
  sampleNutrientSum,suggestNutritionByInventory,validDate} from './core.mjs';
 import {basis,packageInfo,quantityInUnit} from './candidates.mjs';
 import {addBatch} from './inventory.mjs';
@@ -182,7 +182,7 @@ function foodFields(container,sku,grams,form,costCents){
   foodId:sku.id,containerId:container.id,batchId:tracked&&realBatch?container.batchId:null,stockQty:tracked?grams:null,cost,
   ...nutrients,quality:labelQuantity===null?'unknown':'label',
   uncertainty:labelQuantity===null?'按体积标示营养，需要实测体积或可靠密度':volume?'采用确认的饮用体积':'',
-  ...(form.gross==null?{}:{weighing:{before:container.gross,after:form.gross,tare:null}})};
+  ...(form.gross==null?{}:{weighing:{before:container.gross,after:form.gross,tare:null,...(container.unweighedGrams?{interveningGrams:container.unweighedGrams}:{})}})};
 }
 
 export function previewPackageAction(state,input){
@@ -202,7 +202,7 @@ export function previewPackageAction(state,input){
  }else if(['eat','loss','refill','reweigh'].includes(action)){
   if(previous===null)throw Error('请先记录此包装的初始毛重');
   event.gross=validMass(gross,'请填写最新毛重');
-  const difference=round(previous-event.gross,3);
+  const difference=round(previous-event.gross-container.unweighedGrams,3);
   if(difference===0&&action!=='reweigh')return {noop:true,container,difference:0};
   if(['eat','loss'].includes(action)&&difference<0)throw Error('毛重增加，请选择补充、称重纠正或另一包装');
   if(action==='refill'&&difference>=0)throw Error('补充后的毛重应增加');
@@ -210,12 +210,18 @@ export function previewPackageAction(state,input){
   else if(!event.reason)throw Error('请填写纠正原因');
   event.tare=tare;
  }else if(action==='net'){
-  if(container.stockMode!=='portion'&&container.stockMode!=='estimated')throw Error('请先称此包装的毛重');
+  if(container.stockMode==='whole'&&container.status!=='open')throw Error('请先指定已开封包装，或明确吃完一个完整包装');
   event.grams=validMass(input.grams,'请填写食用净重');
   if(event.grams===0)return {noop:true,container,difference:0};
  }else if(action==='portion'){
   if(container.stockMode!=='estimated'||container.gross!==null)throw Error('该份重量已有称重依据');
   event.grams=validMass(input.grams,'请填写确认的当前净重');
+ }else if(action==='whole'){
+  if(container.stockMode!=='whole'||container.status!=='sealed')throw Error('整包装录入需要一份未开封库存；已开封包装请说明这次吃了多少');
+  event.type='net';
+  const volume=container.nominal?.unit==='mL'?container.nominal.value:null;
+  const grams=container.actualNetGrams??(container.nominal?.unit==='g'?container.nominal.value:null);
+  event.volumeMl=volume;event.grams=grams;event.costCents=container.costCents;
  }else if(closeTypes.includes(action)){
   event.gross=gross;
   event.tare=tare;
@@ -224,7 +230,15 @@ export function previewPackageAction(state,input){
  if((action==='net'||action==='eat'||action==='loss')&&container.stockMode==='portion'&&event.grams>container.net)
   throw Error('食用量超过该份已实称净重');
  let food=null;
- if(action==='eat'||action==='net'){
+ if(action==='whole'){
+  const amount=event.volumeMl??event.grams??1,unit=event.volumeMl!=null?'mL':event.grams!=null?'g':container.kind;
+  const [,labelUnit]=basis(sku);
+  const labelAmount=quantityInUnit(sku,amount,unit,labelUnit);
+  const nutrition=labelAmount==null?sampleNutrientSum([]):suggestNutritionByInventory(sku,labelAmount);
+  food={name:sku.name,date,time:event.time,meal:input.meal||'晚餐',amount,amountUnit:unit,portion:amount+' '+unit,
+   foodId:sku.id,stockQty:null,cost:event.costCents==null?null:event.costCents/100,
+   quality:labelAmount==null?'unknown':'label',uncertainty:container.nominal?'完整包装，按包装标称规格记录':'完整包装；未提供净含量',...nutrition};
+ }else if(action==='eat'||action==='net'){
   event.costCents=consumptionCost(container,event.grams);
   if(container.nominal?.unit==='mL')event.volumeMl=numeric(input.volumeMl)??quantityInUnit(sku,event.grams,'g','mL');
   food=foodFields(container,sku,event.grams,{...input,gross:event.gross},event.costCents);
@@ -273,7 +287,7 @@ export function confirmPackageAction(current,input){
  const saved={...event,id:input.id};
  if(food){
   const matches=events(next,'foods').filter(row=>input.linkFoodId?row.id===input.linkFoodId:
-   row.date===food.date&&row.meal===food.meal&&row.foodId===food.foodId&&actualFood(row)&&
+   event.gross!=null&&row.date===food.date&&row.meal===food.meal&&row.foodId===food.foodId&&actualFood(row)&&
    row.amount===food.amount&&row.amountUnit==='g'&&row.weighing?.before===container.gross&&row.weighing?.after===event.gross);
   if(matches.length>1)throw Error('有多条已有饮食符合此次称重，请指定原记录 ID');
   const existing=matches[0];
@@ -288,6 +302,11 @@ export function confirmPackageAction(current,input){
  }
  settleStock(next,container,saved,food);
  append(next,container,saved);
+ if(input.action==='whole'){
+  const closure={id:input.id+':close',date:event.date,type:'empty',derivedFrom:saved.id,reason:'完整包装已用完'};
+  settleStock(next,container,closure);
+  append(next,container,closure);
+ }
  return {next,event:saved};
 }
 
@@ -305,7 +324,8 @@ export function revisePackageFood(current,input){
  const previous=packageReading(container,journal.slice(0,journal.indexOf(event)));
  const gross=validMass(input.gross,'请填写更正后的毛重');
  if(gross>=previous.gross||previous.tare!==null&&gross<previous.tare)throw Error('请核对本次称重范围');
- const grams=round(previous.gross-gross,3);
+ const grams=round(previous.gross-gross-previous.unweighedGrams,3);
+ if(grams<=0)throw Error('此次毛重不支持往前补记更多摄入');
  const old=events(next,'foods').find(row=>row.id===input.foodId);
  if(!old||!actualFood(old))throw Error('原饮食已变化，请重新打开');
  const sku=productRows(next).find(row=>row.id===container.foodId);
@@ -356,5 +376,34 @@ export function planPackageDay(current,{id,foodId,containerId,date,lunchGrams,di
   const row=addFood(next,{...fields,stockQty:null,status:'plan'},undefined,'plan:'+id+':'+i);
   row.plannedContainerId=container.id;
  }
+ return next;
+}
+
+// Correct the reported quantity without inventing a weigh-in or opening another unit.
+export function revisePackageIntake(current,{foodId,id,amount,unit,meal}){
+ const next=structuredClone(current);
+ const linked=managedFoodPackage(next,foodId);
+ const row=events(next,'foods').find(item=>item.id===foodId);
+ if(!id||!linked?.container||!row||!actualFood(row))throw Error('找不到原包装饮食');
+ if(linked.journal.some(op=>op.id===id))return next;
+ const {container,event,journal}=linked;
+ if(row.amountUnit!==unit||!(row.amount>0&&amount>0))throw Error('请使用原记录的单位更正该次摄入');
+ const portion=round(amount,3)+' '+unit,ratio=amount/row.amount;
+ const nutrition=Object.fromEntries(Object.entries(row.nutrition).map(([key,value])=>
+  [key,value==null?null:round(value*ratio,2)]));
+ const note=event.type==='eat'?'摄入量已更正，保留原实测毛重':row.uncertainty;
+ const values={grams:unit==='g'?amount:event.grams??null,volumeMl:unit==='mL'?amount:event.volumeMl??null};
+ if(container.stockMode==='whole'){
+  changeFoodMeal(next,{...row,amount,portion,nutrition,uncertainty:note},meal||row.meal);
+  values.costCents=row.cost==null?null:Math.round(row.cost*100);
+ }else{
+  const before=packageReading(container,journal.slice(0,journal.indexOf(event)));
+  if(unit!=='g')throw Error('分装份更正需要使用克');
+  const cents=consumptionCost(before,amount);
+  const saved=addFood(next,{...row,...nutrition,amount,portion,meal:meal||row.meal,stockQty:amount,
+   containerId:container.id,cost:cents!=null?cents/100:null,containerCorrection:true},row.id);
+  values.costCents=saved.cost==null?null:Math.round(saved.cost*100);
+ }
+ append(next,container,{id,type:'correct',target:event.id,date:row.date,values,reason:'更正已记录摄入量'});
  return next;
 }

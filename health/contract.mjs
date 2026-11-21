@@ -115,11 +115,35 @@ export const documentChatSchema=object({
 });
 const memoryUpdates=list(object({name:string(120,1),text:string(800,1),evidence:string(undefined,1)}));
 const withAutomaticMemory=schema=>object({...schema.properties,memoryUpdates});
-const memoryChatSchema=withAutomaticMemory(chatSchema);
-const documentMemoryChatSchema=withAutomaticMemory(documentChatSchema);
-export function selectChatSchema({documentAccess,autoMemory}){
- if(documentAccess)return autoMemory?documentMemoryChatSchema:documentChatSchema;
- return autoMemory?memoryChatSchema:chatSchema;
+export const HEALTH_STEP_LIMIT=8;
+const foodSelector={name:string(120,1),skuId:optional(string(240,1)),containerId:optional(string(300,1))};
+const healthWhen={date:optional(string(10,10)),meal:mealType,time:optional(string(5,5))};
+const step=(kind,fields)=>object({kind:choice(kind),evidence:string(1600,1),...fields});
+const positive=number(100000,0.001);
+export const healthSteps={
+ eat:step('eat',{...foodSelector,...healthWhen,source:choice('auto','one_off','inventory'),
+  amount:optional(positive),unit:optional(unit),whole:choice('yes','no'),nutrition:optional(nutrients)}),
+ weigh:step('weigh',{...foodSelector,...healthWhen,gross:number(100000),initialGross:optional(positive),volumeMl:optional(positive)}),
+ discard:step('discard',{...foodSelector,date:healthWhen.date,tare:optional(number(100000))}),
+ split:step('split',{...foodSelector,date:healthWhen.date,batchId:optional(string(300,1)),
+  weights:{...list(positive,30),minItems:1},estimated:choice('yes','no')}),
+ weight:step('weight',{...healthWhen,kg:number(650,1),morning:choice('yes','no')}),
+ activity:step('activity',{...healthWhen,...activitySchema.properties.activity.anyOf[0].properties}),
+ correct:step('correct',{...healthWhen,recordId:optional(string(300,1)),name:string(120,1),newMeal:mealType,
+  amount:optional(positive),delta:optional(number(100000,-100000)),unit:optional(unit),gross:optional(number(100000))}),
+ correct_weight:step('correct_weight',{...healthWhen,recordId:optional(string(300,1)),kg:number(650,1)}),
+ correct_activity:step('correct_activity',{...healthWhen,recordId:optional(string(300,1)),name:string(80,1),
+  km:optional(number(1000)),minutes:optional(number(1440)),kcal:optional(number(20000))}),
+ cycle:step('cycle',{date:healthWhen.date}),
+ next_meal:step('next_meal',{...healthWhen,preferences:list(string(120,1),6)})
+};
+export const healthActionSchema=object({intent:choice('execute','preview'),
+ steps:{...list({anyOf:Object.values(healthSteps)},HEALTH_STEP_LIMIT),minItems:1}});
+export const packageReadSchema=object({query:string(160),skuId:optional(string(240,1)),containerId:optional(string(300,1)),includeClosed:choice('yes','no')});
+export function selectChatSchema({documentAccess,autoMemory,healthActions=false}){
+ const base=documentAccess?documentChatSchema:chatSchema;
+ const schema=healthActions?object({...base.properties,proposal:{anyOf:[...base.properties.proposal.anyOf,proposal('health_action',healthActionSchema)]}}):base;
+ return autoMemory?withAutomaticMemory(schema):schema;
 }
 export const ledgerReadSchema=object({scope:choice('stock','stock_alerts','meal','nutrition','expenses','balance','budget','weight','cycle'),query:string()});
 export const foodHistoryReadSchema=object({date:string(10,10),query:string()});

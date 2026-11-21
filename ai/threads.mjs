@@ -69,9 +69,12 @@ export function threadBook(store){
    if(row.pending&&!reuse&&row.pending.partial)
     add(row,'assistant',row.pending.partial,false,{interrupted:true});
    if(!reuse||!row.pending)add(row,'user',text,true);
-   row.pending={id:crypto.randomUUID(),request,partial:reuse?row.pending?.partial??'':''};
+   const sameRequest=reuse&&row.pending;
+   const id=crypto.randomUUID();
+   row.pending={id,operationId:sameRequest?.operationId??sameRequest?.id??id,request,partial:sameRequest?.partial??'',
+    ...(sameRequest?.healthAction?{healthAction:sameRequest.healthAction}:{})};
    row.review=null;row.photos=null;row.followUp=null;
-   save(true);return {threadId:row.id,id:row.pending.id};
+   save(true);return {threadId:row.id,id,operationId:row.pending.operationId};
   },
   checkpoint({threadId,id},partial){
    refresh();
@@ -79,11 +82,18 @@ export function threadBook(store){
    if(row?.pending?.id!==id||row.pending.partial===partial)return;
    row.pending.partial=partial;save();
   },
-  finish({threadId,id},reply,source,review){
+  stageHealth({threadId,id},healthAction){
    refresh();
    const row=threads.find(item=>item.id===threadId);
    if(row?.pending?.id!==id)return false;
-   add(row,'assistant',reply,!source,source?{source}:{});
+   row.pending.healthAction=healthAction;save();return true;
+  },
+  setHealthReference(reference){if(activeId&&reference)patch(activeId,{healthReference:reference});},
+  finish({threadId,id},reply,source,review,metadata){
+   refresh();
+   const row=threads.find(item=>item.id===threadId);
+   if(row?.pending?.id!==id)return false;
+   add(row,'assistant',reply,!source,{...(source?{source}:{}),...metadata});
    row.pending=null;row.review=review;save();return true;
   },
   setReview(review){if(activeId)patch(activeId,{review});},
