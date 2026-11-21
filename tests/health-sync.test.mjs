@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {dayIntake,energyForDay,events,inventoryWithMoves,addFood,deleteEvent,localStockChange,newState,normalizeLedger,recordEvent} from '../health/core.mjs';
+import {packagesFor} from '../health/containers.mjs';
 import {readAppData} from '../ai/data.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {recordPurchase,revisePurchase} from '../health/purchases.mjs';
@@ -319,10 +320,11 @@ test('real audit column types and unresolved bottle weighing survive merge witho
   weighing:{beforeGross:330,afterGross:300}});
  const target=externalBase(raw).state;
  const preview=plan(target,phone);
- assert.ok(preview.unresolved.some(change=>change.kind==='stockLinks'));
+ assert.ok(preview.rows.some(change=>change.kind==='containerEvents'&&change.status==='added'));
  const merged=clean(plan(target,phone,choicesFor(preview)));
  assert.equal(dayIntake(merged,tomorrow).totals.kcal,60);
- assert.equal(merged.sync.pendingStock[0].id,food.id);
+ assert.deepEqual(packagesFor(merged,'bottle-fixture')[0].foodIds,[food.id]);
+ assert.equal(packagesFor(merged,'bottle-fixture')[0].net,null);
  assert.equal(merged.local.stockMoves.length,0);
  assert.equal(inventoryWithMoves(merged)[0].qty,1);
  assert.equal(plan(merged,phone).changed,false);

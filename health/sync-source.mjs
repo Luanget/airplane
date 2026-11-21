@@ -152,9 +152,16 @@ export function importSource(input,{label,identity}={}){
  const id=String(identity??(raw?sourceName(raw):packageInfo?.source.id??health.sync?.deviceId??'airplane-backup')).trim();
  if(!id)throw Error('请填写一个固定的来源名称');
  const sid=(raw?'external': 'airplane')+':'+id;
+ // A matching checksum establishes that the embedded sidecar is the
+ // representation of these exact projected tables. It includes the journals;
+ // importing both the net raw balance and the sidecar movements would replay them.
+ if(raw?.airplane_sync?.format===SYNC_FORMAT&&raw.airplane_sync.tablesHash===hash(stable(raw.tables))&&
+  validateAppState(raw.airplane_sync.health)){
+  health=raw.airplane_sync.health;packageInfo=raw.airplane_sync;
+ }
  const version=String(raw?.handoff_version??packageInfo?.source.version??label?.match(/health_tracker_(\d{6,8}(?:\.\d+)?)/i)?.[1]??raw?.schema_version??
   input.exportedAt??health.exportedAt??health.revision??'未标版本');
- return {id:sid,version,label:label||id,health,finance,raw,packageInfo};
+ return {id:sid,version,label:label||id,health,finance,raw:raw&&packageInfo?null:raw,packageInfo};
 }
 
 export function originalEventRefs(state){

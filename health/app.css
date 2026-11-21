@@ -174,3 +174,28 @@ body[data-module="health"] [data-shell] .inline-inventory-editor :is(input,selec
 #health-merge summary { cursor:pointer; }
 #health-merge [data-sync-summary] { margin-block:6px; }
 @media (min-width:640px) { .sync-values { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+/* Own wrapper identity and weight without expanding the inventory page chrome. */
+.inventory-food .stock-qty { text-align:end; flex:0 0 auto; max-width:52%; line-height:1.35 }
+.package-rows { margin:0 0 7px; border:1px solid var(--line); border-radius:12px; overflow:hidden }
+.package-row { display:flex; width:100%; min-height:44px; align-items:center; justify-content:space-between; gap:8px; padding:7px 10px; text-align:start }
+.package-row + .package-row { border-top:1px solid var(--line) }
+.package-row span { display:block; min-width:0 }
+.package-row strong { color:var(--text); font-size:13px; font-weight:650 }
+.package-row small { display:block; font-size:12px; margin-top:1px; overflow-wrap:anywhere }
+.package-row > svg { flex:0 0 auto; width:14px; height:14px }
+.package-history { margin:5px 4px 7px }
+.package-history summary { cursor:pointer; min-height:30px }
+.package-history p { margin:4px 0; }
+.package-form { max-width:100%; padding-top:4px }
+.package-form [data-package-description] { margin:2px 0 10px; overflow-wrap:anywhere }
+.package-form > label { margin-bottom:8px }
+.package-form .package-preview { background:var(--surface-2); border-radius:12px; padding:9px 12px; margin:10px 0; font-size:13px; line-height:1.5 }
+.package-form .package-close-actions { justify-content:center; margin:3px 0 0 }
+#package-sheet { max-height:min(88dvh,720px); overscroll-behavior:contain }
+#package-sheet input[type=number] { font-size:16px }
+
+.package-options { margin:6px 0 9px; color:var(--muted); font-size:13px }
+.package-options summary { cursor:pointer; padding:5px 0 }
+.package-options[open] summary { margin-bottom:6px }
+.package-form button[type=submit]:disabled { opacity:.6 }

@@ -1,5 +1,7 @@
 import {attachHealthMerge,renderSyncCatalog} from './sync-ui.mjs';
-import {remainingGrossWeights} from './food-history.mjs';
+import {cookPortions,ensureContainers,packagesFor} from './containers.mjs';
+import {hasLaterPackageReading,managedFoodPackage,onShelf} from './container-ledger.mjs';
+import {attachPackages,packageDetail,packageLabel,packageSummary} from './package-ui.mjs';
 import {bindDayPicker,displayDay,localDate as dateNow,localClock,normalizeClock,syncCalendarFields} from '../calendar.mjs';
 import {attachShopping} from './shopping.mjs';
 import {attachPurchases} from './purchase-ui.mjs';
@@ -20,6 +22,8 @@ const E=s=>String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&g
 const fmt=(v,d=0)=> v===null||v===undefined?'—':Number(v).toLocaleString('zh-CN',{maximumFractionDigits:d,minimumFractionDigits:d});
 let state=newState(), selectedDate=dateNow(),tab='overview',toastHandle;
 let renderedDiet=null,renderedMonth='',inlineStock=null;
+const expandedStock=new Set(),expandedGroups=new Set(),expandedPackageHistory=new Set();
+let openPackage;
 const editing={};
 const dirtyEntries=new Set();
 let activeEntryType='food';
@@ -186,6 +190,9 @@ function editEvent(type,id){
   const picker=form.elements.foodId,original=inventoryWithMoves(state).find(item=>item.id===row.foodId);
   if(original&&![...picker.options].some(option=>option.value===original.id))
    picker.add(new Option(stockName(original)+' · 原记录用料',original.id));
+  const linked=managedFoodPackage(state,row.id);
+  $('edit-package-food').hidden=!(linked?.event.type==='eat'&&
+   !hasLaterPackageReading(linked.journal,linked.event));
   const status=eatingState(row);
   fillForm(form,{...row,...row.nutrition,status:status==='unknown'?'cancelled':status});
   setFoodUnit(original,row.amountUnit??(row.amount&&original?basis(original)[1]:foodEntryUnit(original)));
@@ -244,40 +251,67 @@ function placeInlineStock(){
  panel.append(form);
 }
 function renderInventory(){
+ const scrollY=window.scrollY;
+ const oldFocus=document.activeElement;
+ const focusedId=oldFocus?.closest('[data-stock-id]')?.dataset.stockId;
  if(inlineStock)inlineStock.home.append(inlineStock.form);
  const filter=$('inventory-search').value.trim().toLowerCase(),stock=inventoryWithMoves(state);
  const list=stock.filter(i=>i.active&&i.qty!==0&&!isStockReference(i)&&(i.name.toLowerCase().includes(filter)||i.id.toLowerCase().includes(filter)||i.aliases?.some(alias=>alias.toLowerCase().includes(filter))));
- const gross=remainingGrossWeights(state);
+ const packages=new Map();
+ for(const row of packagesFor(state)){
+  if(!packages.has(row.foodId))packages.set(row.foodId,[]);
+  packages.get(row.foodId).push(row);
+ }
+ const closed=[...packages.values()].flat().filter(row=>['empty','discarded'].includes(row.status));
  const groups=stockGroups(list),known=groups.filter(g=>g.rows.some(i=>i.qty!==null)),unknown=groups.filter(g=>g.rows.every(i=>i.qty===null));
  const batches=batchBalances(state), byId=new Map(stock.map(s=>[s.id,s]));
  function renderGroups(entries){
   const button=(row,label,secondary='')=>{
-   const portions=batches.filter(batch=>batch.foodId===row.id&&batch.remaining>0&&(batch.portion||batch.parent));
-   return `<div class="stock-item" data-stock-id="${E(row.id)}"><button type="button" class="inventory-food" data-stock-expand aria-expanded="false" aria-label="${E(label)}">
-    <span class="stock-name"><strong>${E(label)}</strong>${secondary?`<small>${E(secondary)}</small>`:''}${gross.has(row.id)?`<small>${row.unit==='瓶'?'已开封 · 剩余':'实称剩余'} ${fmt(gross.get(row.id),1)} g（${row.unit==='瓶'?'含瓶':'含包装'}）</small>`:''}</span>
-    <span class="stock-qty ${row.qty<0?'low':''}">${row.qty===null?'数量未知':fmtStock(row)}</span></button>
-    <div class="stock-actions" hidden>
-     ${portions.length?`<p>${portions.map(batch=>fmtStock(row,batch.remaining)).join(' · ')}</p>`:''}
-     <div class="button-row">${isOnHand(row)?`<button type="button" class="btn btn-secondary" data-stock-meal="${E(row.id)}">记饮食</button>
-      <button type="button" class="btn btn-text" data-stock-split="${E(row.id)}" aria-controls="split-form" aria-expanded="false">记录分装</button>`:''}
-      <button type="button" class="btn btn-text" data-sku-edit="${E(row.id)}" aria-controls="sku-form" aria-expanded="false">编辑食品</button>
+   const known=packages.get(row.id)??[],onHand=known.filter(onShelf),open=expandedStock.has(row.id);
+   const hasPackages=onHand.length>0;
+   const stockLabel=packageSummary(onHand)||(row.qty===null?'数量未知':stockText(row));
+   const history=known.filter(item=>item.measurements.length||item.eaten||item.status!=='sealed');
+   const packRows=onHand.map(item=>`<button class="package-row" type="button" data-open-package="${E(item.id)}"><span><strong>${E(packageLabel(item)+' · '+(item.status==='open'?'已开':'未开'))}</strong><small>${E(packageDetail(item))}</small></span>${shellIcon('chevron')}</button>`).join('');
+   return `<div class="stock-item" data-stock-id="${E(row.id)}"><button type="button" class="inventory-food" data-stock-expand aria-expanded="${open}" aria-label="${E(label)}">
+    <span class="stock-name"><strong>${E(label)}</strong>${secondary?`<small>${E(secondary)}</small>`:''}</span>
+    <span class="stock-qty ${row.qty<0?'low':''}">${E(stockLabel)}</span></button>
+    <div class="stock-actions"${open?'':' hidden'}>
+     ${hasPackages?`<div class="package-rows">${packRows}</div>`:''}
+     ${history.length?`<details class="package-history" data-package-history="${E(row.id)}"${expandedPackageHistory.has(row.id)?' open':''}><summary>包装历史</summary>
+      ${history.map(item=>`<p>${E(packageLabel(item)+' · '+packageDetail(item))}</p>${item.measurements.map(read=>`<p>${E(displayDay(read.date))} · ${E(fmt(read.gross,1))} g${read.revised?' · 已更正':''}</p>`).join('')}`).join('')}</details>`:''}
+     <div class="button-row">${hasPackages&&onHand.filter(item=>item.status==='open').length===1?
+     `<button type="button" class="btn btn-secondary" data-package-sku="${E(row.id)}">记录最新毛重</button>`:''}
+     ${isOnHand(row)&&!hasPackages?`<button type="button" class="btn btn-secondary" data-stock-meal="${E(row.id)}">记饮食</button>`:''}
+     ${isOnHand(row)&&!hasPackages?`<button type="button" class="btn btn-text" data-stock-split="${E(row.id)}" aria-controls="split-form" aria-expanded="false">记录分装</button>`:''}
+     <button type="button" class="btn btn-text" data-sku-edit="${E(row.id)}" aria-controls="sku-form" aria-expanded="false">编辑食品</button>
      </div>
     </div></div>`;
   };
   return entries.map(({name,rows})=>rows.length===1?button(rows[0],name):
-   `<details class="stock-group"><summary><strong>${E(name)}</strong><small>${rows.length} 条记录</small></summary>
+   `<details class="stock-group" data-stock-group="${E(name)}"${expandedGroups.has(name)?' open':''}><summary><strong>${E(name)}</strong><small>${rows.length} 条记录</small></summary>
     ${rows.map(row=>button(row,row.name,row.standard)).join('')}</details>`).join('');
  }
  $('inventory-list').innerHTML=renderGroups(known)||'<div class="event-empty">没有匹配的在库食品</div>';
  $('unknown-stock').hidden=!unknown.length;
  text('unknown-stock-title','数量未记录 · '+unknown.length+' 项');
  $('unknown-stock-list').innerHTML=renderGroups(unknown);
+ for(const item of document.querySelectorAll('[data-stock-group],[data-package-history]'))
+  item.ontoggle=()=>{
+   if(!item.isConnected)return;
+   const target=item.dataset.stockGroup?expandedGroups:expandedPackageHistory;
+   const key=item.dataset.stockGroup??item.dataset.packageHistory;
+   if(item.open)target.add(key);else target.delete(key);
+  };
+ if(focusedId&&oldFocus?.matches('[data-stock-expand]'))document.querySelector('[data-stock-id="'+CSS.escape(focusedId)+'"] [data-stock-expand]')?.focus({preventScroll:true});
+ if(window.scrollY!==scrollY)window.scrollTo({top:scrollY,behavior:'instant'});
  if(inlineStock&&!known.concat(unknown).some(group=>group.rows.some(row=>row.id===inlineStock.id)))closeInlineStock();
  placeInlineStock();
  const alerts=stockAlerts(state,dateNow());
  const alertText=[...alerts.low.filter(s=>s.qty>0).map(s=>stockName(s)+' 库存偏低'),...alerts.expiry.map(b=>byId.get(b.foodId)?.name+' 到期 '+displayDay(b.expires))].join(' · ');
  $('stock-alerts').textContent=alertText;$('stock-alerts').hidden=!alertText;
  $('batch-list').innerHTML=batches.filter(b=>b.remaining>0).map(b=>`<p>${E(byId.get(b.foodId)?.name)} · ${E(displayDay(b.date))} · ${fmtStock(byId.get(b.foodId),b.remaining)} · ${b.costCents===null?'成本未知':('批次成本 ¥'+fmt(b.costCents/100,2))}${b.portion||b.parent?' · 分装':''}</p>`).join('');
+ $('closed-packages').hidden=!closed.length;
+ $('closed-package-list').innerHTML=closed.map(row=>`<p>${E(stockName(byId.get(row.foodId))+' · '+packageLabel(row)+' · '+packageDetail(row))}${row.eaten?' · 已吃 '+E(fmt(row.eaten,1))+' g':''}${row.unknownLoss?' · 损耗重量未知':''}</p>`).join('');
  $('stock-history').innerHTML=state.local.stockMoves.slice(-40).reverse().map(m=>`<div class="event-row"><span>${E(displayDay(m.date))}${normalizeClock(m.time)?' '+normalizeClock(m.time):''} · ${E(byId.get(m.foodId)?.name)} · ${E(m.reason)}</span><strong>${m.delta>0?'+':''}${fmtStock(byId.get(m.foodId),m.delta)}</strong></div>`).join('');
 
 }
@@ -494,8 +528,27 @@ function bindForm(type,update,message){
   finally{button.disabled=false;}
  };
 }
-function setHealthState(next){state=recoverLegacyPortions(next);rebuildFoodSelection();render();}
+function setHealthState(next){state=ensureContainers(recoverLegacyPortions(next));rebuildFoodSelection();render();}
 function attach(){
+ openPackage=attachPackages($('package-sheet'),{getState:()=>state,commit,notify:toast,today:dateNow});
+ $('edit-package-food').onclick=e=>{
+  const food=events(state,'foods').find(row=>row.id===editing.food);
+  if(!food)return;
+  try{openPackage({foodId:food.foodId,skuName:food.name,editId:food.id,trigger:e.target});}catch(error){toast(error.message);}
+ };
+ $('cooking-form').onsubmit=async e=>{
+  e.preventDefault();
+  const form=e.target,button=form.querySelector('[type=submit]');
+  if(button.disabled)return;
+  button.disabled=true;
+  try{
+   const fields=Object.fromEntries(new FormData(form));
+   const weights=fields.weights.normalize('NFKC').trim().split(/[,、;；\s]+/).map(numeric);
+   await commit(cookPortions(state,{...fields,weights,rawGrams:numeric(fields.rawGrams)}),'熟制分装已保存');
+   form.reset();setDateDefaults();syncCalendarFields(form);syncChoiceFields(form);
+  }catch(error){toast(error.message);}
+  finally{button.disabled=false;}
+ };
  const purchases=attachPurchases({getState:()=>state,commit,setState:setHealthState,notify:toast,switchTab,today:dateNow});
  window.addEventListener('airplane:health-saved',e=>setHealthState(e.detail));
  updatePurchases=purchases.render;
@@ -621,10 +674,10 @@ function attach(){
   costCents:numeric(d.cost)===null?null:Math.round(+d.cost*100)}),'批次已入库');
  const split=$('split-form');
  split.elements.foodId.onchange=split.elements.date.onchange=updateSplitSources;
- bindForm('split',(next,d)=>{
+ bindForm('split',(next,d,form)=>{
   const sku=stockSku(d.foodId);
   const quantities=d.quantities.normalize('NFKC').trim().split(/[,、;；\s]+/).map(value=>storedStockQuantity(sku,value));
-  registerPortions(next,{...d,quantities});
+  registerPortions(next,{...d,quantities,estimated:form.elements.estimated.checked});
  },'分装已保存');
  $('sku-form').addEventListener('reset',()=>$('sku-form').querySelectorAll('option[data-legacy-unit]').forEach(option=>option.remove()));
  $('new-sku').onclick=()=>$('sku-form').reset();
@@ -664,6 +717,15 @@ function attach(){
    const panel=button.nextElementSibling;
    if(!panel.hidden&&inlineStock?.id===button.closest('[data-stock-id]').dataset.stockId)closeInlineStock();
    panel.hidden=!panel.hidden;button.setAttribute('aria-expanded',String(!panel.hidden));
+   const id=button.closest('[data-stock-id]').dataset.stockId;
+   if(panel.hidden)expandedStock.delete(id);else expandedStock.add(id);
+   return;
+  }
+  const container=event.target.closest('[data-open-package],[data-package-sku]');
+  if(container){
+   const foodId=container.closest('[data-stock-id]').dataset.stockId;
+   try{openPackage({foodId,skuName:stockName(stockSku(foodId)),containerId:container.dataset.openPackage,trigger:container});}
+   catch(error){toast(error.message);}
    return;
   }
   const action=event.target.closest('[data-sku-edit],[data-stock-meal],[data-stock-split]');

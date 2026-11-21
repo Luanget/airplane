@@ -1,3 +1,4 @@
+import {hasLaterPackageReading,managedFoodPackage,validContainerTables,voidPackageFood} from './container-ledger.mjs';
 import {normalizeClock} from '../calendar.mjs';
 /** Airplane Health — deterministic domain logic. No third-party libraries. */
 export const APP_SCHEMA = 'airplane-health-v1';
@@ -167,6 +168,7 @@ export function validateAppState(state){
    && ['calorieTarget','baselineTdee','cycleTarget','proteinMin','proteinMax','fatMin','sodiumTarget'].every(k => Number.isFinite(s[k]) && s[k] >= 0)
    && (state.importedAt == null || typeof state.importedAt === 'string')
    && (state.importInfo == null || object(state.importInfo))
+   && validContainerTables(m,validDate)
    && rows(l.foods, food) && rows(m.foods, x => food(x) && dated(x))
    && rows(l.weights, dated) && rows(m.weights, dated) && rows(l.activities, dated) && rows(m.activities, dated)
    && rows(l.inventory, sku) && rows(m.inventory ?? [], sku) && rows(m.stockMoves, x => dated(x) && Number.isFinite(x.delta))
@@ -328,7 +330,7 @@ export function allocateStock(state,foodId,qty,batchId,date) {
  return allocations;
 }
 
-export function addFood(state,fields,id) {
+export function addFood(state,fields,id,newId) {
  const {date,meal,name,portion,cost,foodId,stockQty,time,batchId,status='actual',quality='label',uncertainty='',amount,amountUnit,weighing}=fields;
  if(!validDate(date)||!name?.trim()||!['actual','plan','cancelled'].includes(status))throw Error('请检查日期、食物名称和状态');
  const nutrition=Object.fromEntries(NUTRIENTS.map(k=>[k,numeric(fields[k])]));
@@ -337,8 +339,12 @@ export function addFood(state,fields,id) {
  if (explicitCost<0 || qty<0)throw Error('成本和份量不能为负');
  const previous=events(state,'foods').find(e=>e.id===id);
  if(id && !previous)throw Error('记录已更新，请刷新');
+ const linked=id&&managedFoodPackage(state,id);
+ if(linked&&status!=='actual')throw Error('所选饮食关联包装，撤销时请删除该次饮食');
+ if(linked&&amount!=null&&numeric(amount)!==previous?.amount&&!fields.containerCorrection)
+  throw Error('请在包装的称重历史中更正这笔饮食重量');
  const createdAt=previous?.createdAt ?? new Date().toISOString();
- const entry={id:id??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
+ const entry={id:id??newId??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
   foodId:foodId||null,stockQty:qty,amount:numeric(amount),...(amountUnit?{amountUnit}:{}),...(weighing?{weighing}:{}),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:explicitCost===null?'inventory':'manual'};
  const oldMoves=state.local.stockMoves;
  state.local.stockMoves=oldMoves.filter(m=>m.linkedFoodId!==entry.id);
@@ -348,7 +354,7 @@ export function addFood(state,fields,id) {
    const parts=allocateStock(state,foodId,qty,batchId,date);
    const cents=parts.some(p=>p.costCents===null)?null:parts.reduce((sum,p)=>sum+p.costCents,0);
    entry.cost=explicitCost??(cents===null?null:cents/100);
-   for(const part of parts)state.local.stockMoves.push({id:makeId('stock'),foodId,delta:-part.qty,batchId:part.batchId,
+   for(const part of parts)state.local.stockMoves.push({id:makeId('stock'),foodId,delta:-part.qty,batchId:part.batchId,...(fields.containerId?{containerId:fields.containerId}:{}),
      date,...(entry.time?{time:entry.time}:{}),linkedFoodId:entry.id,reason:'实际摄入',costCents:part.costCents,createdAt});
    affected.add(foodId);
   }
@@ -376,12 +382,15 @@ export function recordEvent(state,key,item,id) {
 }
 export function deleteEvent(state,key,id) {
  const previousEvent=events(state,key).find(row=>row.id===id);
+ const related=key==='foods'&&managedFoodPackage(state,id);
+ const older=related&&hasLaterPackageReading(related.journal,related.event);
  const moves=state.local.stockMoves.filter(m=>m.linkedFoodId===id);
- if(key==='foods'){
+ if(key==='foods'&&!older){
   const previous=state.local.stockMoves;
   state.local.stockMoves=previous.filter(m=>m.linkedFoodId!==id);
   try {for(const m of moves)assertBalances(state,m.foodId);}catch(err){state.local.stockMoves=previous;throw err;}
  }
+ if(previousEvent&&related)voidPackageFood(state,id,previousEvent.date);
  if(previousEvent&&['foods','weights','activities'].includes(key)){
   const tombstones=(state.sync??={}).tombstones??=[];
   if(!tombstones.some(row=>row.type===key&&row.id===id))tombstones.push({type:key,id,before:previousEvent});

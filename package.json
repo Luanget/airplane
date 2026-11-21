@@ -1,6 +1,6 @@
 {
   "name": "airplane-pwa",
-  "version": "0.9.10",
+  "version": "0.9.11",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -9,6 +9,7 @@
     "test": "node --test --experimental-test-isolation=none tests/*.test.mjs",
     "test:worker": "node tests/runtime.mjs",
     "test:browser": "node tests/browser.mjs",
+    "test:inventory-ui": "node tests/package-browser.mjs",
     "dev:api": "wrangler dev --local --config worker/wrangler.toml --port 8787"
   },
   "devDependencies": {

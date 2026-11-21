@@ -1,3 +1,5 @@
+import {ensureContainers} from './containers.mjs';
+import {managedFoodPackage,packageJournal} from './container-ledger.mjs';
 import {normalizeClock} from '../calendar.mjs';
 import {NUTRIENTS,actualFood,addFood,batchBalances,dayIntake,deleteEvent,energyForDay,events,
  inventoryWithMoves,numeric,round,sampleNutrientSum,validDate,validateAppState} from './core.mjs';
@@ -11,7 +13,7 @@ const clone=structuredClone;
 const empty=()=>Object.create(null);
 const labels={foods:'饮食',weights:'体重',activities:'运动',inventory:'食品与库存',purchases:'采购',
  batches:'库存批次',stockMoves:'库存流水',templates:'餐食模板',shoppingList:'补货清单',
- stockLinks:'扣库待核对',baselines:'每日汇总与能量基线',settings:'健康参数',aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',rules:'现行规则'};
+ containers:'独立包装',containerEvents:'包装称重或消耗',stockLinks:'扣库待核对',baselines:'每日汇总与能量基线',settings:'健康参数',aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',rules:'现行规则'};
 const keyFor=(kind,row)=>kind==='shoppingList'?row.foodId:kind==='rules'?row.key:row.id;
 const canonicalName=(state,row)=>{
  const names=[row.name];
@@ -252,8 +254,9 @@ export function verifyMergeConsistency(before,after,allowed={}){
 
 export function planHealthMerge(current,source,{choices={},finance=null,baseSource}={}){
  if(!validateAppState(current))throw Error('本机健康账本格式无效');
- const {health:incoming,id:sourceId,raw}=source;
- const next=clone(current);
+ const {id:sourceId,raw}=source;
+ const incoming=ensureContainers(clone(source.health));
+ const next=ensureContainers(clone(current));
  const sync=next.sync??={};
  const sources=sync.sources??={};
  const previous=sources[sourceId]??{};
@@ -375,6 +378,35 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   saveAnchor('inventory',key,target,sku,location);
  }
 
+ // Package journals are linear per ID. Hold the whole incoming branch and
+ // its linked moves/food on a fork, leaving other packages independently mergeable.
+ const blockedPackages=new Set(),blockedMoves=new Set();
+ const localPackages=new Map((next.local.containers??[]).map(row=>[row.id,row]));
+ const incomingPackages=incoming.local.containers??[];
+ for(const from of incomingPackages){
+  const to=localPackages.get(from.id);
+  if(!to)continue;
+  const a=packageJournal(next,to.id),b=packageJournal(incoming,from.id);
+  const fork=b.slice(0,a.length).some((row,i)=>row.id!==a[i]?.id||
+   !same({...row,foodId:undefined,stockMoveId:undefined},{...a[i],foodId:undefined,stockMoveId:undefined}));
+  if(!fork)continue;
+  const key=hash(from.id+'-branch'),prior=oldMatch('containerEvents',key);
+  const signature=b.map(row=>[row.id,row.previousId,row.type,row.gross,row.grams,row.target,row.values]);
+  if(prior?.incoming!==hash(stable(signature))){
+   const choice=entry('containerEvents',key,{name:from.id,events:a},{name:from.id,events:b},'conflict',
+    [{value:'keep',label:'保留本机包装记录'}],'同一包装从同一基准有不同修改。其他包装可独立合并。');
+   if(choice.chosen)saveAnchor('containerEvents',key,to.id,signature,a);
+  }
+  blockedPackages.add(from.id);
+  const common=new Set(a.map(row=>row.id));
+  for(const event of b.filter(row=>!common.has(row.id))){
+   if(event.foodId)suppressed.add(event.foodId);
+   if(event.stockMoveId)blockedMoves.add(event.stockMoveId);
+  }
+ }
+ const packageLinks=ledger=>new Map((ledger.local.containerEvents??[])
+  .filter(row=>row.foodId).map(row=>[row.foodId,row.id]));
+ const currentLinks=packageLinks(next),sourceLinks=packageLinks(incoming);
  const refs=originalEventRefs(current),incomingRefs=originalEventRefs(incoming);
  const portable=baseSource?source.packageInfo?.anchor?.sources?.[baseSource]?.records:null;
  for(const type of EVENT_TYPES){
@@ -415,7 +447,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    const {row,original,id}=info;
    const sourceRow=row??original;
    if(!sourceRow)continue;
-   if(suppressed.has(sourceRow.foodId))continue;
+   if(suppressed.has(id)||suppressed.has(sourceRow.foodId))continue;
    const external=eventIdentity(sourceRow,incomingRefs[type]?.get(sourceRow.id));
    const fingerprint=hash(stable(eventData(type,sourceRow)));
    const primary=external?'id-'+hash(external):'row-'+fingerprint;
@@ -432,7 +464,10 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
     (!validDate(sourceRow.date)||sourceRow.date<=cutoff));
    const overlapsSummary=type==='foods'&&row&&actualFood(row)&&
     Object.values(currentBase[row.date]?.nutrition??{}).some(value=>value>0);
-   const indexed=(byDay.get(sourceRow.date)??[]).filter(target=>nearby(type,target.row??target.original,sourceRow,names));
+   const indexed=(byDay.get(sourceRow.date)??[]).filter(target=>{
+    const left=type==='foods'&&currentLinks.get(target.id),right=type==='foods'&&sourceLinks.get(id);
+    return (!left||!right||left===right)&&nearby(type,target.row??target.original,sourceRow,names);
+   });
    const stableMatches=external?byIdentity.get(external)??[]:[];
    const available=indexed.filter(info=>!claimed.has(info.id));
    const informative=type!=='foods'||!!sourceRow.portion?.trim()||!!normalizeClock(sourceRow.time)||
@@ -518,6 +553,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
     const updated={id:targetId,row:patch?events(next,type).find(row=>row.id===targetId):null,original:target?.original};
     byId.set(targetId,updated);
     if(!target)index(updated);
+    if(type==='foods'&&sourceLinks.has(id))currentLinks.set(targetId,sourceLinks.get(id));
    }
    if(incomingSame&&!target){suppressed.add(id);continue;}
    if(take||target){
@@ -600,8 +636,9 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   }
   const sourceSkus=new Map(incomingInventory.map(row=>[row.id,row]));
   const targetSkus=new Map([...next.legacy.inventory,...(next.local.inventory??[])].map(row=>[row.id,row]));
+  const unitKey=value=>String(value).normalize('NFKC').match(/^(mL|g|瓶|盒|袋|包|份|个)(?=$|[\s(])/i)?.[1].toLowerCase()??value;
   const unitsDiffer=(sourceId,targetId)=>sourceSkus.has(sourceId)&&targetSkus.has(targetId)&&
-   sourceSkus.get(sourceId).unit!==targetSkus.get(targetId).unit;
+   unitKey(sourceSkus.get(sourceId).unit)!==unitKey(targetSkus.get(targetId).unit);
   const covered=new Set(incoming.local.stockMoves.filter(move=>move.linkedFoodId&&!ignoredOrders.has(ownedLots.get(move.batchId))&&
    !suppressed.has(move.linkedFoodId)&&!unitsDiffer(move.foodId,ids.get(move.foodId)??move.foodId))
    .map(move=>ids.get(move.linkedFoodId)??move.linkedFoodId));
@@ -614,7 +651,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
    const index=new Map(local.map(row=>[keyFor(kind,row),row]));
    const byContent=new Map(local.map(row=>[hash(stable({...row,id:undefined,createdAt:undefined})),row]));
    for(const row of incoming.local[kind]??[]){
-    if(suppressed.has(row.foodId)||suppressed.has(row.linkedFoodId))continue;
+    if(suppressed.has(row.foodId)||suppressed.has(row.linkedFoodId)||blockedMoves.has(row.id)||blockedPackages.has(row.containerId))continue;
     const lotId=kind==='batches'?row.id:row.batchId??row.parent;
     const owner=ownedLots.get(lotId);
     if(ignoredOrders.has(owner)||(ignoredLots.has(lotId)&&(kind==='batches'||kind==='stockMoves'&&row.delta>0)))continue;
@@ -667,19 +704,41 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
  }else{
   for(const lot of incoming.local.batches??[]){
    if(!newSkus.has(lot.foodId)||!lot.openingPortion)continue;
-   const target=ids.get(lot.foodId),id='sync-opening-'+hash(sourceId+target+lot.id);
+   const target=ids.get(lot.foodId);
+   const used=(next.local.batches??[]).some(row=>row.id===lot.id);
+   const id=used?'sync-opening-'+hash(sourceId+target+lot.id):lot.id;
    if(!(next.local.batches??=[]).some(row=>row.id===id))next.local.batches.push({...lot,id,foodId:target});
   }
  }
 
- // A weighed bottle without a verified net capacity can retain its food
- // record, but cannot create a fractional stock movement.
+ // Sidecars are graph data. IDs survive export and are remapped only when
+ // an existing SKU, lot or meal was positively matched during the preview.
+ if(!raw)for(const from of incomingPackages){
+  if(blockedPackages.has(from.id)||suppressed.has(from.foodId))continue;
+  const to={...from,foodId:ids.get(from.foodId)??from.foodId,batchId:ids.get(from.batchId)??from.batchId};
+  const key=hash(from.id),before=localPackages.get(from.id);
+  if(!before){
+   (next.local.containers??=[]).push(to);
+   entry('containers',key,null,to,'added');
+  }
+  const existing=new Set(packageJournal(next,to.id).map(row=>row.id));
+  for(const row of packageJournal(incoming,from.id)){
+   if(existing.has(row.id)||suppressed.has(row.foodId))continue;
+   const foodId=row.foodId?ids.get(row.foodId)??row.foodId:undefined;
+   if(foodId&&!events(next,'foods').some(food=>food.id===foodId)&&
+    !packageJournal(incoming,from.id).some(op=>op.type==='void'&&op.target===row.id))continue;
+   const copy={...row,...(foodId?{foodId}:{})};
+   (next.local.containerEvents??=[]).push(copy);
+   existing.add(row.id);entry('containerEvents',hash(row.id),null,copy,'added');
+  }
+ }
+ ensureContainers(next);
  const skus=new Map(inventoryWithMoves(next).map(row=>[row.id,row]));
  const linkedFoods=new Set(next.local.stockMoves.map(row=>row.linkedFoodId).filter(Boolean));
  const pending=[];const priorPending=new Map((sync.pendingStock??[]).map(row=>[row.id,row]));
  for(const food of events(next,'foods')){
   const sku=skus.get(food.foodId);
-  if(!actualFood(food)||!food.weighing||!sku||food.stockQty!=null||linkedFoods.has(food.id)||
+  if(!actualFood(food)||!food.weighing||!sku||food.stockQty!=null||linkedFoods.has(food.id)||managedFoodPackage(next,food.id)||
    quantityInUnit(sku,1,'g',sku.unit)!==null)continue;
   const detail={id:food.id,foodId:sku.id,date:food.date,name:food.name,portion:food.portion,stockUnit:sku.unit,
    weighing:food.weighing,reason:'缺少可核实的单位换算'};
@@ -732,6 +791,23 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
  authorization.stockMoves=stockChanges.map(([id])=>id);
  authorization.stockSkus=[...new Set(stockChanges.flatMap(([,old,row])=>[old?.foodId,row?.foodId]).filter(Boolean))];
  const problems=failures.concat(verifyGraph(next,current),verifyMergeConsistency(current,next,authorization));
+ const owners=new Map((next.local.containers??[]).map(row=>[row.id,row]));
+ const foodIndex=new Map(events(next,'foods').map(row=>[row.id,row]));
+ const moves=new Set(next.local.stockMoves.map(row=>row.id));
+ const linked=new Set(),voided=new Set((next.local.containerEvents??[]).filter(row=>row.type==='void').map(row=>row.target));
+ const corrections=new Map((next.local.containerEvents??[]).filter(row=>row.type==='correct').map(row=>[row.target,row.values]));
+ for(const row of next.local.containerEvents??[]){
+  if(voided.has(row.id))continue;
+  if(row.foodId){
+   const food=foodIndex.get(row.foodId),owner=owners.get(row.containerId),grams=corrections.get(row.id)?.grams??row.grams;
+   if(!food||!actualFood(food)||food.foodId!==owner?.foodId||linked.has(row.foodId)||
+    food.amountUnit==='g'&&food.amount!=null&&grams!=null&&Math.abs(food.amount-grams)>1e-6)
+    problems.push('包装与关联饮食需一起核对 · '+row.containerId);
+   linked.add(row.foodId);
+  }
+  if(row.stockMoveId&&row.source!=='migration'&&!moves.has(row.stockMoveId))
+   problems.push('包装与关联库存流水缺少同一笔记录 · '+row.containerId);
+ }
  if(next.settings.proteinMin>next.settings.proteinMax)problems.push('蛋白质下限大于上限');
  if(!validateAppState(next))problems.push('合并后的账本格式无效');
  const unresolved=rows.filter(row=>row.options.length&&!row.chosen);

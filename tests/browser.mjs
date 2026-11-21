@@ -319,8 +319,8 @@ try {
   const merged=inventory.locator('details').filter({hasText:'合成瓶'});
   assert.equal(await merged.count(),1);
   await merged.locator('summary').click();
-  await merged.getByText('2 瓶',{exact:true}).waitFor();
-  await merged.getByText('3 瓶',{exact:true}).waitFor();
+  await merged.getByText('未开2瓶',{exact:true}).waitFor();
+  await merged.getByText('未开3瓶',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'未知数量样品'}).isVisible(),false);
   await page.getByText('数量未记录 · 1 项',{exact:true}).click();
   await page.getByRole('button',{name:'未知数量样品'}).waitFor();
@@ -1279,8 +1279,9 @@ try {
   await page.waitForFunction(()=>typeof document.getElementById('health-settings')?.onclick==='function');
   await page.locator('[data-tab="inventory"]').click();
   const sauceRow=page.locator('[data-stock-id="'+sauceId+'"]');
-  await sauceRow.getByText('已开封 · 剩余 322.2 g（含瓶）',{exact:true}).waitFor();
-  await sauceRow.getByText('1 瓶',{exact:true}).waitFor();
+  await sauceRow.getByText('已开1瓶',{exact:true}).waitFor();
+  await sauceRow.locator('[data-stock-expand]').click();
+  await sauceRow.locator('[data-open-package]').getByText(/最新毛重 322.2 g · 净余未知/).waitFor();
   console.log('PASS automatic memory in one request across chats and direct sauce-bottle gross weighing');
 
   await page.goto(base+'assistant/?demo=1');

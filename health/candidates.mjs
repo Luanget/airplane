@@ -1,6 +1,6 @@
 import {inventoryWithMoves, availableBatches, addFood, localStockChange, round, makeId} from './core.mjs';
 import {localClock} from '../calendar.mjs';
-import {measuredGrams,saveSku,stockMeasure} from './inventory.mjs';
+import {matchingSku,measuredGrams,saveSku,stockMeasure} from './inventory.mjs';
 import {nutrientKeys} from './contract.mjs';
 
 const unitOf = u => ({'袋':'包','克':'g','毫升':'mL','ml':'mL'})[u] ?? u;
@@ -90,7 +90,7 @@ export function confirmItems(current, candidates, date, meal, time=localClock())
     }
     if (['add','remove'].includes(c.action)) {
       if (!sku && c.action === 'remove') throw Error('出库需要选择已有食品');
-      let id = sku?.id;
+      let id = sku?.id??matchingSku(next,c.name,c.unit)?.id;
       if (!id) {
         id = makeId('sku');
         (next.local.inventory ??= []).push({id,name:c.name,active:true,qty:0,unit:c.unit,

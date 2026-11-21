@@ -1,3 +1,4 @@
+import {ensureContainers} from './containers.mjs';
 import {freshData,readFinance} from '../finance-storage.mjs';
 import {localDate} from '../calendar.mjs';
 import {combinedBackup} from './backup.mjs';
@@ -24,7 +25,7 @@ export async function commitHealthMerge(current,plan,expectedFinance,account){
 
 export function createSyncPackage(state,{id,version,now=new Date().toISOString()}){
  if(!validateAppState(state)||!id)throw Error('健康账本格式无效');
- const health=structuredClone(state);
+ const health=ensureContainers(structuredClone(state));
  const original=health.legacy.sourceSnapshot,refs=originalEventRefs(state);
  if(original?.tables&&!health.legacy.catalogs)health.legacy.catalogs=externalCatalogs(original.tables);
  for(const type of EVENT_TYPES)for(const row of health.legacy[type]){
@@ -60,7 +61,7 @@ export function createSyncPackage(state,{id,version,now=new Date().toISOString()
  for(const value of deletes.values())
   if(EVENT_TYPES.includes(value.type)&&!events(state,value.type).some(row=>row.id===value.id))
    changes.push({...value,action:'delete'});
- for(const type of ['stockMoves','batches','purchases','templates','shoppingList']){
+ for(const type of ['stockMoves','batches','purchases','templates','shoppingList','containers','containerEvents']){
   const prior=new Map(Object.values(anchors).flatMap(anchor=>Object.values(anchor.records[type]??{}))
    .filter(record=>record.target).map(record=>[record.target,record.accepted]));
   for(const row of state.local[type]??[]){

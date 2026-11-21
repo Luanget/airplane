@@ -1,6 +1,7 @@
 import {normalizeClock} from '../calendar.mjs';
 import {inventoryWithMoves,makeId,numeric,validDate,round,assertBalances} from './core.mjs';
 import {addBatch} from './inventory.mjs';
+import {packageJournal} from './container-ledger.mjs';
 
 export const purchaseTransactionId=p=>p.financeId || 'expense-'+p.id;
 export function purchaseForTransaction(state,id) {
@@ -80,12 +81,16 @@ function recostBatch(state,batch,remainingFoods) {
   }
  }
 }
+function usedPackages(state,batchId){
+ return (state.local.containers??[]).filter(row=>row.batchId===batchId&&packageJournal(state,row.id).length>0);
+}
 function removeUnusedTree(state,batchId) {
  const ids=new Set();
  const visit=id=>{
   if(ids.has(id))throw Error('批次来源无效');
   ids.add(id);
   const children=childrenOf(state,id);
+  if(usedPackages(state,id).length)throw Error('该批次已有包装称重或消耗，请先核对包装历史');
   const onlySplits=usageOf(state,id).every(move=>{
    const parts=children.filter(b=>b.id.startsWith(move.id+'-'));
    return parts.length>0&&Math.abs(parts.reduce((sum,b)=>sum+b.quantity,0)+move.delta)<1e-6;
@@ -124,6 +129,8 @@ export function revisePurchase(current,id,fields) {
    continue;
   }
   const usage=usageOf(next,batchId);
+  if(usedPackages(next,batchId).some(row=>row.stockMode==='whole'&&(row.ordinal+1)*row.stockAmount>revised.quantity))
+   throw Error('修改后的数量会丢失已有称重或消耗的包装');
   if(usage.some(m=>m.date<updated.date))throw Error('采购日期晚于已有的消耗或分装日期');
   Object.assign(batch,{date:updated.date,quantity:revised.quantity,costCents:revised.costCents,expires:revised.expires});
   Object.assign(receipt,{date:updated.date,delta:revised.quantity});
