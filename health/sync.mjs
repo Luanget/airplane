@@ -143,64 +143,169 @@ function chooseBaseline(current,next,selected,dates){
  }
 }
 
-export function verifyGraph(state,baseline){
- const inventory=new Map(inventoryWithMoves(state).map(row=>[row.id,row]));
- const batches=new Map((state.local.batches??[]).map(row=>[row.id,row]));
- const effective=events(state,'foods').filter(actualFood);
- const foods=new Set(effective.map(row=>row.id));
- const oldFoods=new Map(events(baseline,'foods').map(row=>[row.id,row]));
- const linked=new Map();
- const problems=[];
- const report=(id,text)=>problems.push(id+' · '+text);
- const priorMoves=new Map(baseline.local.stockMoves.map(row=>[row.id,row]));
- for(const row of state.local.stockMoves){
-  if(row.stockArchived)continue;
-  if(row.linkedFoodId&&row.delta<0)linked.set(row.linkedFoodId,(linked.get(row.linkedFoodId)??0)-row.delta);
-  // Keep historical orphan records intact. New or changed links must be valid.
-  if(same(row,priorMoves.get(row.id)))continue;
-  if(!inventory.has(row.foodId))report(row.id,'库存流水缺少食品');
-  if(row.batchId&&batches.get(row.batchId)?.foodId!==row.foodId)report(row.id,'库存流水和批次食品不一致');
-  if(row.linkedFoodId&&!foods.has(row.linkedFoodId))report(row.id,'扣库流水没有关联的实际饮食');
+// Compare invariant violations, including those caused by removing an edge.
+// An unchanged anomaly in an older ledger is not a reason to block a new edit.
+function graphIssues(state,finance){
+ const issues=new Map();
+ const report=(code,id,text)=>issues.set(code+':'+id,id+' · '+text);
+ const indexed=(rows,type)=>{
+  const result=new Map();
+  for(const row of rows??[]){
+   if(!row.id||result.has(row.id))report(type+'-id',row.id??type,'记录缺少唯一 ID');
+   if(row.id)result.set(row.id,row);
+  }
+  return result;
+ };
+ const inventory=indexed(inventoryWithMoves(state),'sku');
+ const batches=indexed(state.local.batches,'batch'),moves=indexed(state.local.stockMoves,'move');
+ const foodRows=indexed(events(state,'foods'),'food'),containers=indexed(state.local.containers,'container');
+ const packageEvents=indexed(state.local.containerEvents,'package-event');
+ const voids=new Map([...packageEvents.values()].filter(row=>row.type==='void').map(row=>[row.target,row]));
+ const orders=indexed(state.local.purchases,'purchase'),receipts=indexed(state.local.agentReceipts,'receipt');
+ const transactions=finance&&new Map(finance.transactions.map(row=>[row.id,row]));
+ const linked=new Map(),linkedCosts=new Map(),credits=new Map(),hasHistoricConsumption=new Set();
+ for(const [id,row] of moves){
+  if(row.stockArchived){
+   if(row.linkedFoodId&&row.delta<0)hasHistoricConsumption.add(row.linkedFoodId);
+   continue;
+  }
+  if(!inventory.has(row.foodId))report('move-sku',id,'库存流水缺少食品 '+row.foodId);
+  const batch=batches.get(row.batchId);
+  if(row.batchId&&(!batch||batch.foodId!==row.foodId||batch.stockArchived))report('move-lot',id,'库存流水和有效批次食品不一致 '+row.batchId);
+  if(row.containerId){
+   const container=containers.get(row.containerId);
+   if(!container||container.foodId!==row.foodId||container.stockArchived||row.batchId&&row.batchId!==container.batchId)
+    report('move-package',id,'库存流水和有效包装不一致 '+row.containerId);
+  }
+  if(row.linkedFoodId){
+   const food=foodRows.get(row.linkedFoodId);
+   if(!food||!actualFood(food)||row.delta>=0)report('move-food',id,'扣库流水没有关联的实际饮食 '+row.linkedFoodId);
+   else if(food.foodId!==row.foodId||food.batchId&&food.batchId!==row.batchId)
+    report('move-food-sku',id,'流水食品或批次与实际饮食不一致 '+row.linkedFoodId);
+   if(row.delta<0){
+    const foodId=row.linkedFoodId,cost=linkedCosts.get(foodId);
+    linked.set(foodId,(linked.get(foodId)??0)-row.delta);
+    linkedCosts.set(foodId,cost===null||row.costCents==null?null:(cost??0)+row.costCents);
+   }
+  }
+  if(row.batchId&&row.delta>0&&!row.containerId&&!row.linkedFoodId)
+   credits.set(row.batchId,(credits.get(row.batchId)??0)+row.delta);
  }
- for(const row of effective){
-  if(row.stockQty>0&&!same(row,oldFoods.get(row.id))&&!state.local.stockMoves.some(move=>move.stockArchived&&move.linkedFoodId===row.id)&&
-   Math.abs(row.stockQty-(linked.get(row.id)??0))>1e-6)
-   report(row.name,'记录份量与关联扣库流水不一致');
+ for(const [id,row] of foodRows){
+  if(!actualFood(row))continue;
+  const deducted=round(linked.get(id)??0,6),expected=round(row.stockQty??0,6);
+  if(expected!==deducted&&(deducted>0||!hasHistoricConsumption.has(id)))
+   report('food-stock',id,'记录扣库 '+expected+' 与关联流水 '+deducted+' 不一致');
+  const cents=linkedCosts.get(id);
+  if(row.costSource==='inventory'&&cents!=null&&(row.cost==null||Math.abs(row.cost*100-cents)>1e-6))
+   report('food-cost',id,'饮食成本与分摊流水不一致 '+cents+' 分');
+  if(expected>0&&(!row.foodId||!inventory.has(row.foodId)))
+   report('food-sku',id,'库存饮食缺少食品 '+row.foodId);
  }
- const previousLots=new Map((baseline.local.batches??[]).map(row=>[row.id,row]));
- for(const row of batches.values()){
-  if(same(row,previousLots.get(row.id)))continue;
-  if(!inventory.has(row.foodId)||row.parent&&batches.get(row.parent)?.foodId!==row.foodId)report(row.id,'批次来源不完整');
+ for(const [id,row] of containers){
+  if(!inventory.has(row.foodId))report('package-sku',id,'包装缺少食品 '+row.foodId);
+  if(row.origin==='batch'){
+   const lot=batches.get(row.batchId);
+   if(!lot||lot.foodId!==row.foodId||Boolean(lot.stockArchived)!==Boolean(row.stockArchived))
+    report('package-lot',id,'包装缺少对应批次 '+row.batchId);
+  }
  }
- const beforeStock=new Map(inventoryWithMoves(baseline).map(row=>[row.id,row.qty]));
- const beforeLots=new Map(batchBalances(baseline).map(row=>[row.id,row.remaining]));
+ for(const [id,event] of packageEvents){
+  const container=containers.get(event.containerId);
+  const voided=voids.get(id)??voids.get(event.derivedFrom);
+  if(!container)report('event-package',id,'称重或消耗事件缺少包装 '+event.containerId);
+  if(event.stockMoveId&&(!voided||voided.keepGross)){
+   const move=moves.get(event.stockMoveId);
+   if(!move||move.containerId!==event.containerId||move.foodId!==container?.foodId||
+    Boolean(move.stockArchived)!==Boolean(container?.stockArchived)){
+    report('event-stock',id,'包装事件缺少相应库存流水 '+event.stockMoveId);
+   }else{
+    const closure=event.type==='empty'||event.type==='discard';
+    const declared=closure&&['whole','grossSnapshot'].includes(container.stockMode)?-container.stockAmount:
+     container.stockMode==='portion'&&['loss','refill'].includes(event.type)&&event.grams!=null?
+      (event.type==='loss'?-event.grams:event.grams):null;
+    if(declared!==null&&Math.abs(move.delta-declared)>1e-6||closure&&move.delta>=0)
+     report('event-stock-amount',id,'包装事件数量与库存流水不一致 '+move.delta);
+   }
+  }
+  if(event.foodId&&!voided){
+   const row=foodRows.get(event.foodId);
+   if(!row||!actualFood(row)||row.foodId!==container?.foodId)
+    report('event-food',id,'包装消耗与实际饮食不一致 '+event.foodId);
+  }
+ }
  const totals=new Map();
  for(const batch of batchBalances(state)){
-  if(batch.remaining<0&&batch.remaining!==beforeLots.get(batch.id))report(batch.id,'批次余量不足');
+  if(!inventory.has(batch.foodId)||batch.parent&&batches.get(batch.parent)?.foodId!==batch.foodId)
+   report('batch-source',batch.id,'批次来源不完整 '+(batch.parent??batch.foodId));
+  if(batch.stockArchived)continue;
+  const credited=round(credits.get(batch.id)??0,6),expected=batch.openingPortion?0:round(batch.quantity,6);
+  if(credited!==expected)report('batch-credit',batch.id,'批次入库应为 '+expected+'，流水合计 '+credited);
+  if(batch.remaining<0)report('batch-negative',batch.id,'批次余量不足 '+batch.remaining);
   totals.set(batch.foodId,(totals.get(batch.foodId)??0)+batch.remaining);
  }
  for(const [id,row] of inventory){
-  const changed=row.qty!==beforeStock.get(id)||[...batches.values()].some(batch=>batch.foodId===id&&!same(batch,previousLots.get(batch.id)));
-  if(changed&&row.qty!==null&&(row.qty<0||row.qty<round(totals.get(id)??0,6)))report(row.name,'库存不足或低于已有批次总量');
+  const lots=round(totals.get(id)??0,6);
+  if(row.qty!==null&&(row.qty<0||row.qty<lots))
+   report('sku-balance',id,'库存 '+row.qty+' 不足或低于批次合计 '+lots);
  }
- const orderBefore=new Map((baseline.local.purchases??[]).map(row=>[row.id,row]));
- const financeLinks=new Set();
- for(const order of state.local.purchases??[]){
+ const financeLinks=new Map(),purchaseLots=new Map();
+ for(const [id,order] of orders){
   if(order.status==='cancelled')continue;
-  for(const id of order.financeIds??[order.financeId].filter(Boolean)){
-   if(financeLinks.has(id))report(order.id,'同一财务支出被多次关联');
-   financeLinks.add(id);
+  const ids=order.financeIds??[order.financeId].filter(Boolean);
+  for(const link of ids){
+   const previous=financeLinks.get(link);
+   if(previous)report('purchase-finance-duplicate',id+':'+link,'同一财务支出被多次关联 '+previous);
+   if(transactions&&transactions.get(link)?.type!=='expense')report('purchase-finance-missing',id+':'+link,'订单缺少对应财务支出');
+   financeLinks.set(link,id);
   }
-  if(same(order,orderBefore.get(order.id)))continue;
+  if(order.receiptId&&receipts.get(order.receiptId)?.purchaseId!==id)
+   report('purchase-receipt',id,'采购与付款回执的反向关联不一致 '+order.receiptId);
   const items=order.items??[];
   const known=items.reduce((sum,row)=>sum+(row.costCents??0),0);
   if(!items.length||order.totalCents!==null&&(known>order.totalCents||items.every(row=>row.costCents!=null)&&known!==order.totalCents))
-   report(order.id,'订单金额与明细不一致');
+   report('purchase-amount',id,'订单金额 '+order.totalCents+' 与明细 '+known+' 不一致');
   items.forEach((line,index)=>{
-   const batch=batches.get(orderBatchId(order,line,index));
+   const lotId=orderBatchId(order,line,index),batch=batches.get(lotId);
+   if(purchaseLots.has(lotId))report('purchase-lot-duplicate',id+':'+lotId,'同一批次被关联到多个采购明细');
+   purchaseLots.set(lotId,id);
    if(!batch||batch.foodId!==line.foodId||batch.quantity!==line.quantity||batch.costCents!==line.costCents)
-    report(order.id,'采购与入库批次不一致');
+    report('purchase-stock',id+':'+lotId,'采购食品、数量或成本与入库批次不一致');
   });
+ }
+ for(const [id,receipt] of receipts){
+  if(receipt.cancelled)continue;
+  if(receipt.purchaseId){
+   const order=orders.get(receipt.purchaseId);
+   if(!order||order.status==='cancelled'||order.receiptId!==id||!same(order.financeIds,receipt.financeIds))
+    report('receipt-purchase',id,'付款回执与采购关联不一致 '+receipt.purchaseId);
+  }
+  if(transactions){
+   const linked=receipt.financeIds.map(key=>transactions.get(key));
+   if(linked.some(row=>row?.receiptKey!==id||row.type!==(receipt.refundOf?'income':'expense')))
+    report('receipt-finance',id,'付款回执缺少对应财务交易');
+   else{
+    const paid=linked.reduce((sum,row)=>sum+Math.round(Number(row.amount)*100),0);
+    if(receipt.total!==paid)report('receipt-amount',id,'付款回执金额 '+receipt.total+' 与财务 '+paid+' 不一致');
+   }
+  }
+ }
+ return {issues,batches,moves,purchaseLots,packageEvents};
+}
+
+export function verifyGraph(state,baseline,{finance,beforeFinance=finance}={}){
+ const before=graphIssues(baseline,beforeFinance),after=graphIssues(state,finance);
+ const problems=[...after.issues].flatMap(([key,issue])=>before.issues.get(key)===issue?[]:[issue]);
+ for(const [batchId,orderId] of before.purchaseLots){
+  const batch=after.batches.get(batchId);
+  if(batch&&!batch.stockArchived&&!after.purchaseLots.has(batchId))
+   problems.push(orderId+' · 移除订单或明细后仍有在库批次 '+batchId);
+ }
+ const packageMoves=new Set([...after.packageEvents.values()].map(row=>row.stockMoveId).filter(Boolean));
+ for(const event of before.packageEvents.values()){
+  const move=after.moves.get(event.stockMoveId);
+  if(move&&!move.stockArchived&&!packageMoves.has(move.id))
+   problems.push(event.id+' · 移除包装事件后仍有扣库流水 '+move.id);
  }
  return [...new Set(problems)];
 }

@@ -146,8 +146,9 @@ export function finishPurchaseUpdate(account,jobId,apply){
    store.put(pack(account,job.state),slot(account));
    if(job.change.kind==='owner'){
     const {change}=job;
-    const {id,at,summary,reverts,source,fingerprint}=change.record,revision=job.state.revision;
-    store.add(pack(account,{...change.record,parts:change.parts,revision}),ownerPrefix(account)+id);
+    const {historyParts,...record}=change.record;
+    const {id,at,summary,reverts,source,fingerprint}=record,revision=job.state.revision;
+    store.add(pack(account,{...record,parts:historyParts??change.parts,revision}),ownerPrefix(account)+id);
     store.add(pack(account,{id,at,summary,reverts,source,fingerprint,revision}),ownerIndex(account)+id);
    }
   }

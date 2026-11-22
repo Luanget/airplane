@@ -69,7 +69,9 @@ export function packageReading(container,rows){
 }
 
 export function managedFoodPackage(state,id){
- const event=(state.local.containerEvents??[]).find(row=>row.foodId===id&&(row.type==='eat'||row.type==='net'));
+ const rows=state.local.containerEvents??[];
+ const voids=new Set(rows.filter(row=>row.type==='void').map(row=>row.target));
+ const event=rows.find(row=>row.foodId===id&&(row.type==='eat'||row.type==='net')&&!voids.has(row.id));
  if(!event)return null;
  return {event,container:state.local.containers?.find(row=>row.id===event.containerId),journal:packageJournal(state,event.containerId)};
 }

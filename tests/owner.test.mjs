@@ -204,3 +204,168 @@ test('turning a saved future plan into actual intake consumes only the matching 
  assert.equal(dayIntake(w.state,'2026-11-25').totals.kcal,120);
  assert.equal(events(w.state,'foods').filter(row=>row.id==='planned-egg').length,1);
 });
+
+const healthPatch=(...steps)=>({reason:'修订合成账本',documents:[{
+ document:'health',id:null,patch:JSON.stringify(steps)
+}]});
+const replace=(path,value)=>({op:'replace',path,value});
+const foodPath='/local/foods/0';
+const patchHealth=(workspace,...steps)=>commands(workspace)('apply_json_patch',healthPatch(...steps));
+const eggFood=w=>events(w.state,'foods').find(row=>row.id==='historical-egg');
+
+test('Patch actual to plan reverses stock and daily intake, and converts back once',async()=>{
+ const w=ownerFixture(),call=commands(w);
+ const planned=await call('apply_json_patch',healthPatch(replace(foodPath+'/status','plan')),'plan');
+ assert.equal(planned.status,'saved');
+ assert.equal(eggFood(w).status,'plan');
+ assert.equal(eggFood(w).stockQty,null);
+ assert.equal(stock(w,'egg').qty,2000);
+ assert.equal(dayIntake(w.state,historicalDate).totals.kcal,null);
+ const request=healthPatch(replace(foodPath+'/status','actual'));
+ assert.equal((await call('apply_json_patch',request,'actual')).status,'saved');
+ assert.equal((await call('apply_json_patch',request,'actual')).replayed,true);
+ assert.equal(stock(w,'egg').qty,1800);
+ assert.equal(dayIntake(w.state,historicalDate).totals.kcal,200);
+});
+
+test('Patch amount recomputes linked stock, recorded nutrients, cost, history and undo',async()=>{
+ const w=ownerFixture(),call=commands(w);
+ const saved=await call('apply_json_patch',healthPatch(replace(foodPath+'/amount',50)),'less-egg');
+ assert.equal(stock(w,'egg').qty,1950);
+ const row=eggFood(w);
+ assert.deepEqual([row.amount,row.portion,row.nutrition.kcal,row.nutrition.protein,row.cost],[50,'50 g',50,5,.44]);
+ assert.deepEqual(w.state.local.stockMoves.filter(move=>move.linkedFoodId===row.id).map(move=>move.delta),[-50]);
+ const undo=await call('undo_change',{id:saved.undo.id},'undo-amount');
+ assert.equal(undo.status,'saved');
+ assert.equal(eggFood(w).amount,200);
+ assert.equal(eggFood(w).cost,1.77);
+ assert.equal(stock(w,'egg').qty,1800);
+});
+
+test('Patch SKU releases old stock, only uses a known conversion and switches nutrition basis',async()=>{
+ const w=ownerFixture(),call=commands(w);
+ const result=await call('apply_json_patch',healthPatch(replace(foodPath+'/foodId','milk')),'sku-unknown');
+ assert.equal(result.status,'saved');
+ assert.deepEqual([stock(w,'egg').qty,stock(w,'milk').qty],[2000,1000]);
+ assert.equal(eggFood(w).name,'合成牛奶');
+ assert.equal(eggFood(w).stockAssociation,'pending');
+ assert.equal(eggFood(w).stockQty,null);
+ assert.equal(eggFood(w).nutrition.kcal,null);
+ assert.equal(eggFood(w).cost,null);
+ await call('apply_json_patch',healthPatch(replace(foodPath+'/amountUnit','mL')),'sku-converted');
+ assert.deepEqual([stock(w,'egg').qty,stock(w,'milk').qty],[2000,800]);
+ assert.deepEqual([eggFood(w).stockQty,eggFood(w).nutrition.kcal,eggFood(w).cost],[200,200,2.4]);
+ assert.ok(w.state.local.stockMoves.filter(move=>move.linkedFoodId==='historical-egg').every(move=>move.foodId==='milk'));
+});
+
+test('Patch deleting an order removes current stock and unused lots, preserving paid finance and consumed evidence',async()=>{
+ const w=ownerFixture(),call=commands(w);
+ const beforeFinance=structuredClone(ledger(w));
+ const saved=await call('apply_json_patch',healthPatch({op:'remove',path:'/local/purchases/0'}),'delete-order');
+ assert.equal(saved.status,'saved');
+ assert.deepEqual(w.state.local.purchases,[]);
+ assert.deepEqual(w.state.local.batches.map(row=>[row.id,row.stockArchived]),[['batch-egg',true]]);
+ assert.deepEqual(['egg','milk','celery'].map(id=>stock(w,id).qty),[0,0,0]);
+ assert.equal(eggFood(w).nutrition.kcal,200);
+ assert.deepEqual(ledger(w),beforeFinance);
+ await call('undo_change',{id:saved.undo.id},'undo-order');
+ assert.equal(w.state.local.purchases[0].financeId,'old-expense');
+ assert.deepEqual(['egg','milk','celery'].map(id=>stock(w,id).qty),[1800,1000,600]);
+});
+
+test('clearing or relinking dependent movements is rejected without a staged finance write',async()=>{
+ const w=ownerFixture();
+ const previous=structuredClone(w.state),finance=structuredClone(ledger(w));
+ const bad=healthPatch(replace('/local/stockMoves',[]));
+ bad.documents.unshift({document:'finance',id:null,patch:JSON.stringify([replace('/transactions/0/amount',39.6)])});
+ await assert.rejects(commands(w)('apply_json_patch',bad,'invalid-mixed'),/关联校验.*批次入库/);
+ await assert.rejects(patchHealth(w,replace('/local/stockMoves/3/linkedFoodId','missing-food')),/没有关联的实际饮食/);
+ assert.deepEqual(w.state,previous);
+ assert.deepEqual(ledger(w),finance);
+ assert.deepEqual(await w.ownerStore.list(),[]);
+});
+
+test('one Patch can correct an intake and procurement quantity while unrelated lots stay byte-identical',async()=>{
+ const w=ownerFixture();
+ const otherLots=structuredClone(w.state.local.batches.slice(1));
+ const result=await patchHealth(w,replace('/local/purchases/0/items/0/quantity',150),
+  replace(foodPath+'/amount',50));
+ assert.equal(result.status,'saved');
+ assert.equal(stock(w,'egg').qty,100);
+ assert.equal(eggFood(w).cost,5.89);
+ assert.deepEqual(w.state.local.batches.slice(1),otherLots);
+ assert.equal(ledger(w).transactions[0].amount,39.67);
+});
+
+test('a historical missing receipt does not block unrelated corrections',async()=>{
+ const w=ownerFixture();
+ w.state.local.stockMoves=w.state.local.stockMoves.filter(row=>row.batchId!=='batch-milk');
+ const result=await patchHealth(w,replace(foodPath+'/amount',50));
+ assert.equal(result.status,'saved');
+ assert.equal(stock(w,'egg').qty,1950);
+ assert.equal(stock(w,'milk').qty,0);
+});
+
+test('new finance undo history stores changed rows and keeps unrelated later entries',async()=>{
+ const w=ownerFixture(),call=commands(w),{STORAGE_KEY,replaceFinance}=await import('../finance-storage.mjs');
+ const full=ledger(w);
+ for(let i=0;i<10000;i++)full.transactions.push({...full.transactions[0],id:'unrelated-'+i,note:'模拟历史交易 '+i});
+ replaceFinance(w.finance,full,w.finance.getItem(STORAGE_KEY));
+ const saved=await call('mutate_records',changes(edit('transactions','old-expense','update',{amount:39.6})),'small-audit');
+ const audit=await w.ownerStore.get(saved.undo.id);
+ assert.ok(JSON.stringify(full).length>1_000_000);
+ assert.ok(JSON.stringify(audit).length<3000);
+ assert.equal(audit.parts[0].before.payload.transactions.length,1);
+ await call('mutate_records',changes(edit('transactions','unrelated-100','update',{note:'后来改过'})),'later-row');
+ await call('undo_change',{id:saved.undo.id},'undo-small-audit');
+ assert.equal(ledger(w).transactions[0].amount,39.67);
+ assert.equal(ledger(w).transactions.find(row=>row.id==='unrelated-100').note,'后来改过');
+});
+
+test('packaged purchase deletion removes unused containers and rejects corrupt close-event stock',async()=>{
+ const w=ownerFixture(),{confirmPackageAction,ensureContainers,packagesFor}=await import('../health/containers.mjs');
+ Object.assign(w.state.local.inventory.find(row=>row.id==='milk'),{packageSize:1000,packageUnit:'mL',packageKind:'盒'});
+ ensureContainers(w.state);
+ const carton=packagesFor(w.state,'milk')[0];
+ assert.equal(carton.origin,'batch');
+ const consumed=confirmPackageAction(w.state,{containerId:carton.id,id:'carton-consumption',action:'whole',date:historicalDate}).next;
+ const shell=ownerFixture();
+ Object.assign(shell.state,consumed);
+ const moves=shell.state.local.stockMoves,closeIndex=moves.findIndex(row=>row.containerId===carton.id);
+ assert.ok(closeIndex>=0);
+ await assert.rejects(patchHealth(shell,replace('/local/stockMoves/'+closeIndex+'/delta',-1)),/包装事件数量/);
+ assert.equal(stock(shell,'milk').qty,0);
+ await patchHealth(w,{op:'remove',path:'/local/purchases/0'});
+ assert.ok(!w.state.local.containers.some(row=>row.id===carton.id));
+ assert.equal(stock(w,'milk').qty,0);
+});
+
+test('changing an imported legacy actual to a plan keeps original rows but removes consumption from summaries',async()=>{
+ const w=ownerFixture(),row=w.state.local.foods.pop();
+ w.state.legacy.foods.push({...row,source:'legacy',actual:true,status:'已吃'});
+ await patchHealth(w,replace('/legacy/foods/0/status','plan'));
+ assert.equal(w.state.legacy.foods[0].status,'已吃');
+ assert.equal(eggFood(w).status,'plan');
+ assert.equal(dayIntake(w.state,historicalDate).totals.kcal,null);
+ assert.equal(stock(w,'egg').qty,2000);
+});
+
+test('owner-corrected food and stock survive a repeated external ledger round trip',async()=>{
+ const w=ownerFixture(),{externalBase,projectExternalLedger,createSyncPackage}=await import('../health/sync-io.mjs');
+ const {planHealthMerge}=await import('../health/sync.mjs'),{importSource}=await import('../health/sync-source.mjs');
+ const raw={canonical_source:'health_tracker_261121.1.json',handoff_version:'261121.1',updated_at:ownerDate,
+  tables:{food_events:[],food_inventory:[],weight_events:[]}};
+ const base=projectExternalLedger(raw,w.state,{version:'261121.1',id:'synthetic-owner-file'});
+ await patchHealth(w,replace(foodPath+'/amount',50));
+ const pkg=createSyncPackage(w.state,{id:'synthetic-owner-phone',version:'0.9.23'}),incoming=importSource(pkg);
+ const {state,sourceId}=externalBase(base),preview=planHealthMerge(state,incoming,{baseSource:sourceId});
+ const choices=Object.fromEntries(preview.unresolved.map(row=>[row.id,'take']));
+ const merged=planHealthMerge(state,incoming,{baseSource:sourceId,choices});
+ assert.deepEqual(merged.problems,[]);
+ assert.deepEqual(merged.unresolved,[]);
+ const newer=projectExternalLedger(base,merged.next,{version:'261122.1',id:'synthetic-owner-file'});
+ const reopened=externalBase(newer).state;
+ assert.deepEqual(events(reopened,'foods').map(row=>[row.amount,row.nutrition.kcal]),[[50,50]]);
+ assert.equal(inventoryWithMoves(reopened).find(row=>row.id==='egg').qty,1950);
+ assert.equal(planHealthMerge(reopened,incoming).changed,false);
+});

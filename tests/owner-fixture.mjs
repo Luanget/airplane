@@ -45,7 +45,8 @@ export function attachOwnerStore(workspace,getHealth,setHealth){
     else originals.set(part.document+':'+part.id,structuredClone(part.after));
    }
    setHealth({...structuredClone(next),revision:revision+1});
-   const saved={...structuredClone(record),parts:structuredClone(parts),revision:revision+1};
+   const {historyParts,...audit}=structuredClone(record);
+   const saved={...audit,parts:historyParts??structuredClone(parts),revision:revision+1};
    history.set(record.id,saved);
    return saved;
   }

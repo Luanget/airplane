@@ -11,7 +11,7 @@ import {readDocumentPath,editDocument,documentPath} from './document-patch.mjs';
 import {documentNames,hasDocumentAccess,validateDocument} from './documents.mjs';
 import {financeRows,healthRows,updateFinance} from './data.mjs';
 import {ownerFinancePart,readOwnerPart,samePart} from './owner-store.mjs';
-import {ownerFood,ownerPurchase,ownerSku,reconcileFinanceLinks} from './owner-health.mjs';
+import {ownerFood,ownerPurchase,ownerSku,reconcileFinanceLinks,reconcileOwnerHealthPatch} from './owner-health.mjs';
 import {attachmentGroups} from './conversation-evidence.mjs';
 import {MEMORY_KEY,memoryLibrary} from './memory.mjs';
 import {auditSafe} from './audit.mjs';
@@ -168,16 +168,28 @@ function page(rows,{offset=0,limit=25}={}){
  return {rows:rows.slice(offset,end),total:rows.length,nextOffset:end<rows.length?end:null};
 }
 // Store before/after only for changed sections. Unchanged external baselines and photo bytes stay in their original store.
-function changedSections(before,after){
+function changedSections(before,after,{keyedRows=false}={}){
+ if(keyedRows&&[before,after].every(value=>Array.isArray(value)&&value.every(row=>isObject(row)&&typeof row.id==='string')&&
+  new Set(value.map(row=>row.id)).size===value.length)){
+  const old=new Map(before.map(row=>[row.id,row])),next=new Map(after.map(row=>[row.id,row]));
+  const sameOrder=same(before.filter(row=>next.has(row.id)).map(row=>row.id),after.filter(row=>old.has(row.id)).map(row=>row.id));
+  if(sameOrder)return [before.filter(row=>!same(row,next.get(row.id))),after.filter(row=>!same(row,old.get(row.id)))];
+ }
  if(!isObject(before)||!isObject(after))return [before,after];
  const old={},next={};
  for(const key of new Set([...Object.keys(before),...Object.keys(after)])){
   if(same(before[key],after[key]))continue;
-  const [a,b]=changedSections(before[key],after[key]);
+  const [a,b]=changedSections(before[key],after[key],{keyedRows});
   if(a!==undefined)old[key]=a;
   if(b!==undefined)next[key]=b;
  }
  return [old,next];
+}
+
+function historyPart(part){
+ if(part.document!=='finance')return part;
+ const [before,after]=changedSections(part.before.payload,part.after.payload,{keyedRows:true});
+ return {document:part.document,id:part.id,before:{payload:before},after:{payload:after}};
 }
 
 function differences(before,after,path=''){
@@ -246,11 +258,14 @@ export function createOwnerData(workspace,{book,journal,authorized=()=>true}={})
   const finance=working.get('finance');
   if(finance&&!same(finance.before.payload,finance.next))reconcileFinanceLinks(state.health,finance.before.payload??freshData(),finance.next??freshData());
   if(!state.health||!validateAppState(state.health))throw Error('修改后的健康数据结构无效');
-  const problems=verifyGraph(state.health,original);
+  ensureContainers(state.health);
+  const linkedChange=['purchases','agentReceipts'].some(table=>!same(state.health.local[table],original.local[table]));
+  const existingFinance=finance?.before??(linkedChange?await store.read({document:'finance',id:null}):null);
+  const problems=verifyGraph(state.health,original,{finance:finance?finance.next??freshData():existingFinance?.payload??(linkedChange?freshData():undefined),
+   beforeFinance:existingFinance?.payload??(existingFinance?freshData():undefined)});
   if(problems.length)throw Error('关联校验：'+problems.slice(0,5).join('；'));
   if(!same(state.health.local.medical,original.local.medical)||!same(state.health.legacy.sourceSnapshot,original.legacy.sourceSnapshot))
    verifyMedicalState(state.health);
-  ensureContainers(state.health);
   state.health.revision=original.revision;
   if(original.revision===undefined)delete state.health.revision;
   const parts=[...working.values()].map(({document,id,before,next})=>({document,id,before,
@@ -258,7 +273,7 @@ export function createOwnerData(workspace,{book,journal,authorized=()=>true}={})
   const healthChanged=!same(original,state.health);
   if(!parts.length&&!healthChanged)return {status:'ok',data:output,detail:'当前数据已经是指定状态'};
   const [beforeHealth,afterHealth]=healthChanged?changedSections(original,state.health):[];
-  const record={id,at:new Date().toISOString(),summary,reverts,fingerprint,data:output,source:{threadId:context.run.threadId??null,
+  const record={id,at:new Date().toISOString(),summary,reverts,fingerprint,data:output,historyParts:parts.map(historyPart),source:{threadId:context.run.threadId??null,
    taskId:context.run.id??null,messageIds:(context.run.userSources??[]).filter(row=>row.current).map(row=>row.id)},
    ...(healthChanged?{beforeHealth,afterHealth}:{})};
   const saved=await store.commit(state.health,original.revision??0,{record,parts},()=>guard(context));
@@ -507,7 +522,7 @@ export function createOwnerData(workspace,{book,journal,authorized=()=>true}={})
    return result;
   },{fingerprint});},
   patch(args,context){return transaction(context,args.reason,async state=>{
-   const results=[];
+   const results=[],healthBefore=state.health;
    for(const part of args.documents){
     if(!has(documentNamesAll,part.document))throw Error('文档不在当前账本范围');
     if(part.document==='tasks'&&part.id===context.run.id)throw Error('正在执行的任务可在结束后编辑');
@@ -516,17 +531,18 @@ export function createOwnerData(workspace,{book,journal,authorized=()=>true}={})
     const prior=await state.load(part.document,id);
     const next=editDocument(prior,safeJson(part.patch,'JSON Patch'))??null;
     if(id&&next!==null&&next.id!==id)throw Error('文档内容 ID 必须与存储记录一致');
-    if(part.document==='health'&&next){
-     for(const sku of [...next.legacy.inventory,...(next.local.inventory??[])]){
-      const original=[...prior.legacy.inventory,...(prior.local.inventory??[])].find(row=>row.id===sku.id);
-      if(!original||sku.unit===original.unit)continue;
-      const unit=sku.unit,quantity=sku.quantity??(sku.qty!==original.qty?sku.qty:undefined);
-      Object.assign(sku,{unit:original.unit,qty:original.qty});delete sku.quantity;
-      ownerSku(next,{id:sku.id,action:'update',fields:{unit,quantity},operationId:context.operationId+':'+sku.id,date:context.run.date});
-     }
-    }
     state.put(part.document,id,next);
     results.push({document:part.document,id});
+   }
+   if(state.health!==healthBefore){
+    if(!validateAppState(state.health))throw Error('修改后的健康数据结构无效');
+    state.health=await reconcileOwnerHealthPatch(healthBefore,state.health,{operationId:context.operationId,date:context.run.date,
+     applyOrder:async(next,{id,action,fields})=>{
+      state.health=next;
+      await applyRecord(state,{dataset:'purchases',id,action,changes:JSON.stringify(fields)},
+       context.operationId+':purchase:'+id,context.run.date);
+      return state.health;
+     }});
    }
    return results;
   });},

@@ -127,6 +127,7 @@ function removeUnusedTree(state,batchId,{archive=false}={}) {
   return true;
  }
  state.local.batches=state.local.batches.filter(b=>!ids.has(b.id));
+ if(state.local.containers)state.local.containers=state.local.containers.filter(row=>!ids.has(row.batchId));
  state.local.stockMoves=state.local.stockMoves.filter(m=>!ids.has(m.batchId));
 }
 

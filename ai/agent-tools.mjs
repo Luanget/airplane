@@ -342,7 +342,7 @@ export function createAgentTools(workspace,{book,journal,authorized=()=>true}={}
  add('mutate_records','按 ID 新增、修改或删除。changes 是 JSON 对象字符串，删除用 {}；同一批可跨账本按顺序原子提交，优先使用本工具保留依赖。',obj({
   reason:str(1,500),operations:items(obj({dataset:select(...Object.keys(ownerDatasets)),id:opt(str()),parentId:opt(str()),
    action:select('add','update','delete'),changes:{type:'string',minLength:2}}))}),(args,context)=>owner.mutate(args,context),true,true);
- add('apply_json_patch','跨文档原子修改 JSON Pointer。patch 为 RFC 6902 数组字符串；财务根路径直接从 /transactions 开始。库存重新计量优先 mutate_records。',obj({
+ add('apply_json_patch','跨文档原子修改 JSON Pointer。patch 为 RFC 6902 数组字符串；财务根路径直接从 /transactions 开始。库存重新计量优先 mutate_records。修改饮食或采购事实时程序会更新关联，直接编辑流水必须保持原批次和事件一致。',obj({
   reason:str(1,500),documents:items(obj({...documentRef,patch:{type:'string',minLength:2}}))}),(args,context)=>owner.patch(args,context),true,true);
  add('get_change_history','查询所有者修改历史及差异。id 留空列历史，给操作 ID 返回该次修改分页。',obj({
   id:opt(str()),...paging}),async(args,context)=>output(await owner.history(args,context)),false,true);

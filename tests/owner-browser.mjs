@@ -109,6 +109,34 @@ try{
  assert.deepEqual(await state(),{pending:true,revision:4,qty:30,amount:38});
  await page.evaluate(async()=>(await import('/health/purchase-sync.mjs')).abandonPurchaseUpdate({finance:localStorage}));
  assert.deepEqual(await state(),{pending:false,revision:4,qty:30,amount:39.6});
+ const patchProof=await page.evaluate(async()=>{
+  const {createOwnerData}=await import('/ai/owner.mjs'),{localWorkspace}=await import('/ai/workspace.mjs');
+  const {readOwnerChange}=await import('/health/storage.mjs');
+  const {inventoryWithMoves}=await import('/health/core.mjs'),{readFinance}=await import('/finance-storage.mjs');
+  const owner=createOwnerData(localWorkspace());
+  const context=id=>({operationId:id,run:{allowRead:true,id,date:'2026-11-21'}});
+  await owner.undo('browser-resume',context('before-patch'));
+  const request=docs=>({reason:'更正合成饮食和净额',documents:docs.map(([document,patch])=>({document,id:null,patch:JSON.stringify(patch)}))});
+  const replace=(path,value)=>({op:'replace',path,value});
+  const good=request([['health',[replace('/local/foods/0/amount',50)]],
+   ['finance',[replace('/transactions/0/amount',39.6)]]]);
+  const saved=await owner.patch(good,context('browser-new-patch'));
+  const record=await readOwnerChange({},saved.undo.id);
+  const inspect=async()=>{
+   const health=await localWorkspace().readHealth();
+   return {stock:inventoryWithMoves(health).find(row=>row.id==='egg').qty,kcal:health.local.foods[0].nutrition.kcal,
+    amount:readFinance(localStorage).payload.transactions[0].amount};
+  };
+  const after=await inspect();
+  let rejected;
+  try{await owner.patch(request([['health',[replace('/local/stockMoves',[])]]]),context('browser-invalid-patch'));}
+  catch(error){rejected=error.message.includes('关联校验');}
+  await owner.undo(saved.undo.id,context('undo-new-patch'));
+  return {after,rejected,undone:await inspect(),compact:!Object.hasOwn(record.parts[0].before,'primary')};
+ });
+ assert.deepEqual(patchProof,{after:{stock:1950,kcal:50,amount:39.6},rejected:true,
+  undone:{stock:1800,kcal:200,amount:39.67},compact:true});
+ console.log('PASS related JSON Patch commit, raw inconsistent movement rejection, compact finance audit and undo');
  assert.deepEqual(errors,[]);
  console.log('PASS real IndexedDB interruption, automatic reload recovery, retry without duplicate, and compensating rollback');
 }finally{

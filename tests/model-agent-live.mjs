@@ -237,6 +237,20 @@ const cases=[
    assert.equal(rows.find(row=>row.amount===50).foodId,null);
    assert.equal(qty(w,'egg'),1850);
    assert.ok(run.receipts.some(row=>row.tool==='query_records'&&row.result.status==='ok'));}},
+ {id:'owner-patch-historical',owner:true,turns:[{text:'把2020年8月18日的合成鸡蛋实际饮食改成50克，保持原记录和餐次。请用高级 JSON Patch 改份量字段，由程序重算扣库、成本和营养。'},
+  {text:'现在把这一条改成饮食计划，从实际摄入移出，不再扣库存。仍用 JSON Patch 原地改它。'}],
+  verify:(w,run)=>{
+   const row=events(w.state,'foods').find(row=>row.id==='historical-egg');
+   assert.deepEqual([row?.status,row?.amount,row?.nutrition.kcal,qty(w,'egg')],['plan',50,50,2000]);
+   assert.equal(w.state.local.stockMoves.filter(move=>move.linkedFoodId===row.id).length,0);
+   assert.ok(run.receipts.some(row=>row.tool==='apply_json_patch'&&row.result.status==='saved'));}},
+ {id:'owner-patch-purchase',owner:true,turns:[{text:'把2020年8月18日的合成订单只从健康采购库存删掉。保留财务里真实付过的39.67元和早先实际饮食。请走高级 JSON Patch 删除采购记录。'}],
+  verify:(w,run)=>{
+   assert.equal(w.state.local.purchases.length,0);
+   assert.deepEqual(['egg','milk','celery'].map(id=>qty(w,id)),[0,0,0]);
+   assert.equal(foods(w,historicalDate)[0]?.nutrition.kcal,200);
+   assert.equal(readFinance(w.finance).payload.transactions[0].amount,39.67);
+   assert.ok(run.receipts.some(row=>row.tool==='apply_json_patch'&&row.result.status==='saved'));}},
  {id:'owner-medical-multi-turn',owner:true,turns:[{text:'给我补录2021年3月12日合成体检中心报告，收缩压122 mmHg，原报告参考90–139 mmHg。不确定值留空。'},
   {text:'上一条体检的收缩压看错了，是128 mmHg，直接改原报告的指标。另外补一句当时用户自述头痛。'}],
   verify:w=>{const data=w.state.local.medical;
