@@ -9,11 +9,11 @@ export function assistantFixture(today){
  state.settings.cycleDays=6;
  const add=(id,name,unit,basisUnit,extra={})=>saveSku(state,{id,name,unit,basisUnit,basisAmount:100,
   kcal:100,protein:10,carbs:12,fat:3,sodium:40,...extra});
- const sauce=add('fixture-sauce','合成牛肉辣椒酱','瓶','g',{packageSize:200,packageUnit:'g',price:6});
- const milk=add('fixture-milk','合成脱脂牛奶','mL','mL',{packageSize:1000,packageUnit:'mL',packageKind:'盒',kcal:35});
- const chicken=add('fixture-chicken','合成熟鸡胸','g','g',{kcal:160,protein:32});
- const noodles=add('fixture-noodles','合成荞麦面','包','包',{basisAmount:1,kcal:220});
- const greens=add('fixture-greens','合成小青菜','g','g',{kcal:18,foodGroup:'vegetable'});
+ const sauce=add('fixture-sauce','合成牛肉辣椒酱','瓶','g',{foodGroup:'condiment',packageSize:200,packageUnit:'g',price:6});
+ const milk=add('fixture-milk','合成脱脂牛奶','mL','mL',{foodGroup:'dairy',packageSize:1000,packageUnit:'mL',packageKind:'盒',kcal:35});
+ const chicken=add('fixture-chicken','合成熟鸡胸','g','g',{foodGroup:'meat',kcal:160,protein:32});
+ const noodles=add('fixture-noodles','合成荞麦面','包','包',{foodGroup:'staple',basisAmount:1,kcal:220});
+ const greens=add('fixture-greens','合成小青菜','g','g',{kcal:18,foodGroup:'vegetable',vegetableBasis:'whole'});
  add('fixture-hidden','未提及的合成苹果','g','g').qty=900;
  addBatch(state,{id:'sauce-batch',date:yesterday,foodId:sauce.id,quantity:2,costCents:1200});
  addBatch(state,{id:'milk-batch',date:yesterday,foodId:milk.id,quantity:3000,costCents:1800});

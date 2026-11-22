@@ -1,4 +1,5 @@
-import {fillSkuFoodGroup,foodGroupProposal} from '../health/food-groups.mjs';
+import {fillSkuFoodGroup} from '../health/food-categories.mjs';
+import {foodGroupProposal} from '../health/food-groups.mjs';
 import {summarizeNote} from '../finance-note.mjs';
 import {normalizeClock} from '../calendar.mjs';
 import {freshData,readFinance} from '../finance-storage.mjs';

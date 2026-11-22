@@ -53,6 +53,7 @@ try{
     await saveState(partial,state.revision??0);
    });
    await page.reload();
+   await page.waitForFunction(()=>typeof document.getElementById('health-settings').onclick==='function');
    await page.locator('[data-tab=inventory]').click();
    const row=page.locator('[data-stock-id=demo-sauce]'),sku=row.locator('[data-stock-expand]');
    await sku.waitFor();
@@ -103,6 +104,7 @@ try{
    }
    await sheet.locator('[data-sheet-close]').click();
    await page.reload();
+   await page.waitForFunction(()=>typeof document.getElementById('health-settings').onclick==='function');
    await page.locator('[data-tab=inventory]').click();
    await sku.click();
    await row.locator('[data-open-package]').getByText(/最新毛重 310 g/).waitFor();

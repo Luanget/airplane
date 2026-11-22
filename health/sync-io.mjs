@@ -73,7 +73,7 @@ export function createSyncPackage(state,{id,version,now=new Date().toISOString()
  for(const value of deletes.values())
   if(EVENT_TYPES.includes(value.type)&&!events(state,value.type).some(row=>row.id===value.id))
    changes.push({...value,action:'delete'});
- for(const type of ['stockMoves','batches','purchases','templates','shoppingList','containers','containerEvents','dayCompleteness','agentReceipts']){
+ for(const type of ['stockMoves','batches','purchases','templates','shoppingList','containers','containerEvents','dayCompleteness','agentReceipts','foodCategories']){
   const prior=new Map(Object.values(anchors).flatMap(anchor=>Object.values(anchor.records[type]??{}))
    .filter(record=>record.target).map(record=>[record.target,record.accepted]));
   for(const row of state.local[type]??[]){
@@ -289,6 +289,9 @@ export function projectExternalLedger(raw,state,{version,id,today=localDate(),no
  projectSummaries(tables,raw,base,state,dates,today);
  projectInventory(tables,raw,base,state);
  projectCatalogs(tables,base,state);
+ const foodCategories=state.local.foodCategories??[];
+ if(!same(tables.airplane_food_categories??[],foodCategories))
+  tables.airplane_food_categories=structuredClone(foodCategories);
  const parameters=settings=>({'起始日期':settings.cycleAnchor,'周期天数':settings.cycleDays,
   '周期日期':settings.cycleAnchor+'–'+addDays(settings.cycleAnchor,settings.cycleDays-1),
   '周期目标缺口':settings.cycleTarget,'无运动基线TDEE':settings.baselineTdee,'日摄入参考':settings.calorieTarget,

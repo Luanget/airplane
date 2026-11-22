@@ -1,4 +1,5 @@
 import {foodClassification} from './food-groups.mjs';
+import {validFoodCategories} from './food-categories.mjs';
 import {apportionedCost,catalogCost,packageCostReference,packagePrice} from './package-price.mjs';
 import {ensureMedical,validMedical} from './medical.mjs';
 import {effectiveTdee} from './agent-rules.mjs';
@@ -132,6 +133,7 @@ export function normalizeLedger(raw){
   ...(r.airplane_weighing?{weighing:r.airplane_weighing}:{}),...(r.airplane_evidence?{agentEvidence:r.airplane_evidence}:{}),source:'legacy',qualityFlag:validDate(String(r['日期']||''))?null:'missing_date' }));
  result.legacy.weights=(t.weight_events||[]).map((r,i)=>({id:`legacy-weight-${i}`,date:String(r['日期']||''),kg:numeric(r['数值']),time:String(r['时间']||''),trendStatus:String(r['纳入趋势']||''),source:'legacy'})).filter(r=>validDate(r.date));
  result.legacy.activities=(t.activity_events||[]).map((r,i)=>({id:`legacy-activity-${i}`,date:String(r['日期']||''),name:String(r['项目']||r['类别']||''),km:numeric(r['距离(km)']),minutes:numeric(r['时长(min)']),time:String(r['时间']||''),kcal:numeric(r['活动消耗估计(kcal)']),status:String(r['状态']||''),source:'legacy',energyKind:r.energyKind==='total'?'total':'activity',...(r.excludedFromEnergy?{excludedFromEnergy:true}:{}),includedInBase:r.includedInBase??!/^(?:户外单车|夜骑|长骑)/.test(String(r['类别']||''))})).filter(r=>validDate(r.date));
+ if(Array.isArray(t.airplane_food_categories))result.local.foodCategories=structuredClone(t.airplane_food_categories);
  result.legacy.inventory=(t.food_inventory||[]).map(normalizeInventory).filter((item,index,items)=>items.findIndex(x=>x.id===item.id)===index);
  for (const r of t.daily_summaries||[]){const d=String(r['日期']||'');if (!validDate(d)) continue;result.legacy.daily[d]={
   date:d, nutrition:{kcal:numeric(r.kcal),protein:numeric(r['蛋白质(g)']),carbs:numeric(r['碳水(g)']),fat:numeric(r['脂肪(g)']),sodium:numeric(r['钠(mg)'])}, note:String(r['记录完整性']||'')
@@ -189,7 +191,7 @@ export function validateAppState(state){
     (Number.isSafeInteger(x.totalCents)&&x.totalCents>=0||x.totalCents===null&&x.stockOnly===true&&!x.financeId&&!x.receiptId))
    && (m.edits==null || object(m.edits) && ['foods','weights','activities'].every(k=>m.edits[k]==null || object(m.edits[k]) && Object.values(m.edits[k]).every(x=>x===null || object(x) && (k!=='foods' || food(x)) && dated(x))))
    && object(l.daily) && Object.values(l.daily).every(x => object(x?.nutrition))
-   && object(l.energy) && Object.values(l.energy).every(object)
+   && object(l.energy) && Object.values(l.energy).every(object) && validFoodCategories(state)
    && (state.revision === undefined || (Number.isSafeInteger(state.revision) && state.revision >= 0));
 }
 export function sampleNutrientSum(items){
@@ -410,7 +412,8 @@ export function addFood(state,fields,id,newId) {
   throw Error('请在包装的称重历史中更正这笔饮食重量');
  const createdAt=previous?.createdAt ?? new Date().toISOString();
  const existingClassification=previous?.foodId===(foodId||null)?foodClassification(previous):{};
- for(const key of ['foodGroup','category'])if(fields[key]!==undefined)existingClassification[key]=fields[key];
+ for(const key of ['foodGroup','category','categoryId','vegetableBasis','vegetableGrams'])
+  if(fields[key]!==undefined)existingClassification[key]=fields[key];
  const classification=foodClassification(existingClassification);
  const entry={...classification,id:id??newId??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
   foodId:foodId||null,stockQty:qty,amount:numeric(amount),...(amountUnit?{amountUnit}:{}),...(weighing?{weighing}:{}),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:fields.costEstimated?'estimated_package':explicitCost===null?'inventory':'manual'};

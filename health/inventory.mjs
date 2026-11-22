@@ -62,7 +62,7 @@ export function saveSku(state,fields) {
   if(density!=null&&density<=0)throw Error('请核对食品密度');
   const preservePrice=price===null&&previous?.priceBasis&&previous.priceBasis!==unit;
   const classification={};
-  for(const key of ['foodGroup','category']){
+  for(const key of ['foodGroup','category','categoryId','vegetableBasis']){
    const value=fields[key];
    if(Object.hasOwn(fields,key)&&(typeof value==='string'||value===null))classification[key]=value?.trim()||null;
   }

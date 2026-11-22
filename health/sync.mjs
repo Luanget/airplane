@@ -1,3 +1,4 @@
+import {foodClassification} from './food-groups.mjs';
 import {auditedDisposition} from './inventory.mjs';
 import {ensureMedical,medicalData,MEDICAL_TABLES,medicalTableLabel} from './medical.mjs';
 import {ensureContainers} from './containers.mjs';
@@ -13,7 +14,7 @@ import {EVENT_TYPES,baselines,eventData,eventIdentity,externalCatalogs,foodStatu
 
 const clone=structuredClone;
 const empty=()=>Object.create(null);
-const labels={foods:'饮食',weights:'体重',activities:'运动',inventory:'食品与库存',purchases:'采购',
+const labels={foodCategories:'食品细分类别',foods:'饮食',weights:'体重',activities:'运动',inventory:'食品与库存',purchases:'采购',
  dayCompleteness:'全天记录确认',agentReceipts:'截图订单回执',batches:'库存批次',stockMoves:'库存流水',templates:'餐食模板',shoppingList:'补货清单',
  containers:'独立包装',containerEvents:'包装称重或消耗',stockLinks:'扣库待核对',baselines:'每日汇总与能量基线',settings:'健康参数',aliases:'食品别名',prices:'单价目录',purchaseEvents:'外部采购',inventoryAudit:'库存审计',rules:'现行规则'};
 const keyFor=(kind,row)=>kind==='shoppingList'?row.foodId:kind==='rules'?row.key:row.id;
@@ -430,6 +431,8 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   catalog(kind,catalogs[kind]??=[],items);
  }
  catalog('rules',next.legacy.rules,incoming.legacy.rules);
+ if(incoming.local.foodCategories?.length)
+  catalog('foodCategories',next.local.foodCategories??=[],incoming.local.foodCategories);
  const names=next;
 
  // Register food identities before linking events, purchases and movements.
@@ -480,7 +483,7 @@ export function planHealthMerge(current,source,{choices={},finance=null,baseSour
   const comparableBefore=raw&&!sameEdition?before:location,comparableIncoming=raw&&!sameEdition?sku:base;
   const sameOpening=sameEdition&&before.id===sku.id&&location.qty===base.qty&&
    location.active===base.active&&
-   (location.pricePerUnit===base.pricePerUnit||before.packagePrice&&same(before.packagePrice,sku.packagePrice))&&same(location.nutrition,base.nutrition);
+   (location.pricePerUnit===base.pricePerUnit||before.packagePrice&&same(before.packagePrice,sku.packagePrice))&&same(location.nutrition,base.nutrition)&&same(foodClassification(location),foodClassification(base));
   const sameInventory=sameOpening||same(signature(comparableBefore),signature(comparableIncoming));
   if(!sameInventory&&(!old||old.incoming!==hash(stable(observedInventory)))){
    const change=entry('inventory',key+'-values',before,sku,'conflict',laterAudit.length?[review[0]]:review,

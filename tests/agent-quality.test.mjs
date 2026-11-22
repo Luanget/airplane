@@ -61,8 +61,8 @@ test('long-term preference replaces its topic, keeps history and respects manual
 
 test('meal planning keeps one-turn exceptions scoped and labels vegetables with estimated missing nutrients',async()=>{
  const state=newState(),finance=local(),memory=memoryLibrary(finance);
- const chicken=saveSku(state,{id:'chicken',name:'合成鸡胸',unit:'g',basisUnit:'g',basisAmount:100,kcal:158,protein:31,fat:4,carbs:0,sodium:60});
- const veg=saveSku(state,{id:'celery',name:'芹菜',unit:'g',basisUnit:'g',basisAmount:100,kcal:18});
+ const chicken=saveSku(state,{id:'chicken',name:'合成鸡胸',unit:'g',basisUnit:'g',basisAmount:100,foodGroup:'meat',kcal:158,protein:31,fat:4,carbs:0,sodium:60});
+ const veg=saveSku(state,{id:'celery',name:'芹菜',unit:'g',basisUnit:'g',basisAmount:100,foodGroup:'vegetable',vegetableBasis:'whole',kcal:18});
  chicken.qty=500;veg.qty=500;
  const estimate={amount:100,unit:'g',source:'通用芹菜参考',uncertainty:'按生鲜可食部分估计',
   nutrition:{kcal:999,protein:1,fat:.2,carbs:3,sodium:70}};
@@ -95,8 +95,8 @@ test('cycle review keeps gaps unknown, excludes plans and preserves the original
  Object.assign(state.settings,{cycleAnchor:start,cycleDays:6,baselineTdee:2900,proteinMin:150,fatMin:45,sodiumTarget:2000});
  state.legacy.energy[last]={tdee:2750};
  for(let i=0;i<8;i++)recordEvent(state,'weights',{date:addDays(last,i-7),kg:76-i,isMorning:true});
- addFood(state,{date:last,name:'合成午餐',meal:'午餐',kcal:1550,protein:110,carbs:140,fat:35,sodium:2400,status:'actual'});
- addFood(state,{date:last,name:'芹菜',meal:'午餐',amount:320,amountUnit:'g',kcal:30,protein:3.2,carbs:9.6,fat:0,sodium:60});
+ addFood(state,{date:last,name:'合成午餐',meal:'午餐',foodGroup:'mixed',kcal:1550,protein:110,carbs:140,fat:35,sodium:2400,status:'actual'});
+ addFood(state,{date:last,name:'芹菜',meal:'午餐',foodGroup:'vegetable',vegetableBasis:'whole',amount:320,amountUnit:'g',kcal:30,protein:3.2,carbs:9.6,fat:0,sodium:60});
  addFood(state,{date:last,name:'合成晚餐',meal:'晚餐',kcal:800,status:'plan'});
  const report=cycleReport(state,last,today);
  assert.equal(report.deficit,1170);assert.equal(report.reportedDays,1);
@@ -133,8 +133,8 @@ test('whole-day planning retries a vegetable shortfall against 500 g and saves a
   saveSku(state,{id,name,unit:'g',basisUnit:'g',basisAmount:100,...nutrition}).qty=qty;
   return id;
  };
- const main=sku('main','合成主餐',{kcal:158,protein:15.7,carbs:15,fat:4.8,sodium:90},1500);
- const veg=sku('veg','芹菜',{kcal:18,protein:1,carbs:3,fat:.2,sodium:70},800);
+ const main=sku('main','合成主餐',{foodGroup:'mixed',kcal:158,protein:15.7,carbs:15,fat:4.8,sodium:90},1500);
+ const veg=sku('veg','芹菜',{foodGroup:'vegetable',vegetableBasis:'whole',kcal:18,protein:1,carbs:3,fat:.2,sodium:70},800);
  const moves=structuredClone(state.local.stockMoves);
  const tools=createAgentTools({finance,memory:memoryLibrary(finance),readHealth:async()=>structuredClone(state),
   saveHealth:async(next,expected,guard)=>{assert.equal(state.revision??0,expected);guard();state={...next,revision:expected+1};}});

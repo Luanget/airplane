@@ -8,8 +8,9 @@ import {setFinanceAutomation} from '../ai/finance.mjs';
 import {setMedicalAuto} from '../ai/medical-chat.mjs';
 import {memoryLibrary} from '../ai/memory.mjs';
 import {planNativeModel,advanceModelPolicy} from '../ai/models.mjs';
-import {planOperation} from '../ai/meal-planning.mjs';
+import {mushroomIntake,planOperation,vegetableIntake} from '../ai/meal-planning.mjs';
 import {addDays,addFood,events,inventoryWithMoves} from '../health/core.mjs';
+import {administerFoodCategory,categoryReader,readFoodCategories} from '../health/food-categories.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {makeMedicalAttachment} from '../health/medical.mjs';
@@ -42,12 +43,12 @@ function world(){
  const finance={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value),removeItem:key=>values.delete(key)};
  let state=assistantFixture(today);
  Object.assign(state.settings,{calorieTarget:1700,proteinMin:150,proteinMax:170,fatMin:45,sodiumTarget:2000});
- for(const [id,name,kcal,protein,fat,carbs] of [
-  ['fixture-white','合成蛋白',50,11,0,0],['fixture-yogurt','合成浓酸奶',75,10,1,4],['fixture-rice','合成米饭',130,2.7,.3,28],
-  ['fixture-oil','合成橄榄油',900,0,100,0],['fixture-celery','合成芹菜',18,1,0,3]
+ for(const [id,name,kcal,protein,fat,carbs,foodGroup] of [
+  ['fixture-white','合成蛋白',50,11,0,0,'egg'],['fixture-yogurt','合成浓酸奶',75,10,1,4,'dairy'],['fixture-rice','合成米饭',130,2.7,.3,28,'staple'],
+  ['fixture-oil','合成橄榄油',900,0,100,0,'fat'],['fixture-celery','合成芹菜',18,1,0,3,'vegetable']
  ])saveSku(state,{id,name,unit:'g',basisAmount:100,basisUnit:'g',kcal,protein,fat,carbs,sodium:skuSodium(id),
-  ...(id==='fixture-celery'?{foodGroup:'vegetable'}:{})}).qty=1000;
- saveSku(state,{id:'fixture-egg',name:'合成鸡蛋',unit:'个',basisAmount:1,basisUnit:'个',kcal:75,protein:6,fat:5,carbs:1,sodium:70}).qty=7;
+  foodGroup,...(foodGroup==='vegetable'?{vegetableBasis:'whole'}:{})}).qty=1000;
+ saveSku(state,{id:'fixture-egg',name:'合成鸡蛋',unit:'个',foodGroup:'egg',basisAmount:1,basisUnit:'个',kcal:75,protein:6,fat:5,carbs:1,sodium:70}).qty=7;
  const workspace={finance,memory:memoryLibrary(finance),readHealth:async()=>structuredClone(state),get state(){return state;},
   set state(value){state=value;},saveHealth:async(next,expected,guard)=>{
    guard?.();assert.equal(expected,state.revision??0);state={...structuredClone(next),revision:expected+1};
@@ -91,7 +92,41 @@ function evidenceInventory(w){
   ['chicken-portion-evidence', 'fixture-chicken',243.6,true]])addBatch(state,{id,foodId,date:yesterday,quantity,portion});
 }
 const typedFood=(name,stamp)=>image([name,'净含量 1 L','每 100 mL 营养：能量 66 kcal','蛋白质 3.5 g 碳水 4.8 g 脂肪 3.8 g 钠 40 mg'],stamp);
+const createDumplingCategory=w=>administerFoodCategory(w.state,{
+ action:'create',name:'水饺',foodGroup:'mixed'
+});
+const toolWasRead=run=>run.receipts.some(row=>row.tool==='read_food_categories'&&row.result.status==='ok');
 const cases=[
+ {id:'rc2-classification-photo',effort:'medium',setup:createDumplingCategory,turns:[{
+  text:'午餐这三张图里各一份，都吃完了，请识别并保存，分类有合适的就复用。',
+  media:()=>[
+   image(['娃娃菜','单一新鲜食材，未加调料','实称食用净重 500 g','每100克 热量16 kcal 蛋白1.2 g 碳水3 g 脂肪0.2 g 钠8 mg'],'rc2-cabbage'),
+   image(['金针菇','单一菌菇，未加调料','实称食用净重 200 g','每100克 热量37 kcal 蛋白2.7 g 碳水7.8 g 脂肪0.3 g 钠3 mg'],'rc2-mushroom'),
+   image(['牛肉芹菜水饺','配料：小麦粉、牛肉、芹菜','实称食用净重 350 g','每100克 热量200 kcal 蛋白9 g 碳水28 g 脂肪6 g 钠360 mg'],'rc2-dumplings')
+  ]
+ }],verify:(w,run)=>{
+  assert.ok(toolWasRead(run),'应先读取本机食品分类');
+  const rows=foods(w),group=Object.fromEntries(rows.map(row=>[row.foodGroup,row]));
+  assert.equal(rows.length,3);assert.equal(group.vegetable?.amount,500);assert.equal(group.mushroom?.amount,200);
+  assert.equal(group.mixed?.amount,350);assert.equal(categoryReader(w.state)(group.mixed).categoryName,'水饺');
+  const inventory=new Map(inventoryWithMoves(w.state).map(row=>[row.id,row]));
+  assert.equal(vegetableIntake(rows,inventory).grams,500);assert.equal(mushroomIntake(rows,inventory).grams,200);
+  assert.ok(rows.every(row=>row.nutrition.kcal>0));
+  return {vegetables:500,mushrooms:200,mixed:350,mixedKcal:group.mixed.nutrition.kcal};
+ }},
+ {id:'rc2-category-purchase',effort:'medium',setup:createDumplingCategory,turns:[{
+  text:'新买了牛肉芹菜水饺500g、猪肉白菜水饺600g、牛乳面包120g，先都入库，不记付款。有合适细分就复用，缺少可以建一个合适的。'
+ }],verify:(w,run)=>{
+  assert.ok(toolWasRead(run),'应先读取本机食品分类');
+  const skus=w.state.local.inventory.filter(row=>/水饺|牛乳面包/.test(row.name));
+  assert.equal(skus.length,3);assert.equal(w.state.local.purchases.length,1);
+  assert.deepEqual(skus.filter(row=>row.foodGroup==='mixed').map(row=>categoryReader(w.state)(row).categoryName),['水饺','水饺']);
+  const bread=skus.find(row=>row.name==='牛乳面包');
+  assert.equal(bread.foodGroup,'bakery');assert.ok(categoryReader(w.state)(bread).categoryId);
+  assert.equal(readFoodCategories(w.state).length,2);
+  assert.ok(noNew(w));return {categories:readFoodCategories(w.state).map(row=>row.name),foods:skus.length};
+ }},
+
  {id:'auto-morning',turns:[{text:'记录晨重72.4kg'}],verify:(w,run)=>{
   assert.deepEqual(w.state.local.weights.map(row=>row.kg),[72.4]);
   assert.equal(run.receipts.filter(row=>row.tool==='write_health'&&row.result.status==='saved').length,1);

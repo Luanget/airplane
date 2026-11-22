@@ -1,4 +1,4 @@
-export const APP_VERSION='1.0.0-rc.1';
+export const APP_VERSION='1.0.0-rc.2';
 export const shellGlyphs = {
  close: '<path d="m6 6 12 12M18 6 6 18"/>',
  check: '<path d="m5 12 4 4L19 6"/>',

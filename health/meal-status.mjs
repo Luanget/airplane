@@ -65,7 +65,8 @@ function mealPlanProgress(state,foods,actual){
  return plans.map(({row,qty,used,done,actualIds})=>{
   const fraction=done?0:qty?(qty.amount-used)/qty.amount:1;
   const remaining=done?null:used>0?{...row,amount:round(qty.amount-used,6),amountUnit:qty.unit,
-   portion:round(qty.amount-used,6)+' '+qty.unit,cost:row.cost==null?null:round(row.cost*fraction,2),
+   portion:round(qty.amount-used,6)+' '+qty.unit,
+   ...(Number.isFinite(row.vegetableGrams)?{vegetableGrams:round(row.vegetableGrams*fraction,3)}:{}),cost:row.cost==null?null:round(row.cost*fraction,2),
    nutrition:Object.fromEntries(NUTRIENTS.map(n=>[n,numeric(row.nutrition?.[n])===null?null:round(row.nutrition[n]*fraction,2)]))}:row;
   return {row,remaining,actualIds,fulfilledAmount:qty?used:null,status:done?'executed':used>0?'partial':'pending'};
  });

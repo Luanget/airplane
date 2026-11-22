@@ -1,4 +1,4 @@
-import {fillSkuFoodGroup} from '../health/food-groups.mjs';
+import {fillSkuFoodGroup} from '../health/food-categories.mjs';
 import {normalizeClock} from '../calendar.mjs';
 import {inventoryWithMoves,isStockReference,round,validDate} from '../health/core.mjs';
 import {quantityInUnit} from '../health/candidates.mjs';
@@ -40,7 +40,7 @@ export function prepareStockReceipt(current,{date,lines,note},{id,today,time,evi
     source:label?(photographic?'用户提供的包装标签照片':'用户申报营养值'):'用户申报入库'});
    stock.push(sku);
   }
-  fillSkuFoodGroup(next,sku.id,line.foodGroup);
+  fillSkuFoodGroup(next,sku.id,line);
   const conversion=packAmount&&packUnit&&packageUnits.has(unit)?{...sku,standard:'',pack:unit,packageSize:packAmount,packageUnit:packUnit}:sku;
   const convert=(value,from)=>quantityInUnit(conversion,value,from,sku.unit);
   const weights=portions.map(portion=>{

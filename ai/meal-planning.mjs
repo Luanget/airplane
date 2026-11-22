@@ -5,7 +5,8 @@ import {packagesFor} from '../health/containers.mjs';
 import {onShelf} from '../health/container-ledger.mjs';
 import {dietGoals,isMealPlan,mealDay} from '../health/meal-status.mjs';
 import {same} from '../health/sync-source.mjs';
-import {foodClassification,vegetableKind} from '../health/food-groups.mjs';
+import {foodClassification,foodGroupOf} from '../health/food-groups.mjs';
+import {categoryReader} from '../health/food-categories.mjs';
 import {recordedPortion} from '../health/food-history.mjs';
 
 export {isMealPlan};
@@ -23,26 +24,38 @@ const byMeal=foods=>Object.fromEntries([...new Set(foods.map(row=>row.meal))].ma
 }));
 const label=value=>String(value??'').normalize('NFKC').toLowerCase().trim();
 
-export function vegetableIntake(rows,inventory){
+function portionGrams(row,sku){
+ try{
+  const portion=recordedPortion({...row,amountUnit:row.amountUnit??row.unit});
+  return quantityInUnit(sku,portion.amount,portion.unit,'g');
+ }catch{return null;}
+}
+
+function intakeGrams(rows,inventory,group){
  let total=0,knownItems=0;
- const unmeasured=[];
+ const unmeasured=[],pending=[];
  for(const row of rows){
-  const sku=inventory.get(row.foodId),kind=vegetableKind(row,sku);
-  if(kind==='other')continue;
-  let grams=null;
-  if(kind==='whole'){
-   try{
-    const portion=recordedPortion({...row,amountUnit:row.amountUnit??row.unit});
-    grams=quantityInUnit(sku,portion.amount,portion.unit,'g');
-   }catch{/* The vegetable is known, but its weight is not. */}
+  const sku=inventory.get(row.foodId),classified=foodGroupOf(row,sku);
+  if(!classified){pending.push(row.name);continue;}
+  if(classified!==group)continue;
+  const weight=portionGrams(row,sku);
+  let grams=weight;
+  if(group==='vegetable'){
+   const known=row.vegetableGrams;
+   const basis=row.vegetableBasis??sku?.vegetableBasis??(sku?.stage==='raw'&&sku?.stockStage==='raw'?'whole':null);
+   grams=Number.isFinite(known)&&known>=0&&(weight===null||known<=weight+1e-6)?known:basis==='whole'?weight:null;
   }
   if(grams==null)unmeasured.push(row.name);
   else{total+=grams;knownItems++;}
  }
- const knownGrams=round(total,2);
- return {grams:unmeasured.length?null:knownGrams,unmeasured,knownItems,
-  ...(unmeasured.length&&knownItems?{knownGrams}:{})};
+ const knownGrams=round(total,2),uncertain=unmeasured.length||pending.length;
+ return {grams:uncertain?null:knownGrams,unmeasured,knownItems,
+  ...(uncertain&&knownItems?{knownGrams}:{}),...(pending.length?{pending:[...new Set(pending)]}:{})};
 }
+
+export const vegetableIntake=(rows,inventory)=>intakeGrams(rows,inventory,'vegetable');
+export const mushroomIntake=(rows,inventory)=>intakeGrams(rows,inventory,'mushroom');
+
 export function planningGoals(state){
  const goals=dietGoals(state),custom=state.settings.vegetableTargetGrams;
  const maximumCarbs=Math.max(0,Math.floor((goals.kcal+goals.kcalTolerance-goals.proteinMin*4-goals.fatMin*9)/4));
@@ -51,10 +64,11 @@ export function planningGoals(state){
 }
 
 export function planningFacts(state,dates,today,habits){
+ const category=categoryReader(state);
  const inventory=inventoryWithMoves(state).filter(isOnHand).map(sku=>{
   const [targetAmount,targetUnit]=basis(sku);
   return {id:sku.id,name:sku.name,aliases:sku.aliases??[],quantity:sku.qty,unit:sku.grossStockOnly?'g 毛重':sku.unit,
-   ...foodClassification(sku),
+   ...foodClassification(sku),...category(sku),
    nutritionBasis:{amount:targetAmount,unit:targetUnit,nutrition:sku.nutrition},price:sku.packagePrice??(sku.pricePerUnit==null?null:{amount:sku.pricePerUnit,unit:sku.priceBasis}),
    containers:packagesFor(state,sku.id).filter(onShelf).map(row=>({id:row.id,kind:row.kind,status:row.status,netGrams:row.net,
     nominal:row.nominal??null,estimated:row.estimated===true,latestGross:row.gross,costCents:row.costCents??null}))};
@@ -83,10 +97,11 @@ function targetChecks(projected,goals,vegetables){
   protein:[goals.proteinMin,goals.proteinMax],fat:[goals.fatMin,null],carbs:[goals.carbs?.low??null,goals.carbs?.high??null],
   sodium:[null,goals.sodiumTarget],vegetables:[goals.vegetableGrams,null]};
  return Object.fromEntries(Object.entries(bounds).map(([key,[min,max]])=>{
-  const value=key==='vegetables'?vegetables.grams:projected[key];
+  const lowerBound=key==='vegetables'&&vegetables.grams===null&&vegetables.knownGrams>=min;
+  const value=key==='vegetables'?(lowerBound?vegetables.knownGrams:vegetables.grams):projected[key];
   const status=min==null&&max==null?'no_target':value==null?'unknown':min!=null&&value<min?'below':max!=null&&value>max?'above':'within';
   const difference=status==='below'?round(min-value,2):status==='above'?round(value-max,2):status==='within'?0:null;
-  return [key,{status,value,min,max,difference}];
+  return [key,{status,value,min,max,difference,...(lowerBound?{lowerBound:true}:{})}];
  }));
 }
 
@@ -173,7 +188,7 @@ export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]
   const {remaining:plans,actualRows,planned,projected}=mealDay(state,day.date,{today,foods:[...foodsForDay(state,day.date),...originals,
    ...accepted.map((row,index)=>({...row,status:'plan',id:'proposed:'+index,amountUnit:row.unit}))]});
   const all=[...actualRows,...plans];
-  const vegetables=vegetableIntake(all,inventory);
+  const vegetables=vegetableIntake(all,inventory),mushrooms=mushroomIntake(all,inventory);
   for(const habit of habits){
    const constraint=habit.constraint;
    if(!constraint||constraint.kind!=='food_meal_limit'||exceptions.some(row=>row.habitId===habit.id&&row.date===day.date))continue;
@@ -190,7 +205,7 @@ export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]
   const unknown=Object.keys(checks).filter(key=>checks[key].status==='unknown');
   const priced=plans.filter(row=>row.cost!=null),knownPlannedCost=priced.length?round(priced.reduce((sum,row)=>sum+row.cost,0),2):null;
   const knownDayCost=knownPlannedCost==null&&day.actualCost==null?null:round((knownPlannedCost??0)+(day.actualCost??0),2);
-  return {...day,proposed:accepted,meals:byMeal(plans),planned,projected,vegetables,gaps,
+  return {...day,proposed:accepted,meals:byMeal(plans),planned,projected,vegetables,mushrooms,gaps,
    targetsMet:Object.fromEntries(Object.entries(checks).map(([key,{status}])=>[key,
     ['unknown','no_target'].includes(status)?null:status==='within'])),
    nutritionCheck:{status:outside.length?'outside':unknown.length?'unknown':'within',checks,outside,unknown},

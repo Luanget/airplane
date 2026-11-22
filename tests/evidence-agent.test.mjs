@@ -8,6 +8,7 @@ import {setFinanceAutomation} from '../ai/finance.mjs';
 import {memoryLibrary} from '../ai/memory.mjs';
 import {threadBook} from '../ai/threads.mjs';
 import {dayIntake,inventoryWithMoves,validateAppState} from '../health/core.mjs';
+import {readFoodCategories,categoryReader} from '../health/food-categories.mjs';
 import {vegetableIntake} from '../ai/meal-planning.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {saveSku} from '../health/inventory.mjs';
@@ -201,7 +202,7 @@ test('photo classification saves one-off food, protects mixed dishes and support
   intent:'execute',date,meal:'午餐',steps:[],
   observations:[{dishKey:'mixed',name:'芹菜炒牛肉',role:'served',images:[1],amount:300,unit:'g',confidence:'measured',
    basisAmount:null,basisUnit:null,nutrition:null,uncertainty:'合成称重'}],
-  foodGroups:[{name:'芹菜炒牛肉',foodGroup:'vegetable'}]
+  foodGroups:[{name:'芹菜炒牛肉',foodGroup:'mixed',vegetableGrams:40}]
  };
  const revision=w.state.revision??0;
  const preview=await call(tool,'write_meal_photos',{...picture,intent:'preview'},run,'photo-preview');
@@ -212,7 +213,7 @@ test('photo classification saves one-off food, protects mixed dishes and support
  const intake=w.state.local.foods.at(-1);
  assert.equal(intake.foodGroup,'mixed');
  assert.equal(intake.foodId,null);
- assert.equal(vegetableIntake([intake],new Map()).grams,null);
+ assert.equal(vegetableIntake([intake],new Map()).grams,0);
  const correction='把这条一次性饮食的分类改为肉类',edited=await call(tool,'classify_food',{
   skuId:null,recordId:intake.id,foodGroup:'meat',evidence:correction
  },turn('photo-category-correction',correction));
@@ -225,10 +226,87 @@ test('photo classification saves one-off food, protects mixed dishes and support
  const known=turn('known-photo','外食一份合成谷物300克，吃完了。');
  known.attachments=[{id:'next-image',key:'next-image'}];
  const matched=await call(tool,'write_meal_photos',{
-  ...picture,observations:[{...picture.observations[0],name:'合成谷物'}],foodGroups:[{name:'合成谷物',foodGroup:'vegetable'}]
+  ...picture,observations:[{...picture.observations[0],name:'合成谷物'}],foodGroups:[{name:'合成谷物',foodGroup:'staple'}]
  },known);
  assert.equal(matched.status,'saved');
  assert.equal(w.state.local.foods.at(-1).category,'主食');
- assert.equal(w.state.local.foods.at(-1).foodGroup,undefined);
+ assert.equal(w.state.local.foods.at(-1).foodGroup,'staple');
  assert.equal(quantity(w,'known-grain'),500);
+});
+
+test('taxonomy reuses aliases, merges only category references and supports rename, undo and legacy group fill',async()=>{
+ const w=mock(),tool=createAgentTools(w);
+ const text='创建需要的食品类别并整理分类。',run=turn('category-admin',text);
+ const manage=(operationId,args)=>call(tool,'manage_food_category',
+  {action:'create',id:null,targetId:null,name:null,foodGroup:null,evidence:text,...args},run,operationId);
+ const create=async(operationId,name,foodGroup)=>{
+  const result=await manage(operationId,{name,foodGroup});assert.equal(result.status,'saved');return result.receipt.category.id;
+ };
+ const dumplings=await create('dumpling-type','水饺','mixed');
+ const duplicate=await manage('duplicate-type',{name:' 水　饺 ',foodGroup:'mixed'});
+ assert.equal(duplicate.data.category.id,dumplings);
+ assert.equal(readFoodCategories(w.state).filter(category=>category.foodGroup==='mixed').length,1);
+
+ const old=saveSku(w.state,{name:'牛肉芹菜水饺',unit:'g',basisUnit:'g',basisAmount:100,kcal:180,category:'牛肉水饺'});
+ old.qty=600;
+ const filled=await call(tool,'classify_food',{skuId:old.id,recordId:null,mode:'fill',foodGroup:'mixed',categoryId:dumplings,evidence:text},
+  run,'fill-standard');
+ assert.equal(filled.status,'saved');
+ let current=w.state.local.inventory.find(row=>row.id===old.id);
+ assert.equal(current.foodGroup,'mixed');
+ assert.equal(current.category,'牛肉水饺');
+ const legacyCategory=categoryReader(w.state)(current).categoryId;
+ const mixedMeal=turn('mixed-meal','外食午餐吃了200g牛肉芹菜水饺');
+ const log=await call(tool,'write_health',{
+  ...proposal(action('eat',mixedMeal.messages[0],{name:old.name,amount:200,unit:'g',meal:'午餐',source:'one_off',
+   nutrition:{kcal:360,protein:18,carbs:46,fat:12,sodium:870}})),
+  foodGroups:[{name:old.name,foodGroup:'mixed',categoryId:dumplings}]
+ },mixedMeal);
+ assert.equal(log.status,'saved');
+ assert.equal(categoryReader(w.state)(w.state.local.foods.at(-1)).categoryId,legacyCategory);
+
+ const finance=w.finance.getItem(STORAGE_KEY),moves=structuredClone(w.state.local.stockMoves);
+ const skuBefore=structuredClone(current),foodBefore=structuredClone(w.state.local.foods.at(-1));
+ const merged=await manage('merge-type',{action:'merge',id:legacyCategory,targetId:dumplings});
+ assert.equal(merged.status,'saved');
+ assert.equal(merged.receipt.updatedReferences,2);
+ assert.deepEqual(w.state.local.inventory.find(row=>row.id===old.id),{...skuBefore,categoryId:dumplings});
+ assert.deepEqual(w.state.local.foods.at(-1),{...foodBefore,categoryId:dumplings});
+ assert.deepEqual(w.state.local.stockMoves,moves);
+ assert.equal(w.finance.getItem(STORAGE_KEY),finance);
+ const alias=await manage('retry-alias',{name:'牛肉水饺',foodGroup:'mixed'});
+ assert.equal(alias.data.category.id,dumplings);
+ const renamed=await manage('rename-type',{action:'rename',id:dumplings,name:'冷冻水饺'});
+ assert.equal(renamed.status,'saved');
+ assert.equal(categoryReader(w.state)(w.state.local.foods.at(-1)).categoryName,'冷冻水饺');
+ await tool.undo(renamed.undo);
+ await tool.undo(merged.undo);
+ assert.deepEqual(w.state.local.inventory.find(row=>row.id===old.id),skuBefore);
+ assert.deepEqual(w.state.local.foods.at(-1),foodBefore);
+
+ const dairy=await create('dairy-type','乳制品','dairy'),bread=await create('bread-type','牛乳面包','bakery');
+ const revision=w.state.revision;
+ await assert.rejects(manage('bad-merge',{action:'merge',id:dairy,targetId:bread}),/不同食品组/);
+ assert.equal(w.state.revision,revision);
+});
+
+test('a classification correction recomputes vegetable weight and undo preserves the original nutrition',async()=>{
+ const w=mock(),tool=createAgentTools(w),meal=turn('wrong-veg','午餐外食菠菜鸡蛋饼500g');
+ const saved=await call(tool,'write_health',{
+  ...proposal(action('eat',meal.messages[0],{name:'菠菜鸡蛋饼',amount:500,unit:'g',meal:'午餐',source:'one_off',
+   nutrition:{kcal:800,protein:40,carbs:80,fat:30,sodium:800}})),
+  foodGroups:[{name:'菠菜鸡蛋饼',foodGroup:'vegetable',vegetableBasis:'whole'}]
+ },meal);
+ assert.equal(saved.status,'saved');
+ const intake=()=>w.state.local.foods.filter(row=>row.date===date),analytics=()=>vegetableIntake(intake(),new Map());
+ const original=structuredClone(intake()[0]);
+ assert.equal(analytics().grams,500);
+ const corrected=turn('correct-veg','菠菜鸡蛋饼是混合菜，请更正。');
+ const fix=await call(tool,'classify_food',{skuId:null,recordId:original.id,foodGroup:'mixed',evidence:corrected.messages[0]},corrected);
+ assert.equal(fix.status,'saved');
+ assert.equal(analytics().grams,0);
+ assert.deepEqual(intake()[0].nutrition,original.nutrition);
+ await tool.undo(fix.undo);
+ assert.deepEqual(intake()[0],original);
+ assert.equal(analytics().grams,500);
 });

@@ -4,7 +4,7 @@ import {NUTRIENTS,actualFood,addDays,cycleForDate,energyForDay,events,foodCost,i
 import {packagesFor} from '../health/containers.mjs';
 import {dietGoals,isMealPlan,mealDay} from '../health/meal-status.mjs';
 import {same} from '../health/sync-source.mjs';
-import {planningGoals,vegetableIntake} from './meal-planning.mjs';
+import {mushroomIntake,planningGoals,vegetableIntake} from './meal-planning.mjs';
 import {timelineGroup} from '../health/presentation.mjs';
 
 const labels=['热量','蛋白','碳水','脂肪','钠'],units=['kcal','g','g','g','mg'];
@@ -101,8 +101,10 @@ export function cycleReport(state,date,today){
   const values=intake.totals;
   if(entry.deficit!==null)cumulative=round((cumulative??0)+entry.deficit,2);
   const meals=[...new Set(dayFoods.map(timelineGroup))];
-  const vegetables=dayFoods.length?vegetableIntake(dayFoods,catalog):{grams:null,unmeasured:[],knownItems:0};
-  return {date:entry.date,status:entry.completeness.status,nutrition:values,partialNutrients:intake.incomplete,vegetables,
+  const missing={grams:null,unmeasured:[],knownItems:0};
+  const vegetables=dayFoods.length?vegetableIntake(dayFoods,catalog):missing;
+  const mushrooms=dayFoods.length?mushroomIntake(dayFoods,catalog):missing;
+  return {date:entry.date,status:entry.completeness.status,nutrition:values,partialNutrients:intake.incomplete,vegetables,mushrooms,
    tdee:entry.tdee,tdeeSource:entry.source,deficit:entry.deficit,cumulative,possibleOverestimate:entry.possibleOverestimate,
    meals,mealsWithoutEntry:dietKeys.slice(0,3).filter(meal=>!meals.includes(meal)),
    activity:activity.filter(row=>row.date===entry.date).map(({name,kcal,minutes,km,energyKind,includedInBase,status})=>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {evaluateMealPlan,planOperation,undoMealPlan,planningFacts,vegetableIntake} from '../ai/meal-planning.mjs';
+import {evaluateMealPlan,planOperation,undoMealPlan,planningFacts,vegetableIntake,mushroomIntake} from '../ai/meal-planning.mjs';
 import {assistantFixture,action,proposal} from './health-action-fixture.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {addFood,dayIntake,deleteEvent,events,newState,validateAppState} from '../health/core.mjs';
@@ -167,18 +167,20 @@ test('default is explicitly Terra and the selected model always takes precedence
  saveChatModel(store,'auto');assert.equal(readChatModel(store).name,'Terra');
 });
 
-test('planning recognizes 500 g of uncategorized baby cabbage and other familiar vegetables',()=>{
+test('plans count recorded pure vegetables and account for mushrooms separately',()=>{
  const state=newState();
- const add=(id,name,qty)=>{saveSku(state,{id,name,unit:'g',basisUnit:'g',basisAmount:100,
-  kcal:18,protein:1,fat:.2,carbs:3,sodium:20}).qty=qty;};
- add('cabbage','娃娃菜',500);
- add('celery','新鲜芹菜',250);
- add('mushroom','水煮金针菇（熟重）',250);
- const vegetables=items=>evaluateMealPlan(state,{items,dates:[tomorrow]},today).days[0].nutritionCheck.checks.vegetables;
+ const add=(id,name,qty,foodGroup)=>{saveSku(state,{id,name,unit:'g',basisUnit:'g',basisAmount:100,foodGroup,
+  vegetableBasis:foodGroup==='vegetable'?'whole':null,kcal:18,protein:1,fat:.2,carbs:3,sodium:20}).qty=qty;};
+ add('cabbage','娃娃菜',500,'vegetable');
+ add('celery','新鲜芹菜',500,'vegetable');
+ add('mushroom','水煮金针菇（熟重）',250,'mushroom');
+ const summary=items=>evaluateMealPlan(state,{items,dates:[tomorrow]},today).days[0];
  const target={status:'within',min:500,max:null,value:500,difference:0};
- assert.deepEqual(vegetables([row('cabbage',500,'午餐')]),target);
- assert.deepEqual(vegetables([row('celery',250,'午餐'),row('mushroom',250,'晚餐')]),target);
- assert.deepEqual(vegetables([]),{status:'below',min:500,max:null,value:0,difference:500});
+ assert.deepEqual(summary([row('cabbage',500,'午餐')]).nutritionCheck.checks.vegetables,target);
+ const day=summary([row('celery',500,'午餐'),row('mushroom',250,'晚餐')]);
+ assert.deepEqual(day.nutritionCheck.checks.vegetables,target);
+ assert.equal(day.mushrooms.grams,250);
+ assert.deepEqual(summary([]).nutritionCheck.checks.vegetables,{status:'below',min:500,max:null,value:0,difference:500});
 });
 
 test('SKU classification survives saving, unrelated edits and a JSON round trip',()=>{
@@ -195,30 +197,43 @@ test('SKU classification survives saving, unrelated edits and a JSON round trip'
  assert.ok(validateAppState(restored));
  assert.deepEqual(planningFacts(restored,[tomorrow],today,[]).inventory.map(({foodGroup,category})=>[foodGroup,category]),
   [['vegetable','时令菜'],[undefined,'菌菇类']]);
- for(const id of [sku.id,categoryOnly.id]){
-  const day=evaluateMealPlan(restored,{items:[row(id,500,'午餐')]},today).days[0];
-  assert.equal(day.vegetables.grams,500);
-  assert.equal(day.nutritionCheck.checks.vegetables.status,'within');
- }
- const staple=saveSku(state,{...fields,id:'corn',name:'玉米',foodGroup:'主食'});
+ const tracked=evaluateMealPlan(restored,{items:[row(sku.id,500,'午餐')]},today).days[0];
+ assert.equal(tracked.vegetables.grams,500);
+ assert.equal(tracked.nutritionCheck.checks.vegetables.status,'within');
+ const pending=evaluateMealPlan(restored,{items:[row(categoryOnly.id,500,'午餐')]},today).days[0];
+ assert.deepEqual(pending.vegetables.pending,['市场鲜品C']);
+ assert.equal(pending.nutritionCheck.checks.vegetables.status,'unknown');
+ const staple=saveSku(state,{...fields,id:'corn',name:'玉米',foodGroup:'staple'});
  staple.qty=500;
  assert.equal(evaluateMealPlan(state,{items:[row(staple.id,500,'午餐')]},today).days[0].vegetables.grams,0);
 });
 
-test('mixed dish weights are excluded and an unweighed vegetable stays unknown',()=>{
- const state=newState();
- const dish=saveSku(state,{id:'mixed',name:'芹菜炒牛肉',unit:'g',basisUnit:'g',basisAmount:100,category:'混合菜'});
- dish.qty=500;
- const [day]=evaluateMealPlan(state,{items:[row(dish.id,500,'午餐')]},today).days;
- assert.equal(day.vegetables.grams,null);
- assert.deepEqual(day.vegetables.unmeasured,['芹菜炒牛肉']);
- assert.equal(day.nutritionCheck.checks.vegetables.status,'unknown');
+test('only supported weight of pure vegetables counts while mixed food keeps its full nutrients',()=>{
+ const state=newState(),fields={unit:'g',basisUnit:'g',basisAmount:100,kcal:160,protein:8,carbs:18,fat:6,sodium:320};
+ for(const [index,name] of ['菠菜鸡蛋饼','牛肉芹菜水饺','牛肉芹菜大馄饨','娃娃菜鸡蛋汤'].entries()){
+  const dish=saveSku(state,{...fields,id:'mixed-'+index,name,foodGroup:'mixed',price:.04});
+  dish.qty=500;
+  const [day]=evaluateMealPlan(state,{items:[{...row(dish.id,500,'午餐'),vegetableGrams:120}]},today).days;
+  assert.deepEqual(day.vegetables,{grams:0,unmeasured:[],knownItems:0});
+  assert.deepEqual(day.projected,{kcal:800,protein:40,carbs:90,fat:30,sodium:1600});
+  assert.equal(day.cost.knownPlannedCost,20);
+  assert.equal(day.nutritionCheck.checks.vegetables.status,'below');
+ }
+ const withOil=saveSku(state,{...fields,id:'cooked-veg',name:'清炒芹菜',foodGroup:'vegetable',vegetableBasis:'component'});
+ withOil.qty=500;
+ const [planned]=evaluateMealPlan(state,{items:[{...row(withOil.id,300,'午餐'),vegetableGrams:250}]},today).days;
+ assert.equal(planned.vegetables.grams,250);
+ assert.equal(planned.projected.kcal,480);
+ const [uncertain]=evaluateMealPlan(state,{items:[row(withOil.id,300,'午餐')]},today).days;
+ assert.deepEqual(uncertain.vegetables.unmeasured,['清炒芹菜']);
+ assert.equal(uncertain.nutritionCheck.checks.vegetables.status,'unknown');
  const noSku=new Map();
- assert.deepEqual(vegetableIntake([{name:'芹菜味饼干',portion:'500 g'}],noSku),
+ assert.deepEqual(vegetableIntake([{name:'芹菜味饼干',foodGroup:'snack',portion:'500 g'}],noSku),
   {grams:0,unmeasured:[],knownItems:0});
- assert.equal(vegetableIntake([{name:'娃娃菜汤',foodGroup:'vegetable',portion:'500 g'}],noSku).grams,null);
- assert.deepEqual(vegetableIntake([{name:'娃娃菜',portion:'一份'}],noSku),
+ assert.deepEqual(vegetableIntake([{name:'娃娃菜',foodGroup:'vegetable',vegetableBasis:'whole',portion:'一份'}],noSku),
   {grams:null,unmeasured:['娃娃菜'],knownItems:0});
- assert.deepEqual(vegetableIntake([{name:'芹菜炒牛肉',portion:'500 g'},{name:'金针菇',portion:'120 g'}],noSku),
-  {grams:null,unmeasured:['芹菜炒牛肉'],knownItems:1,knownGrams:120});
+ const mushrooms=[{name:'金针菇',foodGroup:'mushroom',portion:'120 g'}];
+ assert.equal(vegetableIntake(mushrooms,noSku).grams,0);
+ assert.equal(mushroomIntake(mushrooms,noSku).grams,120);
+ assert.deepEqual(vegetableIntake([{name:'芹菜',portion:'500 g'}],noSku).pending,['芹菜']);
 });

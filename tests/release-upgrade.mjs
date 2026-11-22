@@ -8,7 +8,8 @@ import {assistantFixture,action,proposal} from './health-action-fixture.mjs';
 import {orderFinance} from './order-agent-fixture.mjs';
 import {lab,syntheticPdf} from './medical-fixture.mjs';
 
-const baseRevision='913d287',date='2034-05-06';
+const baseRevision=process.env.AIRPLANE_UPGRADE_BASELINE??'c275fac',date='2034-05-06';
+const baseVersion=execFileSync('git',['show',baseRevision+':shell.mjs'],{encoding:'utf8'}).match(/APP_VERSION='([^']+)'/)[1];
 const assets=source=>new Set(['sw.js',...Array.from(source.split('const assets')[0].matchAll(/'\.\/([^']+)'/g),match=>match[1])]);
 const oldSource=execFileSync('git',['show',baseRevision+':sw.js'],{encoding:'utf8'});
 const oldAssets=assets(oldSource),newAssets=assets(readFileSync('sw.js','utf8'));
@@ -46,12 +47,14 @@ try{
  const page=await old.newPage();
  await page.goto(origin+'/assistant/');
  await page.waitForFunction(()=>Boolean(navigator.serviceWorker.controller));
- assert.equal(await page.evaluate(async()=> (await import('/shell.mjs')).APP_VERSION),'0.9.27');
+ assert.equal(await page.evaluate(async()=> (await import('/shell.mjs')).APP_VERSION),baseVersion);
  const original=await page.evaluate(async fixture=>{
   const storage=await import('/health/storage.mjs'),finance=await import('/finance-storage.mjs');
   const medical=await import('/health/medical.mjs');
   const pdf=await medical.makeMedicalAttachment(new File([fixture.pdf],'synthetic.pdf',{type:'application/pdf'}));
   medical.saveMedicalReport(fixture.state,fixture.report,[pdf]);
+  const priorSku=fixture.state.local.inventory.find(row=>row.id==='fixture-noodles');
+  priorSku.category='家常主食';
   const health=await storage.saveState(fixture.state,0);
   finance.replaceFinance(localStorage,fixture.finance,finance.readFinance(localStorage).primary);
   const {memoryLibrary,MEMORY_KEY}=await import('/ai/memory.mjs');
@@ -92,14 +95,14 @@ try{
  });
  await old.setOffline(true);
  await page.goto(origin+'/assistant/');
- assert.equal(await page.evaluate(async()=> (await import('/shell.mjs')).APP_VERSION),'1.0.0-rc.1');
+ assert.equal(await page.evaluate(async()=> (await import('/shell.mjs')).APP_VERSION),'1.0.0-rc.2');
  assert.deepEqual((await page.evaluate(snapshot)).keys,original.keys);
  assert.equal(await page.evaluate(async()=> (await import('/ai/models.mjs')).readChatModel().id),'gpt-6-luna');
  assert.equal(await page.evaluate(async()=> (await import('/ai/keys.mjs')).readKey()),keyFixture);
  assert.equal(JSON.stringify(original.archive).includes(keyFixture),false);
  assert.deepEqual(await page.evaluate(async()=> (await import('/health/storage.mjs')).readState()),original.health);
  assert.deepEqual(await page.evaluate(async()=> (await import('/ai/task-log.mjs')).taskJournal(globalThis.airplaneAccount).readRun('media:upgrade')),original.media);
- assert.deepEqual(await page.evaluate(async()=> (await caches.keys()).filter(key=>key.startsWith('airplane-shell:'))),['airplane-shell:/:96']);
+ assert.deepEqual(await page.evaluate(async()=> (await caches.keys()).filter(key=>key.startsWith('airplane-shell:'))),['airplane-shell:/:97']);
  await page.getByRole('button',{name:'重试这条消息'}).click();
  await page.getByText(/已保存。晨重 72 kg/).waitFor();
  assert.equal(apiCalls,0);
@@ -111,10 +114,10 @@ try{
  for(const path of ['/','/health/']){
   const response=await page.goto(origin+path);
   assert.equal(response.status(),200);
-  assert.equal(await page.evaluate(async()=> (await import('/shell.mjs')).APP_VERSION),'1.0.0-rc.1');
+  assert.equal(await page.evaluate(async()=> (await import('/shell.mjs')).APP_VERSION),'1.0.0-rc.2');
  }
  assert.equal((await page.evaluate(snapshot)).keys['airplane-pwa-v1'],original.keys['airplane-pwa-v1']);
- console.log('PASS actual 0.9.27 → rc.1 offline shell upgrade preserves ledgers, attachment bytes, memories, Skills, history and staged legacy retry/undo');
+ console.log('PASS actual '+baseVersion+' → rc.2 offline shell upgrade preserves ledgers, attachment bytes, memories, Skills, history and staged legacy retry/undo');
 
  const recovered=await browser.newContext(contextOptions);
  const copy=await recovered.newPage();
@@ -135,5 +138,5 @@ try{
  assert.deepEqual(restored.ai.skills,original.archive.ai.skills);
  assert.ok(restored.ai.threads.some(thread=>thread.messages.some(row=>row.text==='合成历史回复')));
  assert.ok(restored.snapshot.health);
- console.log('PASS combined backup from 0.9.27 restores financial and health data, attachment bytes, Skills, memories and chat history on a fresh profile');
+ console.log('PASS combined backup from '+baseVersion+' restores financial and health data, attachment bytes, Skills, memories and chat history on a fresh profile');
 }finally{await browser?.close();server.close();}

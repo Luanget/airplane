@@ -1,4 +1,5 @@
-import {foodClassification,fillSkuFoodGroup,foodGroupProposal,foodNameKey,inferFoodGroup} from '../health/food-groups.mjs';
+import {categoryReader,fillFoodClassification,fillSkuFoodGroup} from '../health/food-categories.mjs';
+import {foodClassification,foodGroupOf,foodGroupProposal,foodNameKey} from '../health/food-groups.mjs';
 import {catalogCost} from '../health/package-price.mjs';
 import {displayDay,normalizeClock} from '../calendar.mjs';
 import {HEALTH_STEP_LIMIT,healthActionSchema,matches} from '../health/contract.mjs';
@@ -12,7 +13,7 @@ import {portionSources,registerPortions} from '../health/inventory.mjs';
 import {activityPolicy,duplicateActivity} from '../health/agent-rules.mjs';
 import {healthReport,inventoryDiff,renderHealthReport,renderInventoryDiff} from './health-report.mjs';
 import {hash,same,stable} from '../health/sync-source.mjs';
-import {verifyNativeStep} from './evidence.mjs';
+import {amountSupported,verifyNativeStep} from './evidence.mjs';
 
 const ACCESS='airplane-ai-health-auto-v1';
 export const hasHealthAuto=store=>store.getItem(ACCESS)==='yes';
@@ -49,12 +50,12 @@ function skuFor(stock,step){
 }
 
 function viewPackages(state,stock,{query='',skuId=null,containerId=null,includeClosed='no'}={}){
- const t=key(query),lots=new Map((state.local.batches??[]).map(row=>[row.id,row]));
+ const category=categoryReader(state),t=key(query),lots=new Map((state.local.batches??[]).map(row=>[row.id,row]));
  return stock.filter(sku=>(!skuId||sku.id===skuId)&&(!t||names(sku).some(name=>name.includes(t)||t.includes(name)))).flatMap(sku=>{
   const items=packagesFor(state,sku.id).filter(row=>(includeClosed==='yes'||onShelf(row))&&(!containerId||row.id===containerId));
   if(containerId&&!items.length)return [];
   return [{
-   sku:sku.id,name:sku.name,...foodClassification(sku),quantity:sku.grossStockOnly?items.filter(onShelf).length||null:sku.qty,
+   sku:sku.id,name:sku.name,...foodClassification(sku),...category(sku),quantity:sku.grossStockOnly?items.filter(onShelf).length||null:sku.qty,
    unit:sku.grossStockOnly?(items.length?'瓶':'g 毛重'):sku.unit,
    packages:items.map(row=>({containerId:row.id,number:row.number,status:row.status,kind:row.kind,
     netGrams:row.net,estimated:row.estimated,latestGrossGrams:row.gross,consumedSinceWeighingGrams:row.unweighedGrams,
@@ -368,17 +369,17 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,habits,
     if(estimate){row.quality='estimated';row.uncertainty=[row.uncertainty,estimate.note].filter(Boolean).join(' · ');}
    }
    next=result.state;
-   const proposed=foodGroupProposal(foodGroups,step.name);
+   const proposed=foodGroupProposal(foodGroups,step.name),catalog=home(next);
    for(const {row} of result.items){
+    const matches=row.foodId?[]:catalog.filter(item=>[item.name,...(item.aliases??[])].some(name=>foodNameKey(name)===foodNameKey(row.name)));
     if(row.foodId)fillSkuFoodGroup(next,row.foodId,proposed);
-    else{
-     const matches=home(next).filter(item=>[item.name,...(item.aliases??[])].some(name=>foodNameKey(name)===foodNameKey(row.name)));
-     const classification=foodClassification(matches.length===1?matches[0]:null);
-     if(Object.keys(classification).length)Object.assign(row,classification);
-     else{
-      const foodGroup=inferFoodGroup(row.name,proposed);
-      if(foodGroup)row.foodGroup=foodGroup;
-     }
+    else fillFoodClassification(next,row,proposed,matches.length===1?matches[0]:null);
+    const sku=catalog.find(item=>item.id===row.foodId);
+    if(photo?.confidence==='estimated'&&foodGroupOf(row,sku)==='vegetable')row.vegetableBasis='component';
+    if(foodGroupOf(row,sku??proposed)==='vegetable'&&Number.isFinite(proposed.vegetableGrams)&&
+     (evidence?.owner||amountSupported(evidence?.texts??[text],proposed.vegetableGrams,'g',sku))){
+     const weight=quantityInUnit(sku,row.amount,row.amountUnit,'g');
+     if(weight===null||proposed.vegetableGrams<=weight)row.vegetableGrams=proposed.vegetableGrams;
     }
    }
    for(const {row,containerId} of result.items){
