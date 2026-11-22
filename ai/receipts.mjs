@@ -1,3 +1,4 @@
+import {fillSkuFoodGroup,foodGroupProposal} from '../health/food-groups.mjs';
 import {summarizeNote} from '../finance-note.mjs';
 import {normalizeClock} from '../calendar.mjs';
 import {freshData,readFinance} from '../finance-storage.mjs';
@@ -219,6 +220,7 @@ export async function executeReceipt(workspace,receipt,options){
     sku=saveSku(next,{id:newId,name:line.name,unit:line.unit,basisUnit:line.unit,basisAmount:1,
      packageSize:line.packAmount,packageUnit:line.packUnit,quality:'unknown',source:'核对采购截图规格'});
    }
+   fillSkuFoodGroup(next,sku.id,foodGroupProposal(options.foodGroups??[],line.name));
    const quantity=quantityOf(sku,line);
    if(!(quantity>0))return blocked('「'+line.name+'」的截图规格与库存单位无法可靠换算。');
    units.push({foodId:sku.id,quantity:round(quantity,6),costCents:allocationResult.known[index],expires:null,

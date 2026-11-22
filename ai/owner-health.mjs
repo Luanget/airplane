@@ -106,6 +106,9 @@ export function ownerFood(state,{id,action,fields,operationId,date}){
  if(!validDate(row.date)||!row.name?.trim()||!['actual','plan','cancelled'].includes(status)||amount!==null&&(!Number.isFinite(amount)||amount<0))
   throw Error('请提供有效的饮食日期、名称、份量和状态');
  if(status!=='actual')delete row.actual;
+ if(skuChanged)for(const key of ['foodGroup','category']){
+  if(!Object.hasOwn(fields,key))delete row[key];
+ }
  if(skuChanged||detachedPackage){
   if(!Object.hasOwn(fields,'batchId'))row.batchId=null;
   if(!Object.hasOwn(fields,'weighing'))delete row.weighing;

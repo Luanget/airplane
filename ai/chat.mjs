@@ -1423,9 +1423,8 @@ composer.onsubmit=async e=>{
   }
   const photo=files.length===1?await jpeg(files[0]):null;
   const model=route.model;
-  const context=resumeSaved||local?{turns:[],summary:null}:route.profile==='general'?
-   await prepareContext(date,model,traceId):scopedHistory(route.profile,text,updateContext());
-  const {turns,summary}=route.profile==='general'?scopedHistory(route.profile,text,context):context;
+  const {turns,summary}=resumeSaved||local?{turns:[],summary:null}:scopedHistory(text,
+   route.profile==='general'?await prepareContext(date,model,traceId):updateContext());
   const history=retry&&turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
   const catalog=allowRead?skillCatalog(workspace.finance):[];
   const groupedPhotos=!demo&&(files.length>1||files.length===1&&route.profile==='vision'&&/标签|营养成分/.test(text))&&

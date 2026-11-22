@@ -8,6 +8,7 @@ import {THREADS_KEY} from '../ai/threads.mjs';
 
 const baseline=process.env.AIRPLANE_BASELINE;
 const screenshots=process.env.AIRPLANE_SCREENSHOTS;
+const shellCache=root=>'airplane-shell:/:'+readFileSync(join(root,'sw.js'),'utf8').match(/SW_VERSION = '([^']+)'/)[1];
 if(screenshots)mkdirSync(screenshots,{recursive:true});
 let serving=baseline??'.';
 const allowed=root=>new Set(['sw.js',...Array.from(readFileSync(join(root,'sw.js'),'utf8')
@@ -84,10 +85,9 @@ try{
   await page.locator('[data-open-tx=summary-1]').first().evaluate(el=>el.scrollIntoView({block:'center'}));
   await screenshot(page,'03-finance-before');
   await page.waitForFunction(()=>Boolean(navigator.serviceWorker.controller));
-  const initial=await page.evaluate(async()=>{
-   const cache=(await caches.keys()).find(key=>key.endsWith(':91'));
-   return cache?(await (await caches.open(cache)).keys()).length:0;
-  });
+  const initial=await page.evaluate(async(name)=>{
+   return await caches.has(name)?(await (await caches.open(name)).keys()).length:0;
+  },shellCache(baseline));
   assert.ok(initial>0,'initial 0.9.23 cache was not populated');
   serving='.';
   await page.evaluate(async()=>{
@@ -100,13 +100,14 @@ try{
    registration.waiting.postMessage({type:'SKIP_WAITING'});
    await claimed;
   });
-  const updatedAssets=await page.evaluate(async()=>{
+  const cache=shellCache('.');
+  const updatedAssets=await page.evaluate(async(name)=>{
    const keys=await caches.keys();
-   const fresh=await caches.open(keys.find(key=>key.endsWith(':92')));
+   const fresh=await caches.open(name);
    const read=async path=>(await fresh.match(new URL(path,location.origin).href))?.text()??'';
    return [keys,...await Promise.all([read('/ai/chat.mjs'),read('/assistant/workspace.css'),read('/vendor/markdown-it.min.mjs')])];
-  });
-  assert.ok(updatedAssets[0].includes('airplane-shell:/:92'),JSON.stringify(updatedAssets[0]));
+  },cache);
+  assert.ok(updatedAssets[0].includes(cache),JSON.stringify(updatedAssets[0]));
   assert.match(updatedAssets[1],/import \{markdownStream,renderMarkdown\}/);
   assert.match(updatedAssets[2],/\.markdown-table/);
   assert.match(updatedAssets[3],/markdown-it/);
@@ -122,7 +123,7 @@ try{
   await page.goto(origin+'/');
   assert.equal((await page.locator('[data-open-tx="summary-1"] .tx-sub').first().textContent()).endsWith('…'),true);
   await old.close();
-  console.log('PASS upgrade 0.9.23 → 0.9.24 replaces cache including Markdown engine, CSS and finance rendering; offline history intact');
+  console.log('PASS pre-Markdown upgrade replaces cache including Markdown engine, CSS and finance rendering; offline history intact');
  }
  for(const width of [375,390,430])for(const theme of ['light','dark']){
   const context=await createContext(width,theme),page=await context.newPage();

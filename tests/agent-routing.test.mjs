@@ -40,9 +40,8 @@ test('automatic tier selection and explicit override apply to ordinary, visual a
  assert.equal(choose('提取指标',{medical:'extract',photos:1}).model,'gpt-6.1-terra');
  saveChatModel(finance,'gpt-6-luna');
  assert.equal(choose('识别订单截图',{photos:1}).model,'gpt-6-luna');
- assert.equal(choose('识别订单截图',{photos:1}).manual,true);
  saveChatModel(finance,'auto');
- assert.equal(choose('识别订单截图',{photos:1}).manual,false);
+ assert.equal(choose('识别订单截图',{photos:1}).model,'gpt-6.1-terra');
 });
 test('receipt schemas cache the same static instructions and reject an unoffered read',()=>{
  const finance=makeStore(),catalog=skillCatalog(finance),photo='data:image/jpeg;base64,/9j/AAAA';
@@ -80,8 +79,8 @@ test('focused memory keeps current ledger facts and tentative plans outside cont
  assert.equal(memory.relevant('牛肉酱')[0].text,'平时牛肉酱少放');
  assert.deepEqual(memory.rememberFromTurn([{name:'退款余额',text:'当前余额 5 元',evidence:'以后记住余额 5 元'}],'以后记住余额 5 元'),[]);
  const turns=Array.from({length:12},(_,i)=>({role:i%2?'assistant':'user',text:'之前的反复文本'.repeat(100)}));
- assert.equal(scopedHistory('receipt','识别这张截图',{turns,summary:'总结'}).turns.length,12);
- assert.deepEqual(scopedHistory('health','正常问题',{turns,summary:'总结'}),{turns,summary:'总结'});
+ assert.equal(scopedHistory('识别这张截图',{turns,summary:'总结'}).turns.length,12);
+ assert.deepEqual(scopedHistory('正常问题',{turns,summary:'总结'}),{turns,summary:'总结'});
 });
 test('usage distinguishes cache misses from absent reports and estimates with editable rate snapshots',()=>{
  const store=makeStore();

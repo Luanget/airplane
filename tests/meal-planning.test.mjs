@@ -216,6 +216,7 @@ test('mixed dish weights are excluded and an unweighed vegetable stays unknown',
  const noSku=new Map();
  assert.deepEqual(vegetableIntake([{name:'芹菜味饼干',portion:'500 g'}],noSku),
   {grams:0,unmeasured:[],knownItems:0});
+ assert.equal(vegetableIntake([{name:'娃娃菜汤',foodGroup:'vegetable',portion:'500 g'}],noSku).grams,null);
  assert.deepEqual(vegetableIntake([{name:'娃娃菜',portion:'一份'}],noSku),
   {grams:null,unmeasured:['娃娃菜'],knownItems:0});
  assert.deepEqual(vegetableIntake([{name:'芹菜炒牛肉',portion:'500 g'},{name:'金针菇',portion:'120 g'}],noSku),

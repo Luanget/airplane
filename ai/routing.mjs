@@ -37,6 +37,7 @@ function separateReceiptTurn(text,today){
 }
 export const separateAttachmentRequests=text=>
  /逐张|每张|独立识别|分别(?:处理|记|入账|识别)/.test(text)&&!/同一|同个|合计|不重复|只记一次|续粉/.test(text);
+// Only the demo and pre-native checkpoints use these request profiles.
 export function routeAgent(store,{text='',photos=0,medical=null,allowRead=true,legacy=false,today}={}){
  const own=manualChatModel(store);
  const isHealth=healthMode.test(text),isFinance=finance.test(text);
@@ -56,9 +57,8 @@ export function routeAgent(store,{text='',photos=0,medical=null,allowRead=true,l
    else if(isHealth&&!isFinance&&action.test(text))profile='health';
   }
  }
- const visual=Boolean(photos)||medical==='extract';
- const model=own??CHAT_MODELS[mixed&&!decomposed?2:visual?1:0];
- return {profile,model:model.id,manual:!!own,visual,mixed,decomposed};
+ const model=own??CHAT_MODELS[mixed&&!decomposed?2:photos||medical==='extract'?1:0];
+ return {profile,model:model.id,decomposed};
 }
 
 export function localAgentCommand(workspace,{text,today,allowRead=true,files=0,reference}){
@@ -137,7 +137,7 @@ export function routedSkills(skills,profile){
  return domains[profile]?skills.filter(skill=>domains[profile].includes(skill.id)):skills;
 }
 
-export function scopedHistory(profile,text,current){
+export function scopedHistory(text,current){
  const recent=current.turns.slice(-24);
  const terms=new Set((text.match(/[a-z0-9_-]{3,}|[\p{Script=Han}]{2}/giu)??[]).map(word=>word.toLowerCase()));
  const earlier=current.turns.slice(0,Math.max(0,current.turns.length-24))

@@ -15,6 +15,10 @@
 - OpenNutriTracker 的 `add_tracked_day_usecase.dart` 采用幂等日写入，照片解释 use case 将事实提取和错误分类留在独立边界。CalorieCoach 的 `meal_planning_service.py` 用确定性计算校验模型选出的份量，并把首轮结果交回模型调整。NutriTrace 的 `log-meal.js` 让工具和常规应用路由共用本地写入逻辑。 [日账实现](https://github.com/simonoppowa/OpenNutriTracker/blob/main/lib/core/domain/usecase/add_tracked_day_usecase.dart) · [餐单评估](https://github.com/MNGChen/CalorieCoach/blob/main/services/meal_planning_service.py) · [餐单写入](https://github.com/TraceApps/nutritrace/blob/main/server/lib/mcp/tools/log-meal.js)
 
 
+## 旧任务兼容
+
+正常新对话使用原生工具循环。旧请求路由继续服务演示和已保存的旧任务，Worker 沿用原候选协议。旧任务恢复沿用储存的操作 ID 和原候选结构。新增的食品分类参数可省略，旧工具调用按原回执续跑。
+
 ## 已知待办
 
 历史照片目前可以按附件 ID 读取当前会话中仍有本机原件的照片。完整历史检索（含跨会话）待补齐。附件原件缺失时，只能显示引用和不可用状态。

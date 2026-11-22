@@ -1,3 +1,4 @@
+import {foodClassification} from './food-groups.mjs';
 import {APP_SCHEMA,NUTRIENTS,newState,normalizeLedger,numeric,round,sampleNutrientSum,validateAppState,validDate} from './core.mjs';
 import {ensureMedical,verifyMedicalState} from './medical.mjs';
 import {unpackBackup} from './backup.mjs';
@@ -180,7 +181,7 @@ export function eventIdentity(row,original={}){
 export function eventData(type,row){
  const base={date:row.date,time:normalizeClock(row.time)};
  if(type==='foods'){
-  const obj={...base,name:normalized(row.name),meal:normalized(row.meal),status:foodStatus(row),
+  const obj={...base,...foodClassification(row),name:normalized(row.name),meal:normalized(row.meal),status:foodStatus(row),
    portion:normalized(row.portion).replace(/\s*(?:克|g)(?=$|[（(])/i,'g').replace(/\s*(?:毫升|ml)$/i,'ml').replace(/\s+(?=[包袋个份盒瓶])/g,''),
    nutrition:Object.fromEntries(NUTRIENTS.map(key=>[key,numeric(row.nutrition?.[key])])),
    ...(row.weighing?{weighing:row.weighing}:{}),...(row.cost!=null?{cost:numeric(row.cost)}:{})};

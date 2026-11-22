@@ -1,3 +1,4 @@
+import {foodClassification} from './food-groups.mjs';
 import {apportionedCost,catalogCost,packageCostReference,packagePrice} from './package-price.mjs';
 import {ensureMedical,validMedical} from './medical.mjs';
 import {effectiveTdee} from './agent-rules.mjs';
@@ -46,7 +47,7 @@ export function normalizeInventory(row,index){
  const is100ml = /(?:^|每|[^\d.])100\s*(?:ml|毫升)/i.test(standard);
  const per100 = is100g || is100ml;
  const normalizedUnit = /^(?:g|克)/.test(unitText) ? 'g' : /^(?:mL|ml|毫升)/i.test(unitText) ? 'mL' : /^(?:个)/.test(unitText) ? '个' : /^(?:瓶)/.test(unitText) ? '瓶' : /^(?:盒)/.test(unitText) ? '盒' : /^(?:完整袋|包)/.test(unitText) ? '包' : /^(?:份)/.test(unitText) ? '份' : '';
- return {id:String(row['食品ID']||`legacy-inventory-${index}`), name:String(row['名称']||'未命名食物'),
+ return {...foodClassification(row),id:String(row['食品ID']||`legacy-inventory-${index}`), name:String(row['名称']||'未命名食物'),
    unit:normalizedUnit || unitText || '单位未定', unitDescription:unitText,
    standard, nutritionBasis:per100?(is100ml?'per100ml':'per100g'):'perServing',
    qty:numeric(row['库存值']), pricePerUnit:numeric(row['单价(CNY)']),priceBasis:String(row['价格基准']||''),
@@ -127,7 +128,7 @@ export function normalizeLedger(raw){
  result.legacy.sourceSnapshot = raw;
  result.importedAt=new Date().toISOString();
  result.importInfo={sourceVersion:String(raw.handoff_version||raw.schema_version||'unknown'),canonicalSource:String(raw.canonical_source||''),originalCounts:Object.fromEntries(['food_events','weight_events','activity_events','daily_summaries','energy_balance','food_inventory'].map(k=>[k, t[k]?.length || 0]))};
- result.legacy.foods=(t.food_events || []).map((r,i)=>({ id:`legacy-food-${i}`,date:String(r['日期']||''),time:String(r['时间']||''),meal:String(r['餐次']||''),name:String(r['食物/饮品']||''),foodId:String(r['食品ID']||''),portion:String(r['份量/重量']||''),status:String(r['状态']||''),actual:isActualStatus(r['状态'])&&validDate(String(r['日期']||'')),nutrition:Object.fromEntries(Object.entries(NUTRIENT_KEYS).map(([k,v])=>[k,numeric(r[v])])),cost:numeric(r['饮食成本(CNY)']??r['成本(CNY)']??r['成本(元)']??r.cost),
+ result.legacy.foods=(t.food_events || []).map((r,i)=>({ ...foodClassification(r),id:`legacy-food-${i}`,date:String(r['日期']||''),time:String(r['时间']||''),meal:String(r['餐次']||''),name:String(r['食物/饮品']||''),foodId:String(r['食品ID']||''),portion:String(r['份量/重量']||''),status:String(r['状态']||''),actual:isActualStatus(r['状态'])&&validDate(String(r['日期']||'')),nutrition:Object.fromEntries(Object.entries(NUTRIENT_KEYS).map(([k,v])=>[k,numeric(r[v])])),cost:numeric(r['饮食成本(CNY)']??r['成本(CNY)']??r['成本(元)']??r.cost),
   ...(r.airplane_weighing?{weighing:r.airplane_weighing}:{}),...(r.airplane_evidence?{agentEvidence:r.airplane_evidence}:{}),source:'legacy',qualityFlag:validDate(String(r['日期']||''))?null:'missing_date' }));
  result.legacy.weights=(t.weight_events||[]).map((r,i)=>({id:`legacy-weight-${i}`,date:String(r['日期']||''),kg:numeric(r['数值']),time:String(r['时间']||''),trendStatus:String(r['纳入趋势']||''),source:'legacy'})).filter(r=>validDate(r.date));
  result.legacy.activities=(t.activity_events||[]).map((r,i)=>({id:`legacy-activity-${i}`,date:String(r['日期']||''),name:String(r['项目']||r['类别']||''),km:numeric(r['距离(km)']),minutes:numeric(r['时长(min)']),time:String(r['时间']||''),kcal:numeric(r['活动消耗估计(kcal)']),status:String(r['状态']||''),source:'legacy',energyKind:r.energyKind==='total'?'total':'activity',...(r.excludedFromEnergy?{excludedFromEnergy:true}:{}),includedInBase:r.includedInBase??!/^(?:户外单车|夜骑|长骑)/.test(String(r['类别']||''))})).filter(r=>validDate(r.date));
@@ -408,7 +409,10 @@ export function addFood(state,fields,id,newId) {
  if(linked&&amount!=null&&numeric(amount)!==previous?.amount&&!fields.containerCorrection)
   throw Error('请在包装的称重历史中更正这笔饮食重量');
  const createdAt=previous?.createdAt ?? new Date().toISOString();
- const entry={id:id??newId??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
+ const existingClassification=previous?.foodId===(foodId||null)?foodClassification(previous):{};
+ for(const key of ['foodGroup','category'])if(fields[key]!==undefined)existingClassification[key]=fields[key];
+ const classification=foodClassification(existingClassification);
+ const entry={...classification,id:id??newId??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
   foodId:foodId||null,stockQty:qty,amount:numeric(amount),...(amountUnit?{amountUnit}:{}),...(weighing?{weighing}:{}),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:fields.costEstimated?'estimated_package':explicitCost===null?'inventory':'manual'};
  const oldMoves=state.local.stockMoves;
  state.local.stockMoves=oldMoves.filter(m=>m.linkedFoodId!==entry.id||m.stockArchived);

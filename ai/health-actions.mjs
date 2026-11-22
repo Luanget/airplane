@@ -1,3 +1,4 @@
+import {foodClassification,fillSkuFoodGroup,foodGroupProposal,foodNameKey,inferFoodGroup} from '../health/food-groups.mjs';
 import {catalogCost} from '../health/package-price.mjs';
 import {displayDay,normalizeClock} from '../calendar.mjs';
 import {HEALTH_STEP_LIMIT,healthActionSchema,matches} from '../health/contract.mjs';
@@ -53,7 +54,7 @@ function viewPackages(state,stock,{query='',skuId=null,containerId=null,includeC
   const items=packagesFor(state,sku.id).filter(row=>(includeClosed==='yes'||onShelf(row))&&(!containerId||row.id===containerId));
   if(containerId&&!items.length)return [];
   return [{
-   sku:sku.id,name:sku.name,quantity:sku.grossStockOnly?items.filter(onShelf).length||null:sku.qty,
+   sku:sku.id,name:sku.name,...foodClassification(sku),quantity:sku.grossStockOnly?items.filter(onShelf).length||null:sku.qty,
    unit:sku.grossStockOnly?(items.length?'瓶':'g 毛重'):sku.unit,
    packages:items.map(row=>({containerId:row.id,number:row.number,status:row.status,kind:row.kind,
     netGrams:row.net,estimated:row.estimated,latestGrossGrams:row.gross,consumedSinceWeighingGrams:row.unweighedGrams,
@@ -321,7 +322,7 @@ function planRequest(state,step,date,habits){
  return {items,reply:lines.join('\n')||'午餐和晚餐已有实际记录，可查看当天报告。'};
 }
 
-function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,habits,native=false,photoSteps={},provenance=[]}){
+function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,habits,native=false,photoSteps={},provenance=[],foodGroups=[]}){
  let next=ensureContainers(structuredClone(state));
  const messages=[],queryMessages=[],touched=new Set();
  let resultReference=null;
@@ -367,6 +368,19 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,habits,
     if(estimate){row.quality='estimated';row.uncertainty=[row.uncertainty,estimate.note].filter(Boolean).join(' · ');}
    }
    next=result.state;
+   const proposed=foodGroupProposal(foodGroups,step.name);
+   for(const {row} of result.items){
+    if(row.foodId)fillSkuFoodGroup(next,row.foodId,proposed);
+    else{
+     const matches=home(next).filter(item=>[item.name,...(item.aliases??[])].some(name=>foodNameKey(name)===foodNameKey(row.name)));
+     const classification=foodClassification(matches.length===1?matches[0]:null);
+     if(Object.keys(classification).length)Object.assign(row,classification);
+     else{
+      const foodGroup=inferFoodGroup(row.name,proposed);
+      if(foodGroup)row.foodGroup=foodGroup;
+     }
+    }
+   }
    for(const {row,containerId} of result.items){
     messages.push(itemText(row));
     resultReference={date,recordId:row.id,containerId,skuId:row.foodId};
@@ -398,6 +412,7 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,habits,
     (result.event.grams==null?'，损耗重量未知':'，损耗 '+result.event.grams+' g'));
    else {
     const row=events(next,'foods').find(entry=>entry.id===result.event.foodId);
+    fillSkuFoodGroup(next,sku.id,foodGroupProposal(foodGroups,step.name));
     messages.push(itemText(row)+'，最新毛重 '+step.gross+' g');
     resultReference={date,recordId:row.id,containerId:container.id,skuId:sku.id};
    }
@@ -475,11 +490,12 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,habits,
  return {next,messages,queryMessages,touched:[...touched],reference:resultReference, id,text,today,habits};
 }
 
-const patches=['foods','weights','activities','stockMoves','batches','containers','containerEvents','dayCompleteness'];
+const patches=['foods','weights','activities','stockMoves','batches','containers','containerEvents','dayCompleteness','inventory','legacyInventory'];
+const patchRows=(state,key)=>key==='legacyInventory'?state.legacy.inventory:state.local[key]??[];
 function changesFrom(before,after){
  const changes={};
  for(const key of patches){
-  const old=before.local[key]??[],now=after.local[key]??[];
+  const old=patchRows(before,key),now=patchRows(after,key);
   const original=new Map(old.map((row,index)=>[row.id,{row,index}]));
   const live=new Map(now.map(row=>[row.id,row]));
   const updates=[...new Set([...original.keys(),...live.keys()])].filter(id=>!same(original.get(id)?.row,live.get(id)))
@@ -633,7 +649,7 @@ export async function executeHealthAction(workspace,base,plan,options){
  const signature=today+'\n'+normal(text)+'\n'+(mediaKey||'');
  check();
  const changes=changesFrom(base,prepared.next);
- const isolated=options.native?['foods','stockMoves','containers','containerEvents','weights','activities','dayCompleteness']:
+ const isolated=options.native?['foods','stockMoves','containers','containerEvents','weights','activities','dayCompleteness','inventory','legacyInventory']:
   ['weights','activities','dayCompleteness'];
  const independent=Object.keys(changes).every(key=>isolated.includes(key))?
   changesFrom(prepared.next,base):null;
@@ -646,8 +662,8 @@ export async function executeHealthAction(workspace,base,plan,options){
  if(!persisted)throw Error('本机未能验证保存回执，请用原消息重试。');
  if(stored.revision===record.revision){
   const different=patches.some(key=>{
-   const expectedRows=new Map((prepared.next.local[key]??[]).map(row=>[row.id,row]));
-   const actualRows=new Map((stored.local[key]??[]).map(row=>[row.id,row]));
+   const expectedRows=new Map(patchRows(prepared.next,key).map(row=>[row.id,row]));
+   const actualRows=new Map(patchRows(stored,key).map(row=>[row.id,row]));
    return (record.changes[key]??[]).some(([id])=>!same(expectedRows.get(id),actualRows.get(id)));
   });
   if(different||!same(prepared.next.local.edits,stored.local.edits))
@@ -670,7 +686,7 @@ export async function undoHealthAction(workspace,id){
  if(!record||record.undone)throw Error('这笔操作已撤销或无法定位。');
  if(record.revision!==expected){
   const unchanged=record.independent&&Object.entries(record.independent).every(([key,rows])=>
-   rows.every(([id,post])=>same((state.local[key]??[]).find(row=>row.id===id),post?.row)));
+   rows.every(([id,post])=>same(patchRows(state,key).find(row=>row.id===id),post?.row)));
   const produced=new Set((record.independent?.containerEvents??[]).map(([id])=>id));
   const packages=new Set((record.independent?.containers??[]).map(([id])=>id));
   const dependent=(state.local.containerEvents??[]).some(row=>!produced.has(row.id)&&
@@ -681,11 +697,11 @@ export async function undoHealthAction(workspace,id){
  for(const key of patches){
   const items=record.changes[key];if(!items)continue;
   const ids=new Set(items.map(([id])=>id));
-  const added=(next.local[key]??[]).filter(row=>ids.has(row.id)&&!items.find(([id])=>row.id===id)?.[1]);
-  const keep=(next.local[key]??[]).filter(row=>!ids.has(row.id));
+  const added=patchRows(next,key).filter(row=>ids.has(row.id)&&!items.find(([id])=>row.id===id)?.[1]);
+  const keep=patchRows(next,key).filter(row=>!ids.has(row.id));
   for(const item of items.map(([,prior])=>prior).filter(Boolean).sort((a,b)=>a.index-b.index))
    keep.splice(item.index,0,item.row);
-  next.local[key]=keep;
+  if(key==='legacyInventory')next.legacy.inventory=keep;else next.local[key]=keep;
   if(['foods','weights','activities'].includes(key)){
    const tombstones=(next.sync??={}).tombstones??=[];
    for(const row of added)if(!tombstones.some(item=>item.id===row.id&&item.type===key))

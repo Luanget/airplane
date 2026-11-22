@@ -8,6 +8,7 @@ import {setFinanceAutomation} from '../ai/finance.mjs';
 import {memoryLibrary} from '../ai/memory.mjs';
 import {threadBook} from '../ai/threads.mjs';
 import {dayIntake,inventoryWithMoves,validateAppState} from '../health/core.mjs';
+import {vegetableIntake} from '../ai/meal-planning.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {readFinance,replaceFinance,STORAGE_KEY} from '../finance-storage.mjs';
@@ -79,12 +80,13 @@ test('stock-only receiving supports zero-stock SKU, measured portions and unknow
  const w=mock(),tool=createAgentTools(w);
  saveSku(w.state,{id:'celery-empty',name:'合成芹菜',unit:'g',basisUnit:'g',basisAmount:100});
  const run=turn('stock','合成芹菜新买三份，每份500g，入库。');
- const args={date,lines:[line('合成芹菜',{skuId:'celery-empty',amount:3,unit:'份',portions:Array.from({length:3},()=>
+ const args={date,lines:[line('合成芹菜',{skuId:'celery-empty',foodGroup:'vegetable',amount:3,unit:'份',portions:Array.from({length:3},()=>
   ({amount:500,unit:'g',status:'sealed',gross:null}))})],note:null,sources:[message('stock')]};
  const priorFinance=w.finance.getItem(STORAGE_KEY);
  const saved=await call(tool,'receive_inventory',args,run);
  assert.equal(saved.status,'saved');
  assert.equal(saved.receipt.totalCents,null);assert.equal(quantity(w,'celery-empty'),1500);
+ assert.equal(w.state.local.inventory.find(row=>row.id==='celery-empty').foodGroup,'vegetable');
  assert.deepEqual(packagesFor(w.state,'celery-empty').filter(row=>row.status==='sealed').map(row=>row.net),[500,500,500]);
  assert.equal((await call(tool,'receive_inventory',args,run,'retry-new-call')).status,'ok');
  assert.equal(w.finance.getItem(STORAGE_KEY),priorFinance);assert.equal(dayIntake(w.state,date).reported,false);
@@ -108,8 +110,10 @@ test('an order attaches to existing stock and its undo keeps the received lots',
  const receipt=orderReceipt(date);
  const conflict=await call(tool,'write_receipt',{...receipt,inventoryLink:null},pay);
  assert.match(conflict.reason,/已有相关入库/);
- const saved=await call(tool,'write_receipt',{...receipt,inventoryLink:result.receipt.purchaseId},pay);
+ const saved=await call(tool,'write_receipt',{...receipt,inventoryLink:result.receipt.purchaseId,
+  foodGroups:[{name:'合成脱脂牛奶',foodGroup:'dairy'}]},pay);
  assert.equal(saved.status,'saved',saved.reason);assert.equal(quantity(w,'fixture-milk'),beforeQuantity);
+ assert.equal(w.state.local.inventory.find(row=>row.id==='fixture-milk').foodGroup,'dairy');
  assert.equal(readFinance(w.finance).payload.transactions.filter(row=>row.receiptKey).length,3);
  await tool.undo(saved.undo);
  assert.equal(quantity(w,'fixture-milk'),beforeQuantity);assert.equal(w.state.local.purchases[0].totalCents,null);
@@ -145,4 +149,86 @@ test('a later purchase cannot automatically remove an independently confirmed lu
  const next=turn('next','这批小青菜是新买的，要入库。');next.threadId=first.threadId;
  const result=await call(tool,'undo_operation',{id:saved.undo.id,mode:'correct_previous',evidence:next.messages[0],sources:[message('next')]},next);
  assert.equal(result.code,'unrelated_previous_operation');assert.equal(w.state.local.foods.filter(row=>row.date===date).length,1);
+});
+
+test('native food classification travels with the intake call and persists only with a verified save',async()=>{
+ const w=mock(),tool=createAgentTools(w);
+ saveSku(w.state,{id:'grain',name:'合成杂粮份',unit:'g',basisUnit:'g',basisAmount:100,kcal:150}).qty=500;
+ const text='午餐吃了100g合成杂粮份',run=turn('classify-intake',text);
+ const args={...proposal(action('eat',text,{name:'合成杂粮份',skuId:'grain',amount:100,unit:'g',meal:'午餐',source:'inventory'})),
+  provenance:[{index:0,refs:[message(run.id)]}],foodGroups:[{name:'合成杂粮份',foodGroup:'staple'}]};
+ let requests=0;
+ await runAgent(run,{dispatch:tool,save:()=>{},request(value){
+  if(++requests===1)return {status:'completed',output:[{type:'function_call',call_id:'record-meal',name:'write_health',
+   arguments:JSON.stringify(args)}]};
+  assert.equal(value.receipts.at(-1).result.status,'saved');
+  return {status:'completed',output:[{type:'message',role:'assistant',content:[{type:'output_text',text:'已记录。'}]}]};
+ }});
+ assert.equal(requests,2);
+ const item=()=>w.state.local.inventory.find(row=>row.id==='grain');
+ assert.equal(item().foodGroup,'staple');
+ assert.equal(quantity(w,'grain'),400);
+ await tool.undo(run.receipts.at(-1).result.undo);
+ assert.equal(quantity(w,'grain'),500);
+ assert.equal(item().foodGroup,undefined);
+
+ const fixText='合成杂粮份按主食分类',fix=turn('correct-category',fixText);
+ setHealthAuto(w.finance,false);
+ const before=structuredClone(w.state);
+ const argsForFix={skuId:'grain',recordId:null,foodGroup:'staple',evidence:fixText};
+ assert.equal((await call(tool,'classify_food',argsForFix,fix)).status,'review');
+ assert.deepEqual(w.state,before);
+ setHealthAuto(w.finance,true);
+ const saved=await call(tool,'classify_food',argsForFix,fix);
+ assert.equal(saved.status,'saved');
+ assert.deepEqual(w.state.local.stockMoves,before.local.stockMoves);
+ const second=turn('reused-category',text);
+ const inferred=await call(tool,'write_health',{...args,provenance:[{index:0,refs:[message(second.id)]}],
+  foodGroups:[{name:'合成杂粮份',foodGroup:'vegetable'}]},second);
+ assert.equal(inferred.status,'saved');
+ assert.equal(item().foodGroup,'staple');
+ assert.deepEqual(vegetableIntake(w.state.local.foods.filter(row=>row.date===date),new Map(inventoryWithMoves(w.state).map(row=>[row.id,row]))),
+  {grams:0,knownItems:0,unmeasured:[]});
+ await tool.undo(saved.undo);
+ assert.equal(quantity(w,'grain'),400);
+ assert.equal(item().foodGroup,undefined);
+});
+
+test('photo classification saves one-off food, protects mixed dishes and supports record correction',async()=>{
+ const w=mock(),tool=createAgentTools(w),run=turn('meal-image','午餐这份芹菜炒牛肉300克，吃完了。');
+ run.attachments=[{id:'image',key:'mixed-image'}];
+ const picture={
+  intent:'execute',date,meal:'午餐',steps:[],
+  observations:[{dishKey:'mixed',name:'芹菜炒牛肉',role:'served',images:[1],amount:300,unit:'g',confidence:'measured',
+   basisAmount:null,basisUnit:null,nutrition:null,uncertainty:'合成称重'}],
+  foodGroups:[{name:'芹菜炒牛肉',foodGroup:'vegetable'}]
+ };
+ const revision=w.state.revision??0;
+ const preview=await call(tool,'write_meal_photos',{...picture,intent:'preview'},run,'photo-preview');
+ assert.equal(preview.status,'ok');
+ assert.equal(w.state.revision??0,revision);
+ const logged=await call(tool,'write_meal_photos',picture,run);
+ assert.equal(logged.status,'saved');
+ const intake=w.state.local.foods.at(-1);
+ assert.equal(intake.foodGroup,'mixed');
+ assert.equal(intake.foodId,null);
+ assert.equal(vegetableIntake([intake],new Map()).grams,null);
+ const correction='把这条一次性饮食的分类改为肉类',edited=await call(tool,'classify_food',{
+  skuId:null,recordId:intake.id,foodGroup:'meat',evidence:correction
+ },turn('photo-category-correction',correction));
+ assert.equal(edited.status,'saved');
+ assert.deepEqual(w.state.local.foods.at(-1),{...intake,foodGroup:'meat'});
+ await tool.undo(edited.undo);
+ assert.deepEqual(w.state.local.foods.at(-1),intake);
+
+ saveSku(w.state,{id:'known-grain',name:'合成谷物',unit:'g',basisUnit:'g',basisAmount:100,category:'主食'}).qty=500;
+ const known=turn('known-photo','外食一份合成谷物300克，吃完了。');
+ known.attachments=[{id:'next-image',key:'next-image'}];
+ const matched=await call(tool,'write_meal_photos',{
+  ...picture,observations:[{...picture.observations[0],name:'合成谷物'}],foodGroups:[{name:'合成谷物',foodGroup:'vegetable'}]
+ },known);
+ assert.equal(matched.status,'saved');
+ assert.equal(w.state.local.foods.at(-1).category,'主食');
+ assert.equal(w.state.local.foods.at(-1).foodGroup,undefined);
+ assert.equal(quantity(w,'known-grain'),500);
 });

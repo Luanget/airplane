@@ -5,10 +5,11 @@ import {packagesFor} from '../health/containers.mjs';
 import {onShelf} from '../health/container-ledger.mjs';
 import {dietGoals,isMealPlan,mealDay} from '../health/meal-status.mjs';
 import {same} from '../health/sync-source.mjs';
+import {foodClassification,vegetableKind} from '../health/food-groups.mjs';
 import {recordedPortion} from '../health/food-history.mjs';
 
 export {isMealPlan};
-const brief=row=>({id:row.id,date:row.date,meal:row.meal,name:row.name,foodId:row.foodId,
+const brief=row=>({...foodClassification(row),id:row.id,date:row.date,meal:row.meal,name:row.name,foodId:row.foodId,
  containerId:row.containerId??null,amount:row.amount,unit:row.amountUnit??null,portion:row.portion,nutrition:row.nutrition,cost:row.cost,quality:row.quality,uncertainty:row.uncertainty,nutritionEstimate:row.nutritionEstimate});
 const sum=records=>Object.fromEntries(NUTRIENTS.map(key=>{
  const values=records.map(row=>row.nutrition[key]);
@@ -21,32 +22,6 @@ const byMeal=foods=>Object.fromEntries([...new Set(foods.map(row=>row.meal))].ma
   allCostsKnown:items.every(row=>row.cost!=null)}];
 }));
 const label=value=>String(value??'').normalize('NFKC').toLowerCase().trim();
-
-const vegetableGroups=new Set(['vegetable','vegetables','mushroom','mushrooms','fungi','蔬菜','蔬菜类','食用菌','食用菌类','菌菇','菌菇类','菌类','蔬菜/菌菇']);
-const mixedGroups=new Set(['mixed','mixed dish','mixed_dish','混合菜','混合菜品','复合菜品']);
-const commonVegetables=new Set([
- '蔬菜','时蔬','绿叶菜','芹菜','西芹','香芹','青菜','小青菜','小白菜','大白菜','白菜','娃娃菜','娃娃菜心','卷心菜',
- '西兰花','西蓝花','花椰菜','菜花','菠菜','生菜','油麦菜','小油菜','油菜','上海青','菜心','芥蓝','茼蒿','韭菜','空心菜',
- '番茄','西红柿','黄瓜','西葫芦','胡萝卜','白萝卜','茄子','甘蓝','青椒','甜椒','冬瓜','丝瓜','苦瓜','秋葵','芦笋','豆芽',
- '金针菇','香菇','平菇','口蘑','杏鲍菇','蟹味菇','白玉菇','海鲜菇','木耳','菌菇'
-]);
-const pureVegetableName=value=>commonVegetables.has(label(value).replace(/\s+/g,'')
- .replace(/^(?:有机|新鲜|冷冻|鲜|水煮|白灼|焯水|清蒸|清炒|素炒|蒸|煮)+/,'')
- .replace(/\((?:生|熟|生重|熟重|可食部分|水煮|切段|去根)\)$/,'')
- .replace(/(?:净菜|切段|生重|熟重)$/,''));
-function vegetableKind(row,sku){
- const group=label([row.foodGroup,row.category,sku?.foodGroup,sku?.category].find(value=>typeof value==='string'&&value.trim()));
- if(group&&!vegetableGroups.has(group)&&!mixedGroups.has(group))return 'other';
- const names=[row.name,sku?.name];
- const pure=names.some(pureVegetableName);
- const mixed=names.some(name=>{
-  if(pureVegetableName(name))return false;
-  const ingredients=label(name).split(/炒|炖|拌|煮|烧|焖|蒸|烩|配|和|[+、/]/).filter(Boolean);
-  return ingredients.length>1&&ingredients.some(pureVegetableName);
- });
- if(mixed||mixedGroups.has(group)&&pure)return 'unmeasured';
- return vegetableGroups.has(group)||!group&&pure?'whole':'other';
-}
 
 export function vegetableIntake(rows,inventory){
  let total=0,knownItems=0;
@@ -79,7 +54,7 @@ export function planningFacts(state,dates,today,habits){
  const inventory=inventoryWithMoves(state).filter(isOnHand).map(sku=>{
   const [targetAmount,targetUnit]=basis(sku);
   return {id:sku.id,name:sku.name,aliases:sku.aliases??[],quantity:sku.qty,unit:sku.grossStockOnly?'g 毛重':sku.unit,
-   ...(sku.foodGroup?{foodGroup:sku.foodGroup}:{}),...(sku.category?{category:sku.category}:{}),
+   ...foodClassification(sku),
    nutritionBasis:{amount:targetAmount,unit:targetUnit,nutrition:sku.nutrition},price:sku.packagePrice??(sku.pricePerUnit==null?null:{amount:sku.pricePerUnit,unit:sku.priceBasis}),
    containers:packagesFor(state,sku.id).filter(onShelf).map(row=>({id:row.id,kind:row.kind,status:row.status,netGrams:row.net,
     nominal:row.nominal??null,estimated:row.estimated===true,latestGross:row.gross,costCents:row.costCents??null}))};

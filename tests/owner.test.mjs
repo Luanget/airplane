@@ -244,10 +244,12 @@ test('Patch amount recomputes linked stock, recorded nutrients, cost, history an
 
 test('Patch SKU releases old stock, only uses a known conversion and switches nutrition basis',async()=>{
  const w=ownerFixture(),call=commands(w);
+ eggFood(w).foodGroup='egg';
  const result=await call('apply_json_patch',healthPatch(replace(foodPath+'/foodId','milk')),'sku-unknown');
  assert.equal(result.status,'saved');
  assert.deepEqual([stock(w,'egg').qty,stock(w,'milk').qty],[2000,1000]);
  assert.equal(eggFood(w).name,'合成牛奶');
+ assert.equal(eggFood(w).foodGroup,undefined);
  assert.equal(eggFood(w).stockAssociation,'pending');
  assert.equal(eggFood(w).stockQty,null);
  assert.equal(eggFood(w).nutrition.kcal,null);

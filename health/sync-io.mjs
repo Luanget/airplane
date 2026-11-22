@@ -1,3 +1,4 @@
+import {foodClassification} from './food-groups.mjs';
 import {medicalExport,MEDICAL_TABLES} from './medical.mjs';
 import {ensureContainers} from './containers.mjs';
 import {freshData,readFinance} from '../finance-storage.mjs';
@@ -99,7 +100,7 @@ function toExternalEvent(type,row){
  const raw={...row.externalRow,airplane_event_id:row.externalId||sourceId(row.externalRow??{})||row.id,'日期':row.date,'时间':row.time??''};
  if(type==='foods'){
   const status=foodStatus(row);
-  return {...raw,'餐次':row.meal,'食物/饮品':row.name,'食品ID':row.foodId,'份量/重量':row.portion,
+  return {...raw,...foodClassification(row),'餐次':row.meal,'食物/饮品':row.name,'食品ID':row.foodId,'份量/重量':row.portion,
    '状态':{actual:'实际',plan:'计划',cancelled:'取消'}[status],...rawNutrients(row.nutrition),
    ...(row.cost!=null?{'饮食成本(CNY)':row.cost}:{}),...(row.weighing?{airplane_weighing:row.weighing}:{}),...(row.agentEvidence?{airplane_evidence:row.agentEvidence}:{})};
  }
@@ -242,7 +243,7 @@ function projectSummaries(tables,raw,base,state,dates,today){
 function projectInventory(tables,raw,base,state){
  const previous=new Map(inventoryWithMoves(base).map(row=>[row.id,row]));
  const current=new Map(inventoryWithMoves(state).map(row=>[row.id,row]));
- const encode=row=>({'食品ID':row.id,'名称':row.name,'库存值':row.qty,'库存单位':row.unitDescription||row.unit,
+ const encode=row=>({...foodClassification(row),'食品ID':row.id,'名称':row.name,'库存值':row.qty,'库存单位':row.unitDescription||row.unit,
   '标准份量':row.standard,'单价(CNY)':row.pricePerUnit,'价格基准':row.priceBasis,active:row.active!==false,
   kcal:row.nutrition.kcal,'P(g)':row.nutrition.protein,'C(g)':row.nutrition.carbs,'F(g)':row.nutrition.fat,'Na(mg)':row.nutrition.sodium});
  const originals=raw.tables.food_inventory??[];
