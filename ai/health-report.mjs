@@ -101,7 +101,7 @@ export function cycleReport(state,date,today){
   const values=intake.totals;
   if(entry.deficit!==null)cumulative=round((cumulative??0)+entry.deficit,2);
   const meals=[...new Set(dayFoods.map(timelineGroup))];
-  const vegetables=vegetableIntake(dayFoods,catalog);
+  const vegetables=dayFoods.length?vegetableIntake(dayFoods,catalog):{grams:null,unmeasured:[],knownItems:0};
   return {date:entry.date,status:entry.completeness.status,nutrition:values,partialNutrients:intake.incomplete,vegetables,
    tdee:entry.tdee,tdeeSource:entry.source,deficit:entry.deficit,cumulative,possibleOverestimate:entry.possibleOverestimate,
    meals,mealsWithoutEntry:dietKeys.slice(0,3).filter(meal=>!meals.includes(meal)),

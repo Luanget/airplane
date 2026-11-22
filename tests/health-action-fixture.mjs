@@ -13,7 +13,7 @@ export function assistantFixture(today){
  const milk=add('fixture-milk','合成脱脂牛奶','mL','mL',{packageSize:1000,packageUnit:'mL',packageKind:'盒',kcal:35});
  const chicken=add('fixture-chicken','合成熟鸡胸','g','g',{kcal:160,protein:32});
  const noodles=add('fixture-noodles','合成荞麦面','包','包',{basisAmount:1,kcal:220});
- const greens=add('fixture-greens','合成小青菜','g','g',{kcal:18});
+ const greens=add('fixture-greens','合成小青菜','g','g',{kcal:18,foodGroup:'vegetable'});
  add('fixture-hidden','未提及的合成苹果','g','g').qty=900;
  addBatch(state,{id:'sauce-batch',date:yesterday,foodId:sauce.id,quantity:2,costCents:1200});
  addBatch(state,{id:'milk-batch',date:yesterday,foodId:milk.id,quantity:3000,costCents:1800});

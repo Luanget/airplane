@@ -45,7 +45,8 @@ function world(){
  for(const [id,name,kcal,protein,fat,carbs] of [
   ['fixture-white','合成蛋白',50,11,0,0],['fixture-yogurt','合成浓酸奶',75,10,1,4],['fixture-rice','合成米饭',130,2.7,.3,28],
   ['fixture-oil','合成橄榄油',900,0,100,0],['fixture-celery','合成芹菜',18,1,0,3]
- ])saveSku(state,{id,name,unit:'g',basisAmount:100,basisUnit:'g',kcal,protein,fat,carbs,sodium:skuSodium(id)}).qty=1000;
+ ])saveSku(state,{id,name,unit:'g',basisAmount:100,basisUnit:'g',kcal,protein,fat,carbs,sodium:skuSodium(id),
+  ...(id==='fixture-celery'?{foodGroup:'vegetable'}:{})}).qty=1000;
  saveSku(state,{id:'fixture-egg',name:'合成鸡蛋',unit:'个',basisAmount:1,basisUnit:'个',kcal:75,protein:6,fat:5,carbs:1,sodium:70}).qty=7;
  const workspace={finance,memory:memoryLibrary(finance),readHealth:async()=>structuredClone(state),get state(){return state;},
   set state(value){state=value;},saveHealth:async(next,expected,guard)=>{

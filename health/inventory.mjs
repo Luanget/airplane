@@ -61,7 +61,12 @@ export function saveSku(state,fields) {
   const density=Object.hasOwn(fields,'densityGramsPerMl')?numeric(fields.densityGramsPerMl):previous?.densityGramsPerMl;
   if(density!=null&&density<=0)throw Error('请核对食品密度');
   const preservePrice=price===null&&previous?.priceBasis&&previous.priceBasis!==unit;
-  const row={...previous,id:previous?.id||id||makeId('sku'),name:name.trim(),unit,basisUnit,basisAmount:quantity,stage,stockStage,
+  const classification={};
+  for(const key of ['foodGroup','category']){
+   const value=fields[key];
+   if(Object.hasOwn(fields,key)&&(typeof value==='string'||value===null))classification[key]=value?.trim()||null;
+  }
+  const row={...previous,...classification,id:previous?.id||id||makeId('sku'),name:name.trim(),unit,basisUnit,basisAmount:quantity,stage,stockStage,
     packageSize,packageUnit:packageSize?fields.packageUnit:null,pack:packageSize?unit:null,piecesPerPack:pieces,
     ...(Object.hasOwn(fields,'packageKind')?{packageKind:fields.packageKind||null}:{}),
     densityGramsPerMl:density??null,nutritionBasis:'custom',standard:quantity+' '+basisUnit,qty:previous?previous.qty:0,

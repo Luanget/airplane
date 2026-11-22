@@ -62,7 +62,7 @@ test('long-term preference replaces its topic, keeps history and respects manual
 test('meal planning keeps one-turn exceptions scoped and labels vegetables with estimated missing nutrients',async()=>{
  const state=newState(),finance=local(),memory=memoryLibrary(finance);
  const chicken=saveSku(state,{id:'chicken',name:'合成鸡胸',unit:'g',basisUnit:'g',basisAmount:100,kcal:158,protein:31,fat:4,carbs:0,sodium:60});
- const veg=saveSku(state,{id:'celery',name:'合成芹菜',unit:'g',basisUnit:'g',basisAmount:100,kcal:18});
+ const veg=saveSku(state,{id:'celery',name:'芹菜',unit:'g',basisUnit:'g',basisAmount:100,kcal:18});
  chicken.qty=500;veg.qty=500;
  const estimate={amount:100,unit:'g',source:'通用芹菜参考',uncertainty:'按生鲜可食部分估计',
   nutrition:{kcal:999,protein:1,fat:.2,carbs:3,sodium:70}};
@@ -96,11 +96,12 @@ test('cycle review keeps gaps unknown, excludes plans and preserves the original
  state.legacy.energy[last]={tdee:2750};
  for(let i=0;i<8;i++)recordEvent(state,'weights',{date:addDays(last,i-7),kg:76-i,isMorning:true});
  addFood(state,{date:last,name:'合成午餐',meal:'午餐',kcal:1550,protein:110,carbs:140,fat:35,sodium:2400,status:'actual'});
- addFood(state,{date:last,name:'合成芹菜',meal:'午餐',amount:320,amountUnit:'g',kcal:30,protein:3.2,carbs:9.6,fat:0,sodium:60});
+ addFood(state,{date:last,name:'芹菜',meal:'午餐',amount:320,amountUnit:'g',kcal:30,protein:3.2,carbs:9.6,fat:0,sodium:60});
  addFood(state,{date:last,name:'合成晚餐',meal:'晚餐',kcal:800,status:'plan'});
  const report=cycleReport(state,last,today);
  assert.equal(report.deficit,1170);assert.equal(report.reportedDays,1);
  assert.deepEqual(report.days.slice(0,5).map(row=>row.deficit),[null,null,null,null,null]);
+ assert.ok(report.days.slice(0,5).every(row=>row.vegetables.grams===null));
  assert.equal(report.days[5].tdee,2750);
  assert.equal(report.days[5].vegetables.grams,320);
  assert.ok(report.days[5].aboveSodium&&report.days[5].belowFat&&report.days[5].belowProtein);
@@ -133,7 +134,7 @@ test('whole-day planning retries a vegetable shortfall against 500 g and saves a
   return id;
  };
  const main=sku('main','合成主餐',{kcal:158,protein:15.7,carbs:15,fat:4.8,sodium:90},1500);
- const veg=sku('veg','合成芹菜',{kcal:18,protein:1,carbs:3,fat:.2,sodium:70},800);
+ const veg=sku('veg','芹菜',{kcal:18,protein:1,carbs:3,fat:.2,sodium:70},800);
  const moves=structuredClone(state.local.stockMoves);
  const tools=createAgentTools({finance,memory:memoryLibrary(finance),readHealth:async()=>structuredClone(state),
   saveHealth:async(next,expected,guard)=>{assert.equal(state.revision??0,expected);guard();state={...next,revision:expected+1};}});

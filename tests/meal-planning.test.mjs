@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {evaluateMealPlan,planOperation,undoMealPlan,planningFacts} from '../ai/meal-planning.mjs';
+import {evaluateMealPlan,planOperation,undoMealPlan,planningFacts,vegetableIntake} from '../ai/meal-planning.mjs';
 import {assistantFixture,action,proposal} from './health-action-fixture.mjs';
 import {packagesFor} from '../health/containers.mjs';
-import {addFood,dayIntake,deleteEvent,events} from '../health/core.mjs';
+import {addFood,dayIntake,deleteEvent,events,newState,validateAppState} from '../health/core.mjs';
 import {mealDay} from '../health/meal-status.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {memoryLibrary} from '../ai/memory.mjs';
@@ -145,13 +145,14 @@ test('a saved meal keeps other food and unused portions in projection even after
  assert.equal(mealDay(state,today).plans.find(item=>item.row.id===noodles.id).remaining.amount,2);
 });
 
-test('stock feasibility is separate from all five nutrition targets and evidence-based cost',()=>{
+test('stock feasibility is separate from nutrition targets and evidence-based cost',()=>{
  const state=assistantFixture(today);
  Object.assign(state.settings,{calorieTarget:1700,proteinMin:150,proteinMax:170,fatMin:45});
  const {feasible,days:[day]}=evaluateMealPlan(state,{items:[{...row('fixture-noodles',1,'晚餐'),unit:'包'}]},today);
  assert.equal(feasible,true);assert.equal(day.projected.kcal,220);
  assert.equal(day.nutritionCheck.status,'outside');
- assert.deepEqual(day.nutritionCheck.outside,['kcal','protein','fat','carbs']);
+ assert.deepEqual(day.nutritionCheck.outside,['kcal','protein','fat','carbs','vegetables']);
+ assert.deepEqual(day.nutritionCheck.checks.vegetables,{status:'below',value:0,min:500,max:null,difference:500});
  assert.deepEqual(day.nutritionCheck.checks.kcal,{status:'below',value:220,min:1615,max:1785,difference:1395});
  assert.equal(day.nutritionCheck.checks.sodium.status,'within');
  assert.deepEqual(day.cost,{knownPlannedCost:null,knownDayCost:null,complete:false});
@@ -164,4 +165,59 @@ test('default is explicitly Terra and the selected model always takes precedence
   saveChatModel(store,id);assert.equal(readChatModel(store).name,name);
  }
  saveChatModel(store,'auto');assert.equal(readChatModel(store).name,'Terra');
+});
+
+test('planning recognizes 500 g of uncategorized baby cabbage and other familiar vegetables',()=>{
+ const state=newState();
+ const add=(id,name,qty)=>{saveSku(state,{id,name,unit:'g',basisUnit:'g',basisAmount:100,
+  kcal:18,protein:1,fat:.2,carbs:3,sodium:20}).qty=qty;};
+ add('cabbage','娃娃菜',500);
+ add('celery','新鲜芹菜',250);
+ add('mushroom','水煮金针菇（熟重）',250);
+ const vegetables=items=>evaluateMealPlan(state,{items,dates:[tomorrow]},today).days[0].nutritionCheck.checks.vegetables;
+ const target={status:'within',min:500,max:null,value:500,difference:0};
+ assert.deepEqual(vegetables([row('cabbage',500,'午餐')]),target);
+ assert.deepEqual(vegetables([row('celery',250,'午餐'),row('mushroom',250,'晚餐')]),target);
+ assert.deepEqual(vegetables([]),{status:'below',min:500,max:null,value:0,difference:500});
+});
+
+test('SKU classification survives saving, unrelated edits and a JSON round trip',()=>{
+ const state=newState(),fields={unit:'g',basisUnit:'g',basisAmount:100};
+ const sku=saveSku(state,{...fields,id:'market-a',name:'市场鲜品A',foodGroup:' vegetable ',category:'时令菜'});
+ sku.qty=500;
+ const edited=saveSku(state,{...fields,id:sku.id,name:'市场鲜品B',category:undefined});
+ assert.equal(edited.foodGroup,'vegetable');
+ assert.equal(edited.category,'时令菜');
+ assert.equal(edited.qty,500);
+ const categoryOnly=saveSku(state,{...fields,id:'market-b',name:'市场鲜品C',category:'菌菇类'});
+ categoryOnly.qty=500;
+ const restored=JSON.parse(JSON.stringify(state));
+ assert.ok(validateAppState(restored));
+ assert.deepEqual(planningFacts(restored,[tomorrow],today,[]).inventory.map(({foodGroup,category})=>[foodGroup,category]),
+  [['vegetable','时令菜'],[undefined,'菌菇类']]);
+ for(const id of [sku.id,categoryOnly.id]){
+  const day=evaluateMealPlan(restored,{items:[row(id,500,'午餐')]},today).days[0];
+  assert.equal(day.vegetables.grams,500);
+  assert.equal(day.nutritionCheck.checks.vegetables.status,'within');
+ }
+ const staple=saveSku(state,{...fields,id:'corn',name:'玉米',foodGroup:'主食'});
+ staple.qty=500;
+ assert.equal(evaluateMealPlan(state,{items:[row(staple.id,500,'午餐')]},today).days[0].vegetables.grams,0);
+});
+
+test('mixed dish weights are excluded and an unweighed vegetable stays unknown',()=>{
+ const state=newState();
+ const dish=saveSku(state,{id:'mixed',name:'芹菜炒牛肉',unit:'g',basisUnit:'g',basisAmount:100,category:'混合菜'});
+ dish.qty=500;
+ const [day]=evaluateMealPlan(state,{items:[row(dish.id,500,'午餐')]},today).days;
+ assert.equal(day.vegetables.grams,null);
+ assert.deepEqual(day.vegetables.unmeasured,['芹菜炒牛肉']);
+ assert.equal(day.nutritionCheck.checks.vegetables.status,'unknown');
+ const noSku=new Map();
+ assert.deepEqual(vegetableIntake([{name:'芹菜味饼干',portion:'500 g'}],noSku),
+  {grams:0,unmeasured:[],knownItems:0});
+ assert.deepEqual(vegetableIntake([{name:'娃娃菜',portion:'一份'}],noSku),
+  {grams:null,unmeasured:['娃娃菜'],knownItems:0});
+ assert.deepEqual(vegetableIntake([{name:'芹菜炒牛肉',portion:'500 g'},{name:'金针菇',portion:'120 g'}],noSku),
+  {grams:null,unmeasured:['芹菜炒牛肉'],knownItems:1,knownGrams:120});
 });
