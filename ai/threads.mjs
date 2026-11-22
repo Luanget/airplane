@@ -88,16 +88,16 @@ export function threadBook(store){
    const queued=row?.agentQueue?.find(job=>job.id===id);
    if(!queued||row.pending)return null;
    row.agentQueue=row.agentQueue.filter(job=>job.id!==id);
-   add(row,'user',queued.label,true);
+  add(row,'user',queued.label,true,{id:queued.messageId??id,taskId:id,date:queued.date,attachmentGroup:queued.attachmentGroup});
    row.pending={id,operationId:id,request:{native:true,text:queued.label},partial:''};
    row.review=null;row.photos=null;row.followUp=null;save();
    return {threadId:row.id,id,operationId:id};
   },
-  addAgentSteer({threadId,id},text){
+  addAgentSteer({threadId,id},text,metadata){
    refresh();
    const row=threads.find(item=>item.id===threadId);
    if(row?.pending?.id!==id)return;
-   add(row,'user',text,true);save();
+   add(row,'user',text,true,{taskId:id,...metadata});save();
   },
   checkpoint({threadId,id},partial){
    refresh();

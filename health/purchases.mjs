@@ -15,11 +15,11 @@ export function cents(value) {
  return Math.round(n*100);
 }
 export function recordPurchase(state,order,transaction) {
- const {id,date,items,totalCents,financeId=null,note='',time,financeIds,receiptId}=order;
+ const {id,date,items,totalCents,financeId=null,note='',time,financeIds,receiptId,stockOnly,sourceEvidence,stockSignature}=order;
  const all=state.local.purchases??=[];
  const clock=normalizeClock(time);
  const saved={id,date,items,totalCents,financeId,note,...(clock?{time:clock}:{}),
-  ...(receiptId?{receiptId,financeIds}: {})};
+  ...(receiptId?{receiptId,financeIds}: {}),...(stockOnly?{stockOnly:true,sourceEvidence,stockSignature}: {})};
  const existing=all.find(o=>o.id===id);
  if(existing) {
   if(JSON.stringify(existing)!==JSON.stringify(saved))throw Error('该订单已保存，请打开已有采购');
@@ -41,11 +41,13 @@ export function recordPurchase(state,order,transaction) {
  all.push(saved);
  return saved;
 }
-function validateOrder(state,{id,date,items,totalCents}) {
- if(!id || !validDate(date) || !Number.isSafeInteger(totalCents) || totalCents<0 || !items.length)
+export const unknownPurchaseTotal=order=>order.totalCents===null&&order.stockOnly===true&&!order.financeId&&!order.receiptId;
+function validateOrder(state,order) {
+ const {id,date,items,totalCents}=order;
+ if(!id || !validDate(date) || !unknownPurchaseTotal(order)&&(!Number.isSafeInteger(totalCents)||totalCents<0) || !items.length)
   throw Error('请检查订单日期、金额和食品');
  const known=items.reduce((n,r)=>n+(r.costCents??0),0);
- if(known>totalCents || items.every(r=>r.costCents!==null)&&known!==totalCents)
+ if(totalCents!==null&&(known>totalCents || items.every(r=>r.costCents!==null)&&known!==totalCents))
   throw Error('商品金额与订单总额不符');
  const active=new Set(inventoryWithMoves(state).filter(x=>x.active).map(x=>x.id));
  for(const r of items){
@@ -161,4 +163,23 @@ export function revisePurchase(current,id,fields,{receiptUndo=false}={}) {
  const history=[...(order.history??[]),{date:order.date,time:normalizeClock(order.time),totalCents:order.totalCents,note:order.note,items:order.items,changedAt:new Date().toISOString()}];
  Object.assign(order,updated?{...updated,items,history}:{status:'cancelled',history});
  return {next,order:updated?order:null};
+}
+
+// Attach a later paid receipt to lots already received, retaining their IDs and movements.
+export function linkStockPurchase(state,order,items,{receiptId,financeIds,note}){
+ if(!order?.stockOnly||order.status==='cancelled'||order.receiptId||order.financeId||order.items.length!==items.length)
+  throw Error('请选择仍未关联财务的入库单。');
+ const remaining=[...items];
+ const matched=order.items.map((line,index)=>{
+  const ix=remaining.findIndex(other=>other.foodId===line.foodId&&other.quantity===line.quantity);
+  if(ix<0)throw Error('订单食品或数量与原入库单不一致。');
+  const [hit]=remaining.splice(ix,1);
+  if(line.costCents!==null&&hit.costCents!==null&&line.costCents!==hit.costCents)throw Error('实付明细与原批次金额不一致，请核对。');
+  return {...line,batchId:orderBatchId(order,line,index),costCents:hit.costCents??line.costCents,receiptLine:hit.receiptLine};
+ });
+ const totalCents=matched.reduce((sum,row)=>sum+(row.costCents??0),0);
+ const {next}=revisePurchase(state,order.id,{items:matched,totalCents,note});
+ const linked=next.local.purchases.find(row=>row.id===order.id);
+ Object.assign(linked,{receiptId,financeIds});
+ return next;
 }

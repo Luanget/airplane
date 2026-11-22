@@ -12,6 +12,9 @@ import {addDays,addFood,events,inventoryWithMoves} from '../health/core.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {makeMedicalAttachment} from '../health/medical.mjs';
+import {addBatch} from '../health/inventory.mjs';
+import {identifyAttachments} from '../ai/conversation-evidence.mjs';
+import {threadBook} from '../ai/threads.mjs';
 import {modelRates,estimatedCost,usageTokens} from '../ai/usage.mjs';
 import {readFinance,replaceFinance,STORAGE_KEY} from '../finance-storage.mjs';
 import {assistantFixture} from './health-action-fixture.mjs';
@@ -70,6 +73,17 @@ function image(lines,id){
 const receipt=(extra='')=>image(['合成商店',today,'支付成功','合成脱脂牛奶 500 mL/盒 × 2，实付 ¥13.00','合成纸巾 × 1，实付 ¥18.00','运费 ¥3.00','订单实付 ¥34.00',extra],extra||'receipt');
 const nutritionLabel=()=>image(['合成米粉标签','每100克：热量 120 kcal，蛋白质 4g','脂肪 1g，碳水 23g，钠 110mg'],'label');
 const mealRequirements='普通日目标约1700千卡，蛋白150–170g，脂肪至少45g。只用库里食物，午餐略多，芹菜可分在两餐。';
+function evidenceInventory(w){
+ const state=w.state,yesterday=addDays(today,-1);
+ const save=(id,name,unit='g',more={})=>saveSku(state,{id,name,unit,basisAmount:100,basisUnit:'g',kcal:20,protein:2,carbs:2,fat:1,sodium:30,...more});
+ const sauce=save('fixture-turkey','火鸡面酱','瓶',{packageSize:200,packageUnit:'g',packageKind:'瓶'});
+ const chili=save('fixture-chili','另一瓶辣椒酱','瓶',{packageSize:200,packageUnit:'g',packageKind:'瓶'});
+ save('fixture-celery','芹菜');state.local.inventory.find(row=>row.id==='fixture-celery').qty=480;
+ Object.assign(state.local.inventory.find(row=>row.id==='fixture-noodles'),{packageSize:60,packageUnit:'g',pack:'包'});
+ for(const [id,foodId,quantity,portion] of [['turkey-batch',sauce.id,1,false],['chili-batch',chili.id,1,false],
+  ['chicken-portion-evidence', 'fixture-chicken',243.6,true]])addBatch(state,{id,foodId,date:yesterday,quantity,portion});
+}
+const typedFood=(name,stamp)=>image([name,'净含量 1 L','每 100 mL 营养：能量 66 kcal','蛋白质 3.5 g 碳水 4.8 g 脂肪 3.8 g 钠 40 mg'],stamp);
 const cases=[
  {id:'habit-then-plan',effort:'medium',turns:[{text:'一天不要安排两顿鸡胸'}, {text:'规划明天午餐和晚餐。'+mealRequirements}],
   verify:(w,run)=>{const plan=checkedPlan(run);assert.ok(plan);assert.ok(w.memory.activeHabits().length);
@@ -168,18 +182,60 @@ const cases=[
   assert.equal(Math.round(records.reduce((n,row)=>n+row.nutrition.kcal,0)),Math.round(day.projected.kcal));
   return {kcal:day.projected.kcal,protein:day.projected.protein,fat:day.projected.fat,
    carbs:day.projected.carbs,sodium:day.projected.sodium,checks:day.nutritionCheck.status};
+ }},
+ {id:'evidence-multi-turn',effort:'medium',setup:evidenceInventory,turns:[
+  {text:'火鸡面酱开封时270g，现在257.4g，另一瓶辣椒酱306.3g。午餐吃了鸡胸243.6g、一份芹菜480g、一包荞麦面和1L脱脂奶。'},
+  {text:'这些都是真实吃的，直接记录午饭。',verify:w=>{
+   const result=foods(w);assert.equal(result.length,5,JSON.stringify(result.map(({name,amount})=>[name,amount])));
+   for(const [skuId,amount] of [['fixture-turkey',12.6],['fixture-chicken',243.6],['fixture-celery',480],['fixture-noodles',1],['fixture-milk',1000]])
+    if(skuId!=='fixture-noodles')assert.equal(result.find(row=>row.foodId===skuId)?.amount,amount,skuId);
+   assert.equal(result.find(row=>row.foodId==='fixture-noodles')?.nutrition.kcal,220);
+   assert.equal(qty(w,'fixture-noodles'),5);
+   assert.equal(packagesFor(w.state,'fixture-chili')[0].gross,306.3);assert.equal(qty(w,'fixture-celery'),0);
+  }},
+  {text:'这是另一款全脂牛奶，一盒 1 L，和之前的脱脂奶是不同食品。先识别标签，不记账。',media:()=>[typedFood('合成全脂牛奶','full-milk-label')]},
+  {text:'补充这批食品的分装数量：芹菜三份每份500g，还有菠菜两份每份250g。'},
+  {text:'这三样都是新买的，要入库，不是记录吃掉。请使用刚才上传那张全脂奶营养标签。'}
+ ],verify:(w,run)=>{
+  const stocks=w.state.local.purchases.filter(row=>row.stockOnly&&row.status!=='cancelled');
+  assert.equal(stocks.reduce((sum,row)=>sum+row.items.length,0),3);
+  assert.equal(foods(w).length,5);assert.equal(billing(w),0);
+  assert.equal(qty(w,'fixture-celery'),1500);
+  const sku=inventoryWithMoves(w.state).find(row=>row.name.includes('全脂'));
+  assert.equal(sku?.qty,1000);assert.equal(sku?.nutrition.kcal,66);
+  assert.equal(stocks.every(row=>row.totalCents===null),true);
+  assert.ok(run.input.some(item=>Array.isArray(item.content)&&item.content.some(row=>row.type==='input_image')));
+  return {actual:5,milkMl:1000,vegetablePortions:w.state.local.batches.filter(row=>row.portion&&row.parent).length,finance:billing(w)};
+ }},
+ {id:'history-attachment-unavailable',turns:[
+  {text:'这张只是看看，先别记录。',media:()=>[typedFood('合成全脂牛奶','lost-label')]},
+  {text:'用刚才上传的营养标签告诉我钠含量。',dropMedia:true}
+ ],verify:(w,run)=>{assert.match(run.reply,/已删除|不可用|丢失|找不到|无法访问|无法读取|无法调取|无法重新核实/);assert.ok(noNew(w));}},
+ {id:'saved-intent-correction',turns:[
+  {text:'午餐吃了库存的小青菜100g，保存为实际饮食。',verify:w=>assert.equal(foods(w).length,1)},
+  {text:'纠正刚才那条小青菜记录。那100g是新买的，应入库，我并没吃。只撤销刚才那条摄入，再把同一批东西入库，不需要财务记账。'}
+ ],verify:(w,run)=>{
+  assert.equal(foods(w).length,0);assert.equal(qty(w,'fixture-greens'),900);assert.equal(billing(w),0);
+  assert.equal(w.state.local.purchases.filter(row=>row.stockOnly).length,1);
+  assert.ok(run.receipts.some(row=>row.result.status==='undone'&&row.result.receipt?.operationId));
  }}
 ];
 
 async function runCase(model,example){
- const w=world(),tools=createAgentTools(w),history=[],metric={model,case:example.id,calls:[],success:false};
+ const w=world(),book=threadBook(w.finance),rows=new Map(),tasks=new Map(),journal={
+  readRun:async id=>rows.get(id),recent:async()=>[...tasks.values()].reverse()
+ },tools=createAgentTools(w,{book,journal}),history=[],metric={model,case:example.id,calls:[],turns:[],success:false};
  let run,snapshot,interrupted=false;
  const started=performance.now();
  try{
   example.setup?.(w);
   for(const [index,turn] of example.turns.entries()){
-   run=createAgentRun({id:example.id+'-'+index,model,date:today,clock:'12:01',text:turn.text,history,
-    attachments:await turn.media?.()??[],allowRead:turn.allowRead??true});
+   const id=example.id+'-'+index,{files,group}=identifyAttachments(await turn.media?.()??[],'media:'+id);
+   if(turn.dropMedia)rows.clear();
+   if(group)rows.set(group.id,{id:group.id,attachments:files});
+   book.append('user',turn.text,true,null,{id,taskId:id,date:today,attachmentGroup:group});
+   run=createAgentRun({id,threadId:book.current.id,model,date:today,clock:'12:01',text:turn.text,history,
+    attachments:files,allowRead:turn.allowRead??true});
    if(process.env.AIRPLANE_EVAL_EFFORT||example.effort)run.effort=process.env.AIRPLANE_EVAL_EFFORT??example.effort;
    const queue=[];
    let dispatchedSteer=false;
@@ -193,7 +249,9 @@ async function runCase(model,example){
      if(count>=invocationLimit)throw Error('Evaluation request cap');
      count++;
      const request=nativeRequest(state,agentInstructions,state.allowRead?tools.definitions:[],options);
-     if(state.allowRead)request.instructions+='\n当前启用的本机习惯和工作流程：'+JSON.stringify(tools.context());
+     if(state.allowRead)request.instructions+='\n当前启用的本机习惯和工作流程：'+JSON.stringify(tools.context())+
+      '\n用户消息 ID（按最近顺序）：'+JSON.stringify(state.userSources.map(row=>({id:row.id,current:!!row.current,text:row.text})))+
+      '\n已附在本任务的附件 ID：'+state.attachments.map(row=>row.id).join('、');
      const begin=performance.now();
      const response=await fetch(endpoint,{method:'POST',headers:{'Authorization':'Bearer '+key,'Content-Type':'application/json'},
       body:JSON.stringify(request),signal:AbortSignal.timeout(100000)});
@@ -206,8 +264,15 @@ async function runCase(model,example){
     }});
    try{run=await execute(run);}
    catch(error){if(!turn.interrupt||!interrupted)throw error;run=await execute(snapshot,true);}
+   metric.turns.push({reply:run.reply,review:run.receipts.filter(row=>row.result.status==='review').length,
+    writes:run.receipts.filter(row=>tools.isWrite(row.tool)).map(row=>({tool:row.tool,status:row.result.status,
+     reason:row.result.reason,receipt:row.result.receipt}))});
    turn.verify?.(w,run);
-   history.push({role:'user',text:turn.text},{role:'assistant',text:run.reply});
+   const agentUndo=run.receipts.flatMap(row=>row.result.undo?[row.result.undo]:row.result.undos??[]);
+   book.append('assistant',run.reply,true,null,{agentUndo,taskId:id});
+   tasks.set(id,{id,threadId:book.current.id,status:'done',steps:run.receipts.map(({tool,result})=>
+    ({tool,status:result.status,receipt:result.receipt,undos:result.undo?[result.undo]:result.undos})),updatedAt:Date.now()});
+   history.push({role:'user',text:turn.text,id,date:today},{role:'assistant',text:run.reply});
   }
   metric.nutrition=example.verify(w,run);
   metric.success=true;

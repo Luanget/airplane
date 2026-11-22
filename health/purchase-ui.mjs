@@ -82,7 +82,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   const els=(getState().local.purchases??[]).slice().reverse().map(order=>{
    const tx=transactions.find(t=>t.id===purchaseTransactionId(order));
    const p=document.createElement('p');p.dataset.purchaseId=order.id;
-   const amount='¥'+(order.totalCents/100).toFixed(2);
+   const amount=order.totalCents===null?'金额未知':'¥'+(order.totalCents/100).toFixed(2);
    const name=order.receiptId?(order.items.every(row=>row.costCents==null)?'食品成本未知':'食品已核实 '+amount):amount;
    p.textContent=displayDay(order.date)+(normalizeClock(order.time)?' '+normalizeClock(order.time):'')+' · '+name+' · '+order.items.length+' 项 · '+(order.note||'采购');
    if(order.status==='cancelled'){p.append(' · 已撤销');return p;}
@@ -109,7 +109,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
  function reset(items=[]){
   editing=null;shopping=new Set(items.map(i=>i.foodId));
   cancelEdit.hidden=true;form.elements.financeId.disabled=false;form.elements.createExpense.disabled=false;
-  form.reset();form.elements.date.value=today();form.elements.time.value=localClock();orderId=newPurchaseId();button.textContent='确认采购入库';
+  form.reset();form.elements.total.required=true;form.elements.date.value=today();form.elements.time.value=localClock();orderId=newPurchaseId();button.textContent='确认采购入库';
   lines.replaceChildren();(items.length?items:[{}]).forEach(addLine);render();syncCalendarFields(form);
  }
  function reveal(){
@@ -120,7 +120,8 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   form.reset();editing=order;shopping=new Set();
   button.textContent='保存采购更正';cancelEdit.hidden=false;
   form.elements.financeId.disabled=true;form.elements.createExpense.disabled=true;
-  form.elements.date.value=order.date;form.elements.time.value=normalizeClock(order.time);form.elements.total.value=(order.totalCents/100).toFixed(2);form.elements.note.value=order.note;
+  form.elements.total.required=!order.stockOnly;
+  form.elements.date.value=order.date;form.elements.time.value=normalizeClock(order.time);form.elements.total.value=order.totalCents===null?'':(order.totalCents/100).toFixed(2);form.elements.note.value=order.note;
   lines.replaceChildren();order.items.forEach((r,i)=>addLine({...r,batchId:orderBatchId(order,r,i)}));syncChoiceFields(form);
   details.open=true;render();syncCalendarFields(form);
   if(fromFinance){switchTab('inventory');form.scrollIntoView({block:'nearest'});}
@@ -170,7 +171,7 @@ export function attachPurchases({getState,commit,setState,notify,switchTab,today
   saving=true;button.disabled=true;
   try{
    const fields=new FormData(form);
-   const order={id:orderId,date:fields.get('date'),totalCents:cents(fields.get('total')),financeId:fields.get('financeId')||null,
+   const order={id:orderId,date:fields.get('date'),totalCents:editing?.stockOnly&&fields.get('total')===''?null:cents(fields.get('total')),financeId:fields.get('financeId')||null,
     note:fields.get('note'),time:fields.get('time'),items:readItems()};
    if(editing){await revision(editing,order);return;}
    const tx=order.financeId?finance().find(t=>t.id===order.financeId):null,next=structuredClone(getState());

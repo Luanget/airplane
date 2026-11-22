@@ -1,4 +1,6 @@
 import {mountAgentChat} from './agent-chat.mjs';
+import {executionDetails} from './audit.mjs';
+import {exportAiArchive,restoreAiArchive} from './archive.mjs';
 import {combineReceiptTurn,localAgentCommand,routeAgent,routedSkills,scopedHistory,separateAttachmentRequests} from './routing.mjs';
 import {healthTraceReceipt,relatedTaskSummaries,failureKind,taskJournal} from './task-log.mjs';
 import {mountTaskSettings} from './task-settings.mjs';
@@ -38,7 +40,7 @@ import {syncChoiceFields} from '../choice-picker.mjs';
 const demo=new URLSearchParams(location.search).get('demo')==='1';
 const workspace=demo?await demoWorkspace(localDate()):localWorkspace();
 const nativeAgentEnabled=!demo;
-const book=threadBook(demo?workspace.finance:localStorage);
+const book=threadBook(workspace.finance);
 const respond=demo?workspace.respond:recognize;
 const journal=taskJournal(workspace.account);
 let pendingTrace=Promise.resolve();
@@ -100,6 +102,33 @@ documentAccess.onchange=()=>{
 };
 const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
 const refreshTasks=mountTaskSettings($('[data-task-settings]'),journal,workspace.finance,demo);
+function refreshWriteStatus(){
+ const allowed=composer.elements.allowRead.checked;
+ $('[data-write-status]').textContent=allowed?['健康自动写入 '+(hasHealthAuto(workspace.finance)?'开':'关'),
+  '财务自动记账 '+(financeAutomation(workspace.finance).enabled?'开':'关')].join(' · '):'本轮本机读取和写入均关闭';
+}
+for(const input of [healthAuto,financeAuto,composer.elements.allowRead])input.addEventListener('change',()=>queueMicrotask(refreshWriteStatus));
+refreshWriteStatus();
+$('[data-export-conversation]').onclick=async()=>{
+ try{
+  if(!book.current)throw Error('请先打开要导出的对话。');
+  const exported=await exportAiArchive(workspace.account,{threadId:book.current.id});
+  const url=URL.createObjectURL(new Blob([JSON.stringify(exported,null,2)],{type:'application/json'}));
+  const link=document.createElement('a');link.href=url;link.download='airplane-ai-conversation.json';link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),5000);
+ }catch(error){report(error);}
+};
+const conversationFile=$('[data-conversation-file]');
+$('[data-import-conversation]').onclick=()=>conversationFile.click();
+conversationFile.onchange=async()=>{
+ const file=conversationFile.files[0];conversationFile.value='';
+ if(!file)return;
+ try{
+  if(busy||saving||nativeUi?.running)throw Error('请在本次任务结束后恢复对话。');
+  const result=await restoreAiArchive(workspace.account,JSON.parse(await file.text()));
+  book.reload();renderThread();settings.close();tell('已恢复 '+result.added+' 个对话。');
+ }catch(error){report(error);}
+};
 $('#assistant-settings').onclick=()=>{settings.showModal();
  automaticMemory.checked=automaticMemoryEnabled(workspace.finance);
  healthAuto.checked=hasHealthAuto(workspace.finance);
@@ -201,12 +230,12 @@ stop.onclick=()=>{
 };
 function updateContext(){
  const budget=readHistoryOption(workspace.finance);
- const {history:turns,summary,compact}=contextFor(book.current,budget);
+ const {history:turns,sources,summary,compact}=contextFor(book.current,budget);
  [...historyOptions.children].forEach((button,index)=>button.setAttribute('aria-pressed',String(budget===HISTORY_OPTIONS[index])));
  const chars=turns.reduce((n,row)=>n+row.text.length,0);
  $('[data-context-size]').textContent='历史 '+turns.length+' 条 · '+chars+'/'+budget.chars+' 字'+
   (summary?' · 已压缩 '+summary.length+' 字':'');
- return {turns,summary,compact};
+ return {turns,sources,summary,compact};
 }
 async function prepareContext(date,model,traceId){
  const current=updateContext();
@@ -276,8 +305,10 @@ historyDelete.onclick=()=>{
   const removed=book.list().find(row=>row.id===deletingThread);
   if(active)nativeUi?.stop();
   book.remove(deletingThread);clearHistoryConfirmation();
+  if(removed)void journal.redactThread(removed.id).catch(()=>{});
   for(const job of [...(removed?.agentQueue??[]),...(removed?.pending?.request?.native?[removed.pending]:[]),
-   ...(removed?.messages??[]).map(message=>message.media).filter(Boolean)])
+   ...(removed?.messages??[]).flatMap(message=>[message.media,message.attachmentGroup]).filter(Boolean),
+   ...(removed?.agentQueue??[]).flatMap(job=>job.attachmentGroup?[job.attachmentGroup]:[])])
    void journal.removeRun(job.id).catch(()=>{});
   if(active)renderThread();else syncThreads();
   historyButton.focus();tell('已删除这段对话。');
@@ -302,7 +333,7 @@ function messageNode(role,text){
  row.append(mark,body);
  return row;
 }
-function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[],media){
+function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[],media,taskId){
  const scroll=thread.scrollTop;
  const follow=thread.scrollHeight-scroll-thread.clientHeight<48;
  const node=messageNode(role,text);
@@ -319,10 +350,11 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
   };
   node.querySelector('.chat-bubble').after(undo);
  }
- if(typeof source?.label==='string'&&typeof source.text==='string'){
+ if(taskId||typeof source?.label==='string'&&typeof source.text==='string'){
   const details=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');
-  details.className='chat-source';title.textContent=source.label;body.textContent=source.text;
-  details.append(title,body);insert(details);
+  const panel=taskId?executionDetails(journal,taskId):details;
+  if(!taskId){details.className='chat-source';title.textContent=source.label;body.textContent=source.text;details.append(title,body);}
+  insert(panel);
   if(agentUndo.length){
    const actions=document.createElement('div');actions.className='chat-actions';
    for(const token of agentUndo){
@@ -331,13 +363,13 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
     undo.onclick=async()=>{
      if(busy||saving||undo.disabled)return;
      saving=true;undo.disabled=true;lock();
-     try{undo.textContent=await (token.kind==='meal_plan'?nativeUi.undo(token):undoAgentTask(workspace,token));await journal.undo(token.id).catch(()=>{});}
+     try{undo.textContent=await (['meal_plan','stock_receipt'].includes(token.kind)?nativeUi.undo(token):undoAgentTask(workspace,token));await journal.undo(token.id).catch(()=>{});}
      catch(err){report(err);undo.disabled=false;}
      finally{saving=false;lock();}
     };
     actions.append(undo);
    }
-   details.append(actions);
+   panel.append(actions);
   }
  }
  if(media){
@@ -410,6 +442,7 @@ function resetPhoto(){
 }
 function clearComposer(){
  composer.elements.text.value='';composer.elements.allowRead.checked=true;resetPhoto();
+ refreshWriteStatus();
 }
 function lock(){
  const waiting=busy||saving;
@@ -434,7 +467,7 @@ function renderTranscript(){
  start.hidden=messages.length>0;
  for(const [index,m] of messages.entries()){
   if(index===current?.photos?.summaryIndex)continue;
-  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source,m.healthActionId,false,m.agentUndo,m.media);
+  if(m&&['user','assistant'].includes(m.role)&&typeof m.text==='string')bubble(m.role,m.text,m.source,m.healthActionId,false,m.agentUndo,m.media,m.role==='assistant'?m.taskId:null);
  }
  renderQueue(current?.agentQueue??[]);
 }
@@ -444,6 +477,7 @@ function showPending(){
  retryRequest.hidden=!pending;
  if(!pending)return;
  if(pending.partial)bubble('assistant',pending.partial);
+ if(pending.request?.native)transcript.insertBefore(executionDetails(journal,pending.id,'上次执行详情'),transcript.querySelector('[data-queued-job]'));
  tell(pending.partial?'上次回复中断，已保留收到的部分。':'上次消息已保留，可以重试。');
 }
 function renderThread(previousPhotos){
@@ -1417,8 +1451,8 @@ if(nativeAgentEnabled){
  nativeUi=mountAgentChat({book,journal,workspace,composer,review,stop,retry:retryRequest,replyRetry:$('[data-retry-agent-reply]'),
   steerLabel:$('[data-agent-steer]'),transcript,thread,context:updateContext,trace,status:tell,onError:report,
   onQueue:jobs=>{renderQueue(jobs);if(jobs.length)tell('等待处理 '+jobs.length+' 条消息');},
-  onUser:label=>{start.hidden=true;bubble('user',label,null,null,true);syncThreads();},
-  onFinal:(reply,source,undo,media)=>{bubble('assistant',reply,source,null,true,undo,media);syncThreads();updateContext();},
+  onUser:label=>{start.hidden=true;bubble('user',label,null,null,true);syncThreads();refreshWriteStatus();},
+  onFinal:(reply,source,undo,media,taskId)=>{bubble('assistant',reply,source,null,true,undo,media,taskId);syncThreads();updateContext();},
   onKey:revealKeySettings,resetPhoto});
  void nativeUi.restore();
 }

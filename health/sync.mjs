@@ -192,7 +192,8 @@ function verifyGraph(state,baseline){
   if(same(order,orderBefore.get(order.id)))continue;
   const items=order.items??[];
   const known=items.reduce((sum,row)=>sum+(row.costCents??0),0);
-  if(!items.length||known>order.totalCents||items.every(row=>row.costCents!=null)&&known!==order.totalCents)report(order.id,'订单金额与明细不一致');
+  if(!items.length||order.totalCents!==null&&(known>order.totalCents||items.every(row=>row.costCents!=null)&&known!==order.totalCents))
+   report(order.id,'订单金额与明细不一致');
   items.forEach((line,index)=>{
    const batch=batches.get(orderBatchId(order,line,index));
    if(!batch||batch.foodId!==line.foodId||batch.quantity!==line.quantity||batch.costCents!==line.costCents)

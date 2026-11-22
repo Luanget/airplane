@@ -76,6 +76,7 @@
             <button type="submit" class="primary-button">发送</button>
           </div>
           <label class="assistant-query"><input type="checkbox" name="allowRead" checked> 允许本轮查询本机数据</label>
+          <small class="assistant-write-status" data-write-status></small>
           <div class="assistant-request-status"><output data-status aria-live="polite"></output><button type="button" class="text-button" data-stop-request hidden>停止等待</button></div>
           <button type="button" class="text-button" data-retry-agent-reply hidden>仅重试回复</button>
           <label class="agent-steer" data-agent-steer hidden><input type="checkbox"> 补充当前任务</label>
@@ -133,7 +134,7 @@
             <label class="document-access"><input type="checkbox" data-medical-auto>自动保存明确的健康档案记录</label>
             <label class="document-access"><input type="checkbox" data-finance-auto>日常财务自动记账</label>
             <label class="document-access">单笔上限 ¥ <input type="number" data-finance-limit min="0.01" max="1000000" step="0.01" inputmode="decimal"></label>
-            <p>授权后，信息明确的饮食、包装消耗和少量更正会直接保存，可在结果中撤销。</p>
+            <p>分别开启后，健康可自动记录饮食、入库、称重和计划，财务可在单笔上限内自动记账。</p>
             <label class="document-access"><input type="checkbox" data-document-access>完整数据权限</label>
             <p>可按指令访问原始数据。覆盖、批量删除和修改关键设置需要核对。关闭「允许本轮查询本机数据」会暂停直接写入。</p>
           </div>
@@ -157,6 +158,11 @@
           <div class="assistant-panel-body">
             <p data-task-summary class="form-hint"></p>
             <button type="button" class="text-button" data-export-tasks>导出本机任务日志</button>
+            <div class="chat-actions">
+              <button type="button" class="text-button" data-export-conversation>导出当前对话和附件</button>
+              <button type="button" class="text-button" data-import-conversation>恢复对话备份</button>
+              <input type="file" data-conversation-file accept=".json,application/json" hidden>
+            </div>
             <form class="assistant-fields">
               <label>模型费率（美元／百万 Token）<select name="model"></select></label>
               <div class="form-grid">

@@ -184,7 +184,8 @@ export function validateAppState(state){
    && rows(m.batches ?? [], x=>typeof x.id==='string' && typeof x.foodId==='string' && dated(x) && Number.isFinite(x.quantity) && x.quantity>0 && (x.costCents==null || Number.isSafeInteger(x.costCents) && x.costCents>=0))
    && rows(m.templates ?? [], x=>typeof x.name==='string' && Array.isArray(x.items) && x.items.every(food))
    && rows(m.shoppingList ?? [], x=>typeof x.foodId==='string' && Number.isFinite(x.quantity) && x.quantity>0)
-   && rows(m.purchases ?? [], x=>typeof x.id==='string' && dated(x) && Array.isArray(x.items) && Number.isSafeInteger(x.totalCents) && x.totalCents>=0)
+   && rows(m.purchases ?? [], x=>typeof x.id==='string' && dated(x) && Array.isArray(x.items) &&
+    (Number.isSafeInteger(x.totalCents)&&x.totalCents>=0||x.totalCents===null&&x.stockOnly===true&&!x.financeId&&!x.receiptId))
    && (m.edits==null || object(m.edits) && ['foods','weights','activities'].every(k=>m.edits[k]==null || object(m.edits[k]) && Object.values(m.edits[k]).every(x=>x===null || object(x) && (k!=='foods' || food(x)) && dated(x))))
    && object(l.daily) && Object.values(l.daily).every(x => object(x?.nutrition))
    && object(l.energy) && Object.values(l.energy).every(object)

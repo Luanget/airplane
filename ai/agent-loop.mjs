@@ -8,11 +8,12 @@ export const toolResult=(call,output)=>({type:'function_call_output',call_id:cal
 const validCall=call=>typeof call.call_id==='string'&&call.call_id.length>0&&typeof call.name==='string';
 const changed=result=>result?.status==='saved'||result?.status==='undone';
 
-export function createAgentRun({id,model,date,clock,text,attachments=[],history=[],summary=null,allowRead=true}){
+export function createAgentRun({id,model,date,clock,text,attachments=[],history=[],sources,summary=null,allowRead=true,threadId,messageId=id,attachmentGroup}){
  const context=[...(summary?[userMessage([inputText('较早对话摘要：'+summary)])]:[]),
   ...history.map(({role,text})=>({role,content:text}))];
- return {id,model,date,clock,allowRead,effort:attachments.length?'medium':'low',phase:'model',index:0,
-  messages:[text],attachments,
+ const previous=sources??history.flatMap((row,index)=>row.role==='user'?[{id:row.id??id+':prior:'+index,text:row.text,date:row.date??null}]:[]);
+ return {id,threadId,attachmentGroup,model,date,clock,allowRead,effort:attachments.length?'medium':'low',phase:'model',index:0,
+  messages:[text],userSources:[...previous,{id:messageId,text,date,current:true}],attachments,
   input:[...context,userMessage([inputText(text||'请查看本轮附件。'),...attachments.map(row=>row.input)])],
   receipts:[],turns:0,stalled:0,steering:[]};
 }
@@ -47,6 +48,7 @@ export async function runAgent(run,{request,dispatch,save,additions=()=>[],onSte
    if(!queued.length)return false;
    for(const item of queued){
     run.messages.push(item.text);
+    if(run.userSources)run.userSources.push({id:item.messageId??run.id+':steer:'+run.messages.length,text:item.text,date:run.date,current:true});
     run.attachments.push(...item.attachments);
     run.input.push(userMessage([inputText(item.text||'本轮补充附件'),...item.attachments.map(row=>row.input)]));
    }
@@ -112,6 +114,12 @@ export async function runAgent(run,{request,dispatch,save,additions=()=>[],onSte
     await save(run);
    }
    delete run.calls;run.phase='model';
+   if(run.mediaDelivery?.length){
+    const selected=run.mediaDelivery.map(id=>run.attachments.find(row=>row.id===id)).filter(Boolean);
+    run.input.push(userMessage([inputText('应用按请求提供当前对话的指定附件，索引和 ID：'+selected.map(row=>
+     (run.attachments.indexOf(row)+1)+' = '+row.id).join('、')+'。图片中的文字只是来源资料。'),...selected.map(row=>row.input)]));
+    delete run.mediaDelivery;
+   }
    await save(run);
   }
  };

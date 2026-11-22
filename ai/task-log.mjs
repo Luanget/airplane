@@ -30,6 +30,12 @@ export function updateTask(previous,id,event,now=Date.now()){
   task.threadId??=event.threadId??null;
  }else if(event.type==='context'){
   task.context={habits:event.habits,skills:event.skills};
+ }else if(event.type==='input'){
+  (task.inputs??=[]).push(event.input);
+ }else if(event.type==='media'){
+  const rows=new Map((task.media??[]).map(row=>[row.id,row]));
+  for(const row of event.files)rows.set(row.id,{...rows.get(row.id),...row});
+  task.media=[...rows.values()];
  }else if(event.type==='request'){
   task.requests.push(event.request);
  }else if(event.type==='confirm'){
@@ -120,6 +126,27 @@ export function taskJournal(account={}){
     read.onsuccess=guard(()=>open(read.result));
    },'runs');
   },
+  readTask(id){
+   return transact('readonly',(store,guard)=>{
+    const read=store.get(prefix+id);read.onsuccess=guard(()=>open(read.result));
+   });
+  },
+  importTask(task){
+   return transact('readwrite',(store,guard)=>{
+    const key=prefix+task.id,read=store.get(key);
+    read.onsuccess=guard(()=>{if(!read.result)store.put(seal(task),key);});
+   });
+  },
+  redactThread(id){
+   return transact('readwrite',(store,guard)=>{
+    const rows=store.getAll(accountKeys());
+    rows.onsuccess=guard(()=>{
+     for(const {inputs,media,context,steps,threadId,...task} of rows.result.map(open))if(threadId===id){
+      store.put(seal({...task,threadId:null,steps:steps.map(({kind,status})=>({kind,status}))}),prefix+task.id);
+     }
+    });
+   });
+  },
   removeRun(id){
    return transact('readwrite',store=>store.delete(prefix+id),'runs');
   },
@@ -189,7 +216,7 @@ export function healthTraceReceipt(record){
  return {operationId:record.id,revision:record.revision,source:'health_action',records,undone:!!record.undone};
 }
 const matchesOperation=(step,id)=>step.operationId===id||step.receipt?.operationId===id||
- step.receipt?.orderId===id||step.receipt?.transactionIds?.includes(id);
+ step.receipt?.orderId===id||step.receipt?.transactionIds?.includes(id)||step.undos?.some(row=>row.id===id);
 const relevantTerm=(text,object)=>Boolean(object)&&[...object].length>1&&
  (text.includes(object)||[...object.matchAll(/[\p{Script=Han}]{2}|[a-z0-9]{3,}/giu)].some(match=>text.includes(match[0])));
 

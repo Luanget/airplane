@@ -23,13 +23,14 @@ const answer=text=>({type:'message',role:'assistant',content:[{type:'output_text
 const call=(name,id,args)=>({type:'function_call',name,id:'fc_'+id,call_id:id,arguments:JSON.stringify(args)});
 const message='帮我记录真实的晨重72.4kg',correction='本轮改成晨重72.6kg',independent='独立的问题：余额是多少？';
 const needsReview='帮我记录下午体重73.0kg';
+const stockMessage='用刚才的照片，采购入库合成小青菜三份，每份500g，价格未知。';
 let browser;
 try{
  browser=await chromium.launch({executablePath:process.env.CHROME_PATH||['/usr/bin/google-chrome','/usr/bin/chromium'].find(existsSync),headless:true});
  const ctx=await browser.newContext({viewport:{width:390,height:650},isMobile:true,hasTouch:true});
  const page=await ctx.newPage();
  page.setDefaultTimeout(10000);
- let requested=0,failed=false,release,firstStarted;
+ let requested=0,failed=false,release,firstStarted,stockLabel,expectedModel='gpt-6.1-terra';
  const waitFirst=new Promise(resolve=>{firstStarted=resolve;});
  const releaseFirst=new Promise(resolve=>{release=resolve;});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -42,7 +43,7 @@ try{
   requested++;
   let reply;
   const last=body.input.at(-1);
-  assert.equal(body.model,/review|73\.0|客户端跳过/.test(JSON.stringify(last))?'gpt-6-luna':'gpt-6.1-terra');
+  assert.equal(body.model,expectedModel);
   if(requested===1){
    firstStarted();await releaseFirst;
    reply=output({type:'reasoning',id:'rs_first',summary:[],encrypted_content:'opaque-begin'},
@@ -75,6 +76,23 @@ try{
   }else if(String(last.content).includes('客户端跳过了待确认操作')){
    assert.equal(body.tool_choice,'none');
    reply=output(answer('已跳过73.0公斤这项，未新增记录。'));
+  }else if(last.content?.[0]?.text===stockMessage){
+   assert.ok(!body.input.some(row=>Array.isArray(row.content)&&row.content.some(part=>part.type==='input_image')));
+   reply=output(call('read_conversation_evidence','catalog',{attachmentIds:[],limit:8}));
+  }else if(last.call_id==='catalog'){
+   const info=JSON.parse(last.output).data;
+   stockLabel=info.attachments.find(row=>row.state==='local').id;
+   reply=output(call('read_conversation_evidence','label',{attachmentIds:[stockLabel],limit:8}));
+  }else if(Array.isArray(last.content)&&last.content[0]?.text.includes('应用按请求提供')){
+   assert.ok(last.content[0].text.includes(stockLabel));
+   assert.ok(last.content.some(row=>row.type==='input_image'));
+   const roster=JSON.parse(body.instructions.split('本对话用户消息 ID（附短索引）：')[1].split('\n')[0]);
+   reply=output(call('receive_inventory','stock',{date:null,sources:[{kind:'message',id:roster.at(-1).id,note:null},
+    {kind:'attachment',id:stockLabel,note:null}],note:'合成蔬菜',lines:[{name:'合成小青菜',skuId:'fixture-greens',amount:3,unit:'份',
+     packAmount:null,packUnit:null,cost:null,label:null,portions:Array.from({length:3},()=>({amount:500,unit:'g',status:'sealed',gross:null}))}]}));
+  }else if(last.call_id==='stock'){
+   assert.equal(JSON.parse(last.output).status,'saved');
+   reply=output(answer('合成小青菜已入库三份，每份500g，金额未知。'));
   }else throw Error('Unexpected test request '+requested);
   await route.fulfill({headers,json:reply});
  });
@@ -114,6 +132,7 @@ try{
   (await import('/ai/health-actions.mjs')).setHealthAuto(localStorage,false);
   (await import('/ai/models.mjs')).saveChatModel(localStorage,'gpt-6-luna');
  });
+ expectedModel='gpt-6-luna';
  await say(needsReview);
  await page.getByRole('button',{name:'跳过此项'}).click();
  await page.getByText('已跳过73.0公斤这项，未新增记录。',{exact:true}).waitFor();
@@ -122,6 +141,44 @@ try{
  await page.getByText('本轮附件 · 1 个',{exact:true}).click();
  await page.getByRole('img',{name:'附件 1',exact:true}).waitFor();
  console.log('PASS visible queue before execution, persisted attachments, steering, default Terra and manual Luna, durable retry');
+
+ await page.evaluate(async()=>{
+  (await import('/ai/health-actions.mjs')).setHealthAuto(localStorage,true);
+  (await import('/ai/models.mjs')).saveChatModel(localStorage,'auto');
+ });
+ expectedModel='gpt-6.1-terra';
+ await say(stockMessage);
+ await page.getByText('合成小青菜已入库三份，每份500g，金额未知。',{exact:true}).waitFor();
+ const execution=page.locator('.execution-details').last();
+ await execution.locator(':scope > summary').click();
+ await execution.getByText('receive_inventory · 已保存',{exact:true}).waitFor();
+ await execution.getByText(/已发给模型.*本机可用/).waitFor();
+ await execution.getByText(/gpt-6.1-terra/).waitFor();
+ if(process.env.AIRPLANE_AUDIT_SCREENSHOT){
+  await page.setViewportSize({width:390,height:880});
+  await page.locator('.chat-thread').evaluate(element=>element.scrollTop=element.scrollHeight);
+  await page.screenshot({path:process.env.AIRPLANE_AUDIT_SCREENSHOT});
+ }
+ await page.getByRole('button',{name:'打开设置',exact:true}).click();
+ const tasks=page.locator('[data-task-settings]');
+ await tasks.locator(':scope > summary').click();
+ const download=page.waitForEvent('download');
+ await tasks.getByRole('button',{name:'导出当前对话和附件'}).click();
+ const auditArchive=await (await download).path();
+ const restored=await browser.newContext({viewport:{width:390,height:650}});
+ try{
+  const copy=await restored.newPage();
+  await copy.goto(origin+'/assistant/');
+  await copy.getByRole('button',{name:'打开设置',exact:true}).click();
+  const importBackup=()=>copy.locator('[data-conversation-file]').setInputFiles(auditArchive);
+  await importBackup();await copy.getByText('合成小青菜已入库三份，每份500g，金额未知。',{exact:true}).waitFor();
+  await copy.getByText('本轮附件 · 1 个',{exact:true}).click();await copy.getByRole('img',{name:'附件 1'}).waitFor();
+  await copy.getByRole('button',{name:'打开设置',exact:true}).click();await importBackup();
+  await copy.getByText('已恢复 0 个对话。',{exact:true}).waitFor();
+  assert.equal(await copy.evaluate(async()=> (await (await import('/health/storage.mjs')).readState()).local.purchases?.length??0),0);
+  assert.equal(await copy.getByText('合成小青菜已入库三份，每份500g，金额未知。',{exact:true}).count(),1);
+ }finally{await restored.close();}
+ console.log('PASS historical attachment use, visible tool audit, conversation and attachment restore without write replay');
 
  const tomorrow=addDays(today,1);
  await page.evaluate(async({tomorrow})=>{

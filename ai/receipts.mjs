@@ -4,7 +4,7 @@ import {matches,orderReceiptSchema} from '../health/contract.mjs';
 import {inventoryWithMoves,isStockReference,round,validDate} from '../health/core.mjs';
 import {quantityInUnit} from '../health/candidates.mjs';
 import {saveSku} from '../health/inventory.mjs';
-import {cents,recordPurchase,revisePurchase} from '../health/purchases.mjs';
+import {cents,linkStockPurchase,recordPurchase,revisePurchase} from '../health/purchases.mjs';
 import {resumeReceiptUpdate,updateReceiptLedgers} from '../health/purchase-sync.mjs';
 import {hash,same,stable} from '../health/sync-source.mjs';
 import {chooseFinanceCategory,financeEntry} from './finance.mjs';
@@ -111,7 +111,7 @@ function verifyReceiptRecord(workspace,state,id){
 }
 
 export async function executeReceipt(workspace,receipt,options){
- const {id:operation,today,clock,mediaKey='',grant,confirmed=false,guard}=options;
+ const {id:operation,today,clock,mediaKey='',grant,confirmed=false,guard,inventoryLink}=options;
  if(!matches(orderReceiptSchema,receipt))return blocked('截图订单候选格式无效。');
  const attachmentKeys=options.attachmentKeys??[mediaKey].filter(Boolean);
  const evidenceKeys=[...new Set(receipt.images.map(index=>attachmentKeys[index-1]))];
@@ -183,7 +183,7 @@ export async function executeReceipt(workspace,receipt,options){
  if(!repeat&&eligible.length)return blocked('财务中已有同商家同日同金额的支出，请核对后关联，未创建重复支出。');
 
  let units,groups,allocationResult;
- const next=structuredClone(state);
+ let next=structuredClone(state);
  if(refund){
   const original=rowsFor(state,originalKey);
   if(!original||original.cancelled||original.refundOf||original.merchantKey!==key(merchant)||receipt.date<original.date)
@@ -273,11 +273,24 @@ export async function executeReceipt(workspace,receipt,options){
   amount:row.sum/100,category:row.category,note:(merchant+' · '+(row.names.join('、')||'实付未分摊')).slice(0,200),
   budgetSync:refund?false:undefined,receiptKey:id,receiptMerchant:merchant,receiptKind:row.kind,
   receiptProducts:row.names,receiptUnallocated:!!row.unallocated,createdAt:new Date().toISOString()}));
- const purchaseId=units.length?id+':purchase':null,financeIds=entries.map(row=>row.id);
- if(purchaseId)recordPurchase(next,{id:purchaseId,date:receipt.date,time:start,items:units,
+ const stockOrders=(state.local.purchases??[]).filter(row=>row.stockOnly&&!row.receiptId&&!row.financeId&&row.status!=='cancelled');
+ const equivalent=(order,units)=>stable(order.items.map(row=>[row.foodId,row.quantity]).map(stable).sort())===
+  stable(units.map(row=>[row.foodId,row.quantity]).map(stable).sort());
+ const priorStock=inventoryLink&&inventoryLink!=='distinct'?stockOrders.find(row=>row.id===inventoryLink):null;
+ if(inventoryLink&&inventoryLink!=='distinct'&&(!priorStock||refund||!units.length||!equivalent(priorStock,units)))
+  return blocked('原入库单与截图不一致。请查询 read_stock_receipts 后核对对应食品与数量。');
+ const overlapping=stockOrders.filter(row=>row.date===receipt.date&&units.some(unit=>row.items.some(line=>line.foodId===unit.foodId)));
+ if(overlapping.length&&!inventoryLink)return blocked('同日已有相关入库 '+overlapping.map(row=>row.id).join('、')+
+  '。先查询原单；同一采购传 inventoryLink 关联原单，确认另一笔才传 distinct。');
+ const purchaseId=priorStock?.id??(units.length?id+':purchase':null),financeIds=entries.map(row=>row.id);
+ if(priorStock){
+  next=linkStockPurchase(next,priorStock,units,{receiptId:id,financeIds,note:merchant+' · 补记付款'});
+  if(next.local.purchases.find(row=>row.id===purchaseId).totalCents>total)return blocked('原入库已知成本超过截图实付。');
+ }else if(purchaseId)recordPurchase(next,{id:purchaseId,date:receipt.date,time:start,items:units,
   totalCents:units.reduce((sum,row)=>sum+(row.costCents??0),0),note:merchant+' · 截图采购',receiptId:id,financeIds},entries);
  const record={id,merchant,merchantKey:key(merchant),orderNo,refundNo,signature,operation,recordedAt:Date.now(),date:receipt.date,total,financeIds,purchaseId,
   refundOf:refund?originalKey:null,discount:allocationResult?.discount??null,shipping:allocationResult?.shipping??null,mediaKey,evidenceKeys,
+  ...(priorStock?{priorStock}:{}),
   lines:receipt.lines.map((line,i)=>({...line,kind:!refund&&household.test(line.name)?'nonfood':line.kind,
    net:allocationResult?.known[i]==null?null:allocationResult.known[i]/100}))};
  (next.local.agentReceipts??=[]).push(record);
@@ -295,12 +308,18 @@ export async function undoReceipt(workspace,id){
  if(state.local.agentReceipts.some(row=>row.refundOf===id&&!row.cancelled))
   throw Error('该订单已有退款关联，请先核对退款。');
  verifyReceiptRecord(workspace,state,id);
- const next=record.purchaseId?revisePurchase(state,record.purchaseId,null,{receiptUndo:true}).next:structuredClone(state);
+ let next;
+ if(record.priorStock){
+  const draft=structuredClone(state),linked=draft.local.purchases.find(row=>row.id===record.purchaseId);
+  delete linked.receiptId;delete linked.financeIds;
+  next=revisePurchase(draft,record.purchaseId,{...record.priorStock,items:record.priorStock.items.map((line,i)=>
+   ({...line,batchId:line.batchId??record.priorStock.id+'-'+i}))}).next;
+ }else next=record.purchaseId?revisePurchase(state,record.purchaseId,null,{receiptUndo:true}).next:structuredClone(state);
  rowsFor(next,id).cancelled=true;
  const pairs=record.financeIds.map(id=>({id,before:finance.payload.transactions.find(row=>row.id===id),after:null}));
  await (workspace.updateReceipt??updateReceiptLedgers)(workspace.account,next,state.revision??0,finance.primary,{id,operation,pairs});
  const saved=await workspace.readHealth();
  if(!rowsFor(saved,id)?.cancelled||readFinance(workspace.finance).payload?.transactions.some(row=>record.financeIds.includes(row.id)))
   throw Error('撤销回执仍待核对。');
- return '已撤销整张截图订单的关联收支'+(record.purchaseId?'和未消耗的入库批次':'')+'。';
+ return '已撤销整张截图订单的关联收支'+(record.priorStock?'，原有入库保留':record.purchaseId?'和未消耗的入库批次':'')+'。';
 }

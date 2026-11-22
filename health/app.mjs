@@ -535,8 +535,8 @@ async function previewHealthImport(file){
   const raw=JSON.parse(await file.text());
   if(version!==importVersion)return;
   const panelBackup=$('combined-backup'),includes=name=>panelBackup.querySelector('[name='+name+']').checked;
-  let health,finance,message='备份已恢复';
-  if(raw?.format==='airplane-combined-v1')({health,finance}=unpackBackup(raw));
+  let health,finance,ai,message='备份已恢复';
+  if(raw?.format==='airplane-combined-v1')({health,finance,ai}=unpackBackup(raw));
   else if(raw?.appType===APP_SCHEMA)health=raw.local?ensureMedical(raw):raw;
   else if(raw?.app==='Airplane'||Array.isArray(raw?.transactions))finance=validateFinanceBackup(raw);
   else{
@@ -545,13 +545,13 @@ async function previewHealthImport(file){
   }
   if(health&&!validateAppState(health))throw Error('健康备份结构无效');
   verifyMedicalState(health);
-  health=includes('health')?health:null;finance=includes('finance')?finance:null;
-  if(!health&&!finance)throw Error('文件中没有所选账本，请核对勾选范围');
+  health=includes('health')?health:null;finance=includes('finance')?finance:null;ai=includes('ai')?ai:null;
+  if(!health&&!finance&&!ai)throw Error('文件中没有所选内容，请核对勾选范围');
   const financeRevision=finance?readFinance(window.airplaneAccount.finance).primary:null;
-  importPreview={health,finance,financeRevision,message,revision:state.revision??0};
+  importPreview={health,finance,financeRevision,message,ai,revision:state.revision??0};
   const panel=$('import-preview');
   panel.querySelector('[data-import-summary]').textContent=[file.name,finance&&`财务 ${finance.transactions.length} 笔`,
-   health&&`健康 ${events(health,'foods').length} 条饮食 · ${events(health,'weights').length} 条称重`,
+   health&&`健康 ${events(health,'foods').length} 条饮食 · ${events(health,'weights').length} 条称重`,ai&&`AI ${ai.threads.length} 个对话 · ${ai.media.length} 组附件`,
    health?.local.medical&&('档案 '+medicalCounts(health).measurements+' 项指标 · '+medicalCounts(health).symptoms+' 条症状 · '+medicalCounts(health).attachments+' 份附件')].filter(Boolean).join(' · ');
   panel.hidden=false;panel.scrollIntoView({block:'nearest'});
  }catch(err){if(version===importVersion)toast('导入失败：'+err.message);}

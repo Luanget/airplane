@@ -7,6 +7,9 @@ import {agentInstructions,createAgentTools} from './agent-tools.mjs';
 import {readChatModel} from './models.mjs';
 import {requestResponses} from './client.mjs';
 import {modelRates} from './usage.mjs';
+import {identifyAttachments} from './conversation-evidence.mjs';
+import {auditSafe,executionDetails,inputAudit} from './audit.mjs';
+import {currentSources} from './evidence.mjs';
 
 const draftKey='airplane-agent-composer-v1';
 const labelFor=(text,count)=>[text,count?'（附 '+count+' 个文件）':''].filter(Boolean).join(' ');
@@ -21,7 +24,7 @@ async function attachmentInputs(imageFiles,reportFiles){
   if(attachments.some(row=>row.key===digest))continue;
   const input=original?.type==='application/pdf'?{type:'input_file',filename:'selected-report.pdf',file_data:data}:
    {type:'input_image',image_url:data,detail:'auto'};
-  attachments.push({key:digest,input,...(original?{original}:{})});
+  attachments.push({key:digest,input,name:file.name,...(original?{original}:{})});
  }
  return attachments;
 }
@@ -132,14 +135,17 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
    ...(result.status==='conflict'&&result.details?.violations?{violations:result.details.violations}:{})
   }));
   const source=notes.length?{label:'本轮工具记录 · '+notes.length+' 步',text:JSON.stringify(notes,null,2)}:null;
-  const undo=run.receipts.flatMap(({result})=>result.undo&&!result.replayed?[{...result.undo,label:result.undo.kind==='meal_plan'?'计划改动':'操作'}]:[]);
+  const undo=run.receipts.flatMap(({result})=>result.replayed?[]:(result.undo?[result.undo]:result.undos??[]))
+   .map(token=>({...token,label:token.kind==='meal_plan'?'计划改动':token.kind==='stock_receipt'?'入库':'操作'}));
   const privateMedical=run.attachments.some(row=>row.original)||run.receipts.some(row=>row.tool.includes('medical'));
-  const media=run.attachments.length?{id:'media:'+run.id,count:run.attachments.length}:null;
-  if(media)await journal.saveRun({id:media.id,attachments:run.attachments});
-  if(book.finish(ticket,run.reply,source,null,{agentUndo:undo,native:true,privateMedical,media})){
-   await writeStatus(run.id,'done');
+  const uploaded=run.attachments.filter(row=>!row.reused);
+  const media=run.attachmentGroup??(uploaded.length&&!uploaded[0].id?{id:'media:'+run.id,count:uploaded.length}:null);
+  if(media&&!media.files)await journal.saveRun({id:media.id,attachments:uploaded});
+  if(book.finish(ticket,run.reply,source,null,{agentUndo:undo,native:true,privateMedical,media,taskId:run.id})){
+   const failed=run.receipts.flatMap(row=>row.result.substeps??[row.result]).some(row=>['conflict','error','blocked','pending'].includes(row.status));
+   await writeStatus(run.id,failed?'partial':'done');
    await journal.removeRun(run.id);
-   if(active(ticket)){removeReview();retry.hidden=true;replyRetry.hidden=true;onFinal(run.reply,source,undo,media);status('');}
+   if(active(ticket)){removeReview();retry.hidden=true;replyRetry.hidden=true;onFinal(run.reply,source,undo,media,run.id);status('');}
   }
  }
  async function processRun(run,ticket,{replyOnly=false}={}){
@@ -156,6 +162,8 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   const live=document.createElement('p');
   live.className='chat-bubble assistant agent-live';live.hidden=true;
   transcript.insertBefore(live,transcript.querySelector('[data-queued-job]'));
+  const runningDetails=executionDetails(journal,run.id,'本次执行详情');
+  if(active(ticket))live.after(runningDetails);
   const updatePartial=reply=>{
    if(!active(ticket))return;
    const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
@@ -168,13 +176,20 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
     save:async value=>{
      await journal.saveRun(value);
      for(const row of value.receipts){
-      if(state.reported.has(row.callId))continue;
-      state.reported.add(row.callId);
+      const marker=row.callId+':'+row.result.status;
+      if(state.reported.has(marker))continue;
+      state.reported.add(marker);
+      const call=value.input.find(item=>item.type==='function_call'&&item.call_id===row.callId);
+      let parameters=null;
+      try{parameters=auditSafe(JSON.parse(call?.arguments));}catch{}
       await trace(value.id,{type:'step',step:{id:row.callId,kind:row.tool,tool:row.tool,dependsOn:[],
-       status:row.result.status,reason:row.result.reason,receipt:row.result.receipt??null,
+       status:row.result.status,reason:row.result.reason,receipt:auditSafe(row.result.receipt??null),parameters,
+       result:auditSafe(row.result),undos:row.result.undo?[row.result.undo]:row.result.undos??[],
        ...(row.result.habit?{memory:[row.result.habit.id]}:{}),
        ...(row.result.data?.usedHabitIds?{usedHabits:row.result.data.usedHabitIds}:{}),
        ...(row.tool==='load_skill'&&row.result.status==='ok'?{skill:row.result.data.id}:{})}});
+      if(row.tool==='read_conversation_evidence'&&row.result.data?.attachments)
+       await trace(value.id,{type:'media',files:row.result.data.attachments});
      }
     },
     additions:async({peek}={})=>{
@@ -190,11 +205,19 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
      }
      const available=value.allowRead?tools.definitions:[];
      const facts=value.allowRead?tools.context():null;
-     if(facts)await trace(value.id,{type:'context',habits:facts.habits.map(row=>row.id),skills:facts.skills.map(row=>row.id)});
-     const prompt=agentInstructions+(facts?'\n当前启用的稳定习惯和工作流程：'+JSON.stringify(facts):'');
+     if(facts)await trace(value.id,{type:'context',...auditSafe(facts)});
+     const prompt=agentInstructions+(facts?'\n当前启用的稳定习惯和工作流程：'+JSON.stringify(facts)+
+      '\n本对话用户消息 ID（附短索引）：'+JSON.stringify(currentSources(value).map(({id,text,current})=>({id,current:!!current,text:text.slice(0,90)})))+
+      '\n已附在本任务的附件 ID：'+value.attachments.map(row=>row.id??row.key).join('、'):'');
      const body=nativeRequest(value,prompt,available,options);
-     return requestResponses(body,{signal:controller.signal,rates:modelRates(workspace.finance),onReply:updatePartial,
-      onTool:()=>updatePartial(''),onMetric:request=>trace(value.id,{type:'request',request})});
+     if(value.attachmentGroup)await trace(value.id,{type:'media',files:value.attachmentGroup.files.map(file=>({...file,groupId:value.attachmentGroup.id}))});
+     const audit=inputAudit(value,body);
+     let accepted=false;
+     try{
+      const result=await requestResponses(body,{signal:controller.signal,rates:modelRates(workspace.finance),onReply:updatePartial,
+       onTool:()=>updatePartial(''),onMetric:request=>trace(value.id,{type:'request',request})});
+      accepted=true;return result;
+     }finally{await trace(value.id,{type:'input',input:{...audit,accepted}});}
     }});
    if(!bindReview(run,ticket))await finish(run,ticket);
   }catch(error){
@@ -207,7 +230,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
     if(error.status===401||error.message.includes('导入自己的密钥'))onKey?.();
    }
   }finally{
-   live.remove();current=null;stop.hidden=true;steerLabel.hidden=true;steer.checked=false;showQueue();
+   live.remove();runningDetails.remove();current=null;stop.hidden=true;steerLabel.hidden=true;steer.checked=false;showQueue();
    if(!book.current?.pending)void next();
   }
  }
@@ -223,9 +246,9 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   try{
    const seed=await journal.readRun(entry.id);
    if(!seed)throw Error('找不到该任务的本机附件或恢复点');
-   const {turns,summary}=context();
+   const {turns,sources,summary}=context();
    const history=turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
-   const run=createAgentRun({...seed,history,summary});
+   const run=createAgentRun({...seed,threadId:ticket.threadId,history,summary,sources:sources?.filter(row=>row.id!==seed.messageId)});
    await journal.saveRun(run);
    await processRun(run,ticket);
   }catch(error){onError(error);retry.hidden=false;}
@@ -239,15 +262,19 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
    const attachments=images.length||reports.length?await attachmentInputs(images,reports):restoredAttachments;
    const label=labelFor(text,attachments.length);
    if(steer.checked&&current&&active(current.ticket)){
-    current.run.steering.push({text,attachments});
+    const messageId=crypto.randomUUID(),{files,group}=identifyAttachments(attachments,'media:'+messageId);
+    if(group)await journal.saveRun({id:group.id,attachments:files});
+    current.run.steering.push({text,attachments:files,messageId});
     await journal.saveRun(current.run);
-    book.addAgentSteer(current.ticket,label);
+    book.addAgentSteer(current.ticket,label,{id:messageId,date:current.run.date,attachmentGroup:group});
     onUser(label);status('已收到本轮补充');
    }else{
     const id=crypto.randomUUID();
-    await journal.saveRun({id,model:readChatModel(workspace.finance).id,text,date:localDate(),clock:localClock(),attachments,
+    const {files,group}=identifyAttachments(attachments,'media:'+id),date=localDate();
+    if(group)await journal.saveRun({id:group.id,attachments:files});
+    await journal.saveRun({id,messageId:id,model:readChatModel(workspace.finance).id,text,date,clock:localClock(),attachments:files,attachmentGroup:group,
      allowRead:composer.elements.allowRead.checked});
-    book.enqueueAgent({id,label});
+    book.enqueueAgent({id,label,messageId:id,date,attachmentGroup:group});
     showQueue();
    }
    composer.elements.text.value='';persistDraft();resetPhoto();await clearDraftAttachments();
@@ -265,6 +292,12 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   try{
    const run=await journal.readRun(ticket.id);
    if(!run)throw Error('本次任务缺少本机恢复点');
+   run.threadId??=ticket.threadId;
+   if(run.phase&&!run.userSources){
+    const {sources}=context();
+    run.userSources=[...(sources??[]).filter(row=>row.id!==ticket.id),
+     ...(run.messages??[]).map((text,index)=>({id:index?ticket.id+':steer:'+index:ticket.id,text,date:run.date,current:true}))];
+   }
    retry.textContent='继续未完成任务';
    if(run.phase==='done'){
     if(!bindReview(run,ticket))await finish(run,ticket);
@@ -273,9 +306,9 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
    if(resume){
     run.stalled=0;run.turns=0;
     if(!run.phase){
-     const {turns,summary}=context();
+     const {turns,sources,summary}=context();
      const history=turns.at(-1)?.role==='user'?turns.slice(0,-1):turns;
-     const staged=createAgentRun({...run,history,summary});
+     const staged=createAgentRun({...run,threadId:ticket.threadId,history,summary,sources:sources?.filter(row=>row.id!==run.messageId)});
      await journal.saveRun(staged);
      await processRun(staged,ticket);
     }else await processRun(run,ticket,{replyOnly});

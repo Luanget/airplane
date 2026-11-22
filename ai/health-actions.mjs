@@ -11,7 +11,8 @@ import {portionSources,registerPortions} from '../health/inventory.mjs';
 import {activityPolicy,duplicateActivity} from '../health/agent-rules.mjs';
 import {assertSkillAction} from './skills.mjs';
 import {healthReport,inventoryDiff,renderHealthReport,renderInventoryDiff} from './health-report.mjs';
-import {same} from '../health/sync-source.mjs';
+import {hash,same,stable} from '../health/sync-source.mjs';
+import {verifyNativeStep} from './evidence.mjs';
 
 const ACCESS='airplane-ai-health-auto-v1';
 export const hasHealthAuto=store=>store.getItem(ACCESS)==='yes';
@@ -22,22 +23,24 @@ const REPLAY_WINDOW=5*60*1000;
 const reads=new Set(['cycle','next_meal']);
 const mealAt=time=>Number(time.slice(0,2))<10?'早餐':Number(time.slice(0,2))<15?'午餐':Number(time.slice(0,2))<17?'加餐':'晚餐';
 const normal=value=>String(value??'').normalize('NFKC').toLowerCase().replace(/[\s，。！？、,.!?（）()]/g,'');
-const key=value=>normal(value).replace(/牛肉辣椒酱/g,'牛肉酱').replace(/鸡胸肉/g,'鸡胸');
+const key=value=>normal(value).replaceAll('牛肉辣椒酱','牛肉酱').replaceAll('鸡胸肉','鸡胸');
 const names=sku=>[sku.name,...(sku.aliases??[])].map(key).filter(Boolean);
 const home=state=>inventoryWithMoves(state).filter(row=>row.active&&!isStockReference(row));
 const packageKinds=new Set(['瓶','盒','袋','包','份','个']);
 const operationList=state=>state.local.assistantActions??[];
 
 function skuFor(stock,step){
+ const stockName=value=>key(value).replaceAll('牛奶','奶');
+ const optionsFor=row=>[row.name,...(row.aliases??[])].map(stockName).filter(Boolean);
+ const t=stockName(step.name);
  if(step.skuId){
   const named=stock.find(row=>row.id===step.skuId);
-  if(!named||!names(named).some(name=>name.includes(key(step.name))||key(step.name).includes(name)))
+  if(!named||!optionsFor(named).some(name=>name.includes(t)||t.includes(name)))
    throw Error('库存与食品名称对不上，请核对「'+step.name+'」。');
   return named;
  }
- const t=key(step.name);
- const exact=stock.filter(sku=>names(sku).includes(t));
- const options=exact.length?exact:stock.filter(sku=>names(sku).some(name=>name.includes(t)||t.includes(name)));
+ const exact=stock.filter(sku=>optionsFor(sku).includes(t));
+ const options=exact.length?exact:stock.filter(sku=>optionsFor(sku).some(name=>name.includes(t)||t.includes(name)));
  const available=options.filter(row=>row.qty>0);
  if(options.length===1)return options[0];
  if(available.length===1)return available[0];
@@ -107,15 +110,15 @@ export function healthContext(state,input,reference){
   ...(correction?{referenceDate:date}:{})};
 }
 
-function dateFor(step,today,reference){
+function dateFor(step,today,reference,native=false){
  const {evidence}=step;
  const explicit=statedDate(evidence,today);
- const date=explicit??step.date??(step.kind.startsWith('correct')?reference?.date:null)??today;
+ const date=(native?step.date??explicit:explicit??step.date)??(step.kind.startsWith('correct')?reference?.date:null)??today;
  if(!validDate(date))throw Error('请提供有效日期。');
  if(date>today&&step.kind!=='next_meal')throw Error('实际记录请使用今天或更早的日期。');
  return date;
 }
-function chooseContainer(state,sku,step,reference,{whole=false}={}){
+function chooseContainer(state,sku,step,reference,{whole=false,native=false}={}){
  const shelf=packagesFor(state,sku.id).filter(onShelf);
  if(!shelf.length)throw Error('「'+sku.name+'」没有可用包装。');
  if(step.containerId&&reference?.containerId&&reference.skuId===sku.id&&
@@ -140,6 +143,7 @@ function chooseContainer(state,sku,step,reference,{whole=false}={}){
   if(weighed.length)return weighed[0];
   if(shelf.some(row=>row.stockMode==='portion'))throw Error('没有 '+specified+' g 的实称分装，请核对。');
  }
+ if(native&&byId)return byId;
  if(byReference&&(!byId||byReference.id===byId.id)&&(!whole||byReference.status==='sealed'))return byReference;
  const open=shelf.filter(row=>row.status==='open');
  if(!whole){
@@ -183,22 +187,28 @@ function recordEating(state,step,when,reference){
  const customary=when.habits?.buckwheatDefault&&/^(面|面条|一包面)$/.test(key(step.name))&&/一包面|1\s*包面/.test(step.evidence)?
   stock.filter(row=>row.qty>0&&/荞麦面/.test(row.name)):[];
  const matched=statedOff?null:customary.length===1&&!step.skuId?customary[0]:skuFor(stock,step);
- const unlinked=!matched&&!statedOff&&step.source!=='one_off'&&when.native;
+ const uncertain=when.native&&(when.provenance?.sources.some(row=>row.kind==='estimate')||!step.amount&&!step.containerId);
+ const unlinked=(!matched||uncertain)&&!statedOff&&step.source!=='one_off'&&when.native;
  const oneOff=statedOff||!matched&&step.source==='one_off'||unlinked;
  const sku=oneOff?null:matched;
  if(!oneOff&&!sku)throw Error('没有找到库存里的「'+step.name+'」。如果是外食或本次单买，请补充来源。');
- const {amount,unit}=step,whole=step.whole==='yes';
+ const {amount,unit}=step;
  if(sku){
   if(!(sku.qty>0))throw Error('「'+sku.name+'」库存不足。');
   const shelf=packagesFor(state,sku.id).filter(onShelf);
   if(shelf.length){
+   const sealed=shelf.filter(row=>row.stockMode==='whole'&&row.status==='sealed'&&(!step.containerId||row.id===step.containerId));
+   const volumeWhole=when.native&&unit==='mL'&&amount>0&&!shelf.some(row=>row.status==='open'&&!step.containerId)&&
+    sealed.some(row=>row.nominal?.unit===unit&&row.nominal.value===amount);
+   const whole=step.whole==='yes'||volumeWhole;
    // A household serving in grams stays independent of nominal wrapper size.
    const allocation=whole&&packageKinds.has(unit)?amount??1:1;
    if(!Number.isInteger(allocation)||allocation<1||allocation>HEALTH_STEP_LIMIT)throw Error('请给出本次完整包装数。');
    if(allocation>1&&step.containerId)throw Error('需要分别指定多个包装，或按包装数量录入。');
    const items=[];
    for(let i=0;i<allocation;i++){
-    const target=chooseContainer(state,sku,step,i===0?reference:null,{whole});
+    const selected=volumeWhole?sealed.find(row=>row.nominal?.unit===unit&&row.nominal.value===amount):null;
+    const target=chooseContainer(state,sku,selected?{...step,containerId:selected.id}:step,i===0?reference:null,{whole,native:when.native});
     const part=target.stockMode!=='whole';
     const grams=whole&&part?target.net:unit==='g'?amount:null;
     const result=whole&&!part?savePackage(state,target,{id:id+':'+i,action:'whole',date,meal,time}):
@@ -210,11 +220,11 @@ function recordEating(state,step,when,reference){
    return {state,items};
   }
  }
- if(!(amount>0)||!unit)throw Error('请补充「'+step.name+'」的份量。');
+ if((!(amount>0)||!unit)&&!when.native)throw Error('请补充「'+step.name+'」的份量。');
  const stockQty=sku?quantityInUnit(sku,amount,unit,sku.unit):null;
  if(sku&&!(stockQty>0))throw Error('「'+sku.name+'」的库存单位无法可靠换算。');
- const row=addFood(state,{name:sku?.name??step.name,date,meal,time,amount,amountUnit:unit,portion:amount+' '+unit,
-  foodId:sku?.id,stockQty,...(sku?nutritionFor(sku,amount,unit):step.nutrition??{}),
+ const row=addFood(state,{name:sku?.name??step.name,date,meal,time,amount,amountUnit:unit,portion:amount>0&&unit?amount+' '+unit:'份量待补',
+  foodId:sku?.id,stockQty,...(sku?nutritionFor(sku,amount,unit):amount>0&&unit?(step.nutrition??(matched?nutritionFor(matched,amount,unit):{})):{}),
   quality:sku?'label':'estimated',uncertainty:sku?'':'本次外食或单买；未提供的营养记为未知'},undefined,'food:'+id);
  if(unlinked){row.stockAssociation='pending';row.uncertainty='实吃已记录，库存关联待核对。';}
  return {state,items:[{row,containerId:null}]};
@@ -312,7 +322,7 @@ function planRequest(state,step,date,habits){
  return {items,reply:lines.join('\n')||'午餐和晚餐已有实际记录，可查看当天报告。'};
 }
 
-function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,habits,native=false,photoSteps={}}){
+function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,habits,native=false,photoSteps={},provenance=[]}){
  let next=ensureContainers(structuredClone(state));
  const messages=[],queryMessages=[],touched=new Set();
  let resultReference=null;
@@ -324,7 +334,13 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
    step={...step,date:statedDate(text,today)};
   if(step.kind==='next_meal'&&plan.steps.length===1&&!step.date)
    step={...step,date:statedDate(text,today)};
-  const date=dateFor(step,today,{date:reference.date??foodDate});
+  const evidence=provenance[index];
+  if(evidence){
+   const sku=step.name&&step.source!=='one_off'&&['eat','weigh','discard','split'].includes(step.kind)?skuFor(home(next),step):null;
+   verifyNativeStep(next,step,evidence,sku);
+   if(!step.evidence)step={...step,evidence:evidence.texts[0]??''};
+  }
+  const date=dateFor(step,today,{date:reference.date??foodDate},!!evidence);
   const time=normalizeClock(step.time)||clock;
   const saidMeal=/早餐|早饭|明早/.test(step.evidence)?'早餐':/午餐|午饭|中午/.test(step.evidence)?'午餐':
    /晚餐|晚饭|明晚/.test(step.evidence)?'晚餐':/加餐/.test(step.evidence)?'加餐':null;
@@ -343,20 +359,32 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
   if(step.kind==='eat'){
    const fullWeight=plan.steps.filter(interpretedWrite).length===1&&/(?:净重|实称)\s*\d+(?:\.\d+)?\s*(?:g|克)的?那(?:一)?[袋份]/i.test(text);
    if(fullWeight&&step.whole==='yes'&&plausible(text,{name:step.name}))step={...step,evidence:text};
-   const result=recordEating(next,step,{date,meal,time,id:operationId,fromPhoto:!!photoSteps[index],habits,native},ref);
+   const result=recordEating(next,step,{date,meal,time,id:operationId,fromPhoto:!!photoSteps[index],habits,native,provenance:evidence},ref);
    const photo=photoSteps[index];
    if(photo)for(const {row} of result.items){row.agentEvidence=photo;row.uncertainty=photo.uncertainty;row.quality='estimated';}
+   if(evidence)for(const {row} of result.items){
+    row.agentEvidence={...row.agentEvidence,sources:evidence.sources,certainty:evidence.sources.some(row=>row.kind==='estimate')?'estimated':
+     evidence.sources.some(row=>row.kind==='attachment')?'observed':'reported'};
+    const estimate=evidence.sources.find(row=>row.kind==='estimate');
+    if(estimate){row.quality='estimated';row.uncertainty=[row.uncertainty,estimate.note].filter(Boolean).join(' · ');}
+   }
    next=result.state;
    for(const {row,containerId} of result.items){
     messages.push(itemText(row));
     resultReference={date,recordId:row.id,containerId,skuId:row.foodId};
    }
   }else if(step.kind==='weigh'||step.kind==='discard'){
-   if(step.kind==='weigh'&&step.initialGross!=null&&!statedNumber(step.evidence,step.initialGross))
+   if(!evidence&&step.kind==='weigh'&&step.initialGross!=null&&!statedNumber(step.evidence,step.initialGross))
     step={...step,initialGross:null};
    const sku=skuFor(home(next),step);
    if(!sku)throw Error('没有找到「'+step.name+'」的库存包装。');
-   let container=chooseContainer(next,sku,step,ref);
+   let container=chooseContainer(next,sku,step,ref,{native:!!evidence});
+   if(evidence&&step.kind==='weigh'&&container.gross===step.gross){messages.push('该包装毛重已记录');continue;}
+   if(evidence&&step.kind==='weigh'&&container.gross==null&&step.initialGross==null){
+    const baseline=savePackage(next,container,{id:operationId,action:'baseline',gross:step.gross,date,time});
+    next=baseline.next;messages.push(sku.name+' 已记录首个毛重 '+step.gross+' g，等待下次称重');
+    resultReference={date,containerId:container.id,skuId:sku.id};continue;
+   }
    if(step.kind==='weigh'&&container.gross==null&&step.initialGross!=null){
     const start=savePackage(next,container,{id:operationId+':initial',action:'baseline',gross:step.initialGross,date,time});
     next=start.next;container=selectPackage(next,{foodId:sku.id,containerId:container.id});
@@ -538,9 +566,10 @@ function verifyValues(step,native=false){
  }
 }
 const interpretedWrite=step=>!reads.has(step.kind);
-function validatePlan(plan,text,photoSteps={},native=false){
- if(!matches(healthActionSchema,plan)||!text.trim())throw Error('模型返回的健康操作格式无效，账本未更改。');
+function validatePlan(plan,text,photoSteps={},native=false,provenance){
+ if(!matches(healthActionSchema,plan)||!text.trim()&&!provenance?.length)throw Error('模型返回的健康操作格式无效，账本未更改。');
  const writes=plan.steps.filter(interpretedWrite);
+ if(native&&provenance?.length===plan.steps.length)return plan.intent==='execute'&&writes.length>0;
  if(!native&&writes.length&&!Object.keys(photoSteps).length&&!hasWriteLanguage(text))throw Error('这条消息没有可核对的记录指令。');
  const noSave=/不要(?:记录|记账|保存|扣库|写入|自动)|先(?:看看|预览|别记录|不要记录)|只(?:看看|问|算|预览)|假如|如果我|举个例子/.test(text);
  const quotation=value=>value.normalize('NFKC').replace(/\s/g,'');
@@ -576,7 +605,7 @@ function validatePlan(plan,text,photoSteps={},native=false){
 }
 
 export function healthActionPreview(state,plan,options){
- const execute=validatePlan(plan,options.text,options.photoSteps,options.native);
+ const execute=validatePlan(plan,options.text,options.photoSteps,options.native,options.provenance);
  const prepared=localPlan(state,plan,options);
  return {execute,prepared,preview:summarize(prepared,prepared.next),
   source:reportSource(prepared,state,prepared.next)};
@@ -595,7 +624,10 @@ export async function executeHealthAction(workspace,base,plan,options){
  if(typeof id!=='string'||!id)throw Error('缺少健康操作 ID，账本未更改。');
  const check=()=>{options.signal?.throwIfAborted();guard?.();};
  const expected=base.revision??0;
- const duplicate=healthActionReceipt(base,options);
+ const nativeMarks=options.provenance?.flatMap(row=>row.sources.filter(source=>source.id&&['message','attachment'].includes(source.kind)).map(source=>source.id));
+ const shape=options.native&&plan.steps.length===1&&nativeMarks?.length?nativeOperationShape(base,plan.steps[0],today):null;
+ const historical=shape&&operationList(base).findLast(row=>!row.undone&&row.shape===shape&&row.evidenceIds?.some(value=>nativeMarks.includes(value)));
+ const duplicate=historical?{text:'同一来源的该项记录已保存。',record:historical,duplicate:true}:healthActionReceipt(base,options);
  if(duplicate)return duplicate;
  const {execute,prepared,preview,source}=healthActionPreview(base,plan,{...options,id,text,today,clock});
  if(!execute||!confirmed&&!options.auto)return {text:preview,source,preview:execute?'confirm':'readonly'};
@@ -603,10 +635,12 @@ export async function executeHealthAction(workspace,base,plan,options){
  const signature=today+'\n'+normal(text)+'\n'+(mediaKey||'');
  check();
  const changes=changesFrom(base,prepared.next);
- const independent=Object.keys(changes).every(key=>['weights','activities','dayCompleteness'].includes(key))?
+ const isolated=options.native?['foods','stockMoves','containers','containerEvents','weights','activities','dayCompleteness']:
+  ['weights','activities','dayCompleteness'];
+ const independent=Object.keys(changes).every(key=>isolated.includes(key))?
   changesFrom(prepared.next,base):null;
  const record={id,signature,at:now,expectedRevision:expected,revision:expected+1,changes,independent,
-  reference:prepared.reference,text:'已保存。'+preview,source};
+  reference:prepared.reference,text:'已保存。'+preview,source,...(shape?{shape,evidenceIds:nativeMarks}: {})};
  prepared.next.local.assistantActions=[...operationList(prepared.next).slice(-(HISTORY_SIZE-1)),record];
  await workspace.saveHealth(prepared.next,expected,check);
  const stored=await workspace.readHealth();
@@ -624,6 +658,14 @@ export async function executeHealthAction(workspace,base,plan,options){
  const checked=summarize(prepared,stored);
  return {text:'已保存。'+checked,record:persisted,source:reportSource(prepared,base,stored)};
 }
+function nativeOperationShape(state,step,today){
+ const {kind,evidence,time,source,nutrition,whole,unit,amount,...fields}=step;
+ if(!['eat','weigh'].includes(kind))return null;
+ const sku=skuFor(home(state),step);
+ const metric=sku&&amount>0&&unit?quantityInUnit(sku,amount,unit,sku.unit):null;
+ return hash(stable([kind,fields.date??today,fields.meal??null,sku?.id??key(fields.name),
+  kind==='eat'?[metric??amount,metric==null?unit:sku.unit]:[fields.gross,fields.containerId]]));
+}
 export async function undoHealthAction(workspace,id){
  const state=await workspace.readHealth(),expected=state.revision??0;
  const record=operationList(state).find(row=>row.id===id);
@@ -631,7 +673,11 @@ export async function undoHealthAction(workspace,id){
  if(record.revision!==expected){
   const unchanged=record.independent&&Object.entries(record.independent).every(([key,rows])=>
    rows.every(([id,post])=>same((state.local[key]??[]).find(row=>row.id===id),post?.row)));
-  if(!unchanged)throw Error('之后已有相关账本更新，请通过对话更正具体记录。');
+  const produced=new Set((record.independent?.containerEvents??[]).map(([id])=>id));
+  const packages=new Set((record.independent?.containers??[]).map(([id])=>id));
+  const dependent=(state.local.containerEvents??[]).some(row=>!produced.has(row.id)&&
+   (produced.has(row.previousId)||produced.has(row.target)||packages.has(row.containerId)));
+  if(!unchanged||dependent)throw Error('之后已有相关账本更新，请通过对话更正具体记录。');
  }
  const next=structuredClone(state);
  for(const key of patches){

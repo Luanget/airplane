@@ -19,7 +19,7 @@ export function basis(sku) {
 }
 
 export function packageInfo(sku,c={}) {
-  const match = sku?.standard.match(/(\d+(?:\.\d+)?)\s*(g|克|ml|毫升)\s*[/／]\s*(包|袋|盒|瓶|个|份)/i);
+  const match = sku?.standard?.match(/(\d+(?:\.\d+)?)\s*(g|克|ml|毫升)\s*[/／]\s*(包|袋|盒|瓶|个|份)/i);
   if (match) return {size:+match[1], measure:unitOf(match[2].toLowerCase()), pack:unitOf(match[3])};
   return {size:sku?.packageSize ?? c.packageSize, measure:sku?.packageUnit ?? c.packageUnit,
     pack:unitOf(sku?.pack ?? (packed(c.unit) ? c.unit : packed(sku?.unit) ? sku.unit : c.basisUnit))};

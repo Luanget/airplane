@@ -152,3 +152,10 @@
 .chat-archived-media{display:flex;gap:6px;flex-wrap:wrap;padding:5px 0}
 .chat-archived-media img{max-width:128px;max-height:128px;object-fit:contain;border-radius:8px}
 .chat-queued-label { display:block; margin-top:.25rem; color:var(--muted); font-size:.75rem; }
+.assistant-write-status{color:var(--muted);font-size:.73rem}
+.execution-detail-body{display:grid;gap:.45rem;font-size:.82rem;margin:.45rem 0;overflow-wrap:anywhere}
+.execution-detail-body p{margin:.2rem 0}
+.execution-summary{font-weight:600}
+.execution-steps,.execution-files{margin:.15rem 0;padding-inline-start:1.4rem}
+.execution-steps li{margin:.35rem 0}
+.execution-json pre{max-height:16rem;overflow:auto;white-space:pre-wrap}
