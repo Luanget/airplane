@@ -1,3 +1,4 @@
+import {summarizeNote} from '../finance-note.mjs';
 import {normalizeClock} from '../calendar.mjs';
 import {freshData,readFinance} from '../finance-storage.mjs';
 import {matches,orderReceiptSchema} from '../health/contract.mjs';
@@ -270,7 +271,7 @@ export async function executeReceipt(workspace,receipt,options){
 
  const start=normalizeClock(clock);
  const entries=groups.map((row,i)=>financeEntry({id:id+':'+i,type:refund?'income':'expense',date:receipt.date,time:start,
-  amount:row.sum/100,category:row.category,note:(merchant+' · '+(row.names.join('、')||'实付未分摊')).slice(0,200),
+  amount:row.sum/100,category:row.category,note:options.userNote??summarizeNote([...new Set(row.names)].join('、')||'实付未分摊'),
   budgetSync:refund?false:undefined,receiptKey:id,receiptMerchant:merchant,receiptKind:row.kind,
   receiptProducts:row.names,receiptUnallocated:!!row.unallocated,createdAt:new Date().toISOString()}));
  const stockOrders=(state.local.purchases??[]).filter(row=>row.stockOnly&&!row.receiptId&&!row.financeId&&row.status!=='cancelled');

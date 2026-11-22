@@ -1,3 +1,5 @@
+import {summarizeNote} from './finance-note.mjs';
+import {inventoryWithMoves} from './health/core.mjs';
 import {bindDayPicker,displayDay,localDate as localISO,localClock,normalizeClock,syncCalendarFields} from './calendar.mjs';
 import {APP_VERSION,bindSheetSwipe,confirmAction,shellGlyphs} from './shell.mjs';
 import {readState as readHealthState} from './health/storage.mjs';
@@ -238,6 +240,35 @@ function txSnapshotCategory(t){
   return {name:t.categoryName||c?.name||'其他', icon:t.categoryIcon||c?.icon||'more', color:t.categoryColor||c?.color||'#9AA09A'};
 }
 
+async function showTransactionPurchase(transaction,noteInput){
+  try{
+    const health=await readHealthState();
+    if(!noteInput.isConnected)return;
+    const receipt=health.local.agentReceipts?.find(row=>row.id===transaction.receiptKey);
+    const order=purchaseForTransaction(health,transaction.id);
+    if(!receipt&&!order)return;
+    const catalog=new Map(inventoryWithMoves(health).map(row=>[row.id,row]));
+    const rows=receipt?.lines?.length?receipt.lines.map(line=>[line.name,
+      line.quantity!=null?line.quantity+' '+(line.unit??''):null,
+      line.specification||(line.packAmount?line.packAmount+' '+(line.packUnit??'')+'/件':null),
+      line.net!=null?'实付 '+amount(line.net):line.gross!=null?'原价 '+amount(line.gross):'金额待核对']):
+      (order?.items??[]).map(line=>[catalog.get(line.foodId)?.name??line.foodId,
+        line.quantity+' '+(line.stockUnit??catalog.get(line.foodId)?.unit??''),
+        line.packageSpec?line.packageSpec.size+' '+line.packageSpec.unit+'/件':null,
+        line.costCents!=null?amount(line.costCents/100):'金额待核对']);
+    if(!rows.length)return;
+    const details=document.createElement('details'),title=document.createElement('summary'),list=document.createElement('ul');
+    details.className='form-card transaction-purchase-detail';title.textContent='采购明细';
+    for(const [name,...fields] of rows){
+      const item=document.createElement('li'),label=document.createElement('strong'),info=document.createElement('small');
+      label.textContent=name;info.textContent=fields.filter(Boolean).join(' · ');
+      item.append(label,info);list.append(item);
+    }
+    details.append(title,list);
+    noteInput.closest('.transaction-optional-card').after(details);
+  }catch{/* The ledger editor remains available if the linked health store is unavailable. */}
+}
+
 function txRow(t, swipe=false){
   const c=txSnapshotCategory(t);
   const sign=t.type==='expense'?'-':'+';
@@ -245,8 +276,8 @@ function txRow(t, swipe=false){
   const fallbackDate=(typeof t.date==='string'&&t.date)?dateDisplay(t.date):'未标日期';
   const row=`<div class="tx-row tx-row-interactive" data-open-tx="${escapeHTML(t.id||'')}" role="button" tabindex="0">
     <div class="category-symbol" style="color:${escapeHTML(categoryColor(c.color))};background:${tint(c.color)}">${icon(c.icon)}</div>
-    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}${t.type==='income'&&t.budgetSync?'<span class="tx-budget-badge">预算+</span>':''}${t.type==='expense'&&t.budgetExcluded===true?'<span class="tx-budget-badge excluded">预算外</span>':''}</div><div class="tx-sub">${escapeHTML(t.note||fallbackDate)}</div></div>
-    <div><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(normalizeClock(t.time))}</div></div>
+    <div class="tx-main"><div class="tx-title">${escapeHTML(c.name)}${t.type==='income'&&t.budgetSync?'<span class="tx-budget-badge">预算+</span>':''}${t.type==='expense'&&t.budgetExcluded===true?'<span class="tx-budget-badge excluded">预算外</span>':''}</div><div class="tx-sub">${escapeHTML(summarizeNote(t.note)||fallbackDate)}</div></div>
+    <div class="tx-amount"><div class="tx-money ${cls}">${sign}${amount(t.amount)}</div><div class="tx-time">${escapeHTML(normalizeClock(t.time))}</div></div>
   </div>`;
   if(!swipe) return row;
   return `<div class="tx-swipe" data-swipe-tx="${escapeHTML(t.id||'')}"><button class="tx-delete-action" data-delete-tx="${escapeHTML(t.id||'')}" type="button">删除</button>${row}</div>`;
@@ -820,7 +851,10 @@ function openTransactionModal(existing=null,suppliedDraft=null){
   const editBaseline=existing?{type:existing.type,selectedCategoryId:existing.categoryId,budgetSync:!!existing.budgetSync,budgetExcluded:existing.budgetExcluded===true,amount:Number(existing.amount),date:existing.date||initial.date,time:normalizeClock(existing.time),note:existing.note??''}:null;
   const captureDraft=()=>({type,selectedCategoryId:selected,budgetSync,budgetExcluded,amount:document.getElementById('txAmount')?.value||'',date:document.getElementById('txDate')?.value||localISO(),time:document.getElementById('txTime')?.value??'',note:document.getElementById('txNote')?.value||''});
   const persistDraft=()=>{if(!existing&&!suppliedDraft?.purchaseId&&dirty)saveTransactionDraft(captureDraft());};
-  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="budgetIncludeToggle" class="budget-sync-toggle ${budgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${budgetExcluded?'false':'true'}"><span><strong>计入日常预算</strong><small>关闭后仍计入总支出并减少余额，但不占用月预算和每日额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label for="txDate">日期</label><input id="txDate" type="date" max="${localISO()}" value="${escapeHTML(initial.date)}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label for="txTime">时间</label><input id="txTime" type="time" value="${escapeHTML(initial.time)}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选">${escapeHTML(initial.note)}</textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||budgetExcluded!==editBaseline.budgetExcluded||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirmAction({title:'放弃修改',message:'这笔记录还有未保存的修改。',action:'确认放弃',danger:true});},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  openModal(`${modalHead(existing?'编辑记录':'记一笔',null)}<div class="segmented"><button id="expenseTab" class="expense">支出</button><button id="incomeTab" class="income">收入</button></div><div class="amount-box"><div class="amount-line"><span>¥</span><input id="txAmount" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="0.00" value="${escapeHTML(initial.amount)}"></div><div id="amountCalcPreview" class="amount-calc-preview" aria-live="polite"></div><div class="amount-operators" aria-label="金额快捷计算"><button type="button" data-amount-op="+">＋</button><button type="button" data-amount-op="−">−</button><button type="button" data-amount-op="×">×</button><button type="button" data-amount-op="÷">÷</button></div></div><div class="section-head"><h2>选择分类</h2><button class="text-button organize-categories" id="quickAddCategory">整理分类</button></div><div id="categoryChooser" class="category-grid"></div><button id="budgetSyncToggle" class="budget-sync-toggle" type="button" role="switch" aria-checked="${budgetSync?'true':'false'}"><span><strong>同步增加预算</strong><small>这笔收入会增加本月预算，并完整加到记账当天的可支出额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="budgetIncludeToggle" class="budget-sync-toggle ${budgetExcluded?'':'active'}" type="button" role="switch" aria-checked="${budgetExcluded?'false':'true'}"><span><strong>计入日常预算</strong><small>关闭后仍计入总支出并减少余额，但不占用月预算和每日额度</small></span><span class="toggle-switch" aria-hidden="true"><i></i></span></button><button id="txSubmit" class="primary-button transaction-submit">${existing?'保存修改':'完成'}</button><div class="optional-details-label">可选信息</div><div class="form-card transaction-date-card"><div class="form-row"><label for="txDate">日期</label><input id="txDate" type="date" max="${localISO()}" value="${escapeHTML(initial.date)}"></div></div><div class="form-card transaction-optional-card"><div class="form-row"><label for="txTime">时间</label><input id="txTime" type="time" value="${escapeHTML(initial.time)}"></div><div class="form-row"><label>备注</label><textarea id="txNote" placeholder="可选"></textarea></div></div>${existing?'<button id="txDelete" class="danger-button" style="margin-top:10px">删除这笔记录</button>':''}`,{beforeDismiss:reason=>{if(!existing)return true;const now=captureDraft();const parsed=parseAmountExpression(now.amount);const amountChanged=parsed.ok?Math.abs(parsed.value-editBaseline.amount)>=0.005:String(now.amount)!==String(initial.amount);const changed=type!==editBaseline.type||selected!==editBaseline.selectedCategoryId||budgetSync!==editBaseline.budgetSync||budgetExcluded!==editBaseline.budgetExcluded||amountChanged||now.date!==editBaseline.date||now.time!==editBaseline.time||now.note!==editBaseline.note;return !changed||confirmAction({title:'放弃修改',message:'这笔记录还有未保存的修改。',action:'确认放弃',danger:true});},onDismiss:reason=>{if(existing)return;if(reason==='cancel')clearTransactionDraft();else persistDraft();}});
+  const noteInput=document.getElementById('txNote');
+  noteInput.value=initial.note;
+  if(existing)void showTransactionPurchase(existing,noteInput);
   const amountInput=document.getElementById('txAmount');
   const amountPreview=document.getElementById('amountCalcPreview');
   const updateAmountPreview=()=>{
@@ -899,7 +933,7 @@ function openTransactionModal(existing=null,suppliedDraft=null){
       toast('采购关联需要相同的支出金额和日期');return;
     }
     if(syncStock&&type!=='expense'){toast('请先填写食品采购支出');return;}
-    const record={...(existing||{}),id:existing?.id||suppliedDraft?.purchaseId||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,budgetExcluded:type==='expense'&&budgetExcluded,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value.trim(),date:chosenDate,time:normalizeClock(document.getElementById('txTime').value),createdAt:existing?.createdAt||new Date().toISOString()};
+    const record={...(existing||{}),id:existing?.id||suppliedDraft?.purchaseId||uid('tx'),type,amount:Math.round(value*100)/100,budgetSync:type==='income'&&budgetSync,budgetExcluded:type==='expense'&&budgetExcluded,categoryId:c.id,categoryName:c.name,categoryIcon:c.icon,categoryColor:c.color,note:document.getElementById('txNote').value,date:chosenDate,time:normalizeClock(document.getElementById('txTime').value),createdAt:existing?.createdAt||new Date().toISOString()};
     if(existing||suppliedDraft?.purchaseOrderId){
       const sourceButton=document.getElementById('txSubmit');
       submitting=true;

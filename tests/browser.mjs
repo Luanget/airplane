@@ -347,7 +347,7 @@ try {
   assert.ok(cacheNames.includes('another-app'));
   assert.ok(!cacheNames.some(k=>/^airplane-shell-v\d+$/.test(k)));
   await page.goto(base);
-  await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
+  await page.getByText('synthetic legacy ent…',{exact:true}).waitFor();
   console.log('PASS separate offline routes, local import, health persisted across reload');
   const today=await page.locator('#finance-date').inputValue();
   const shortDay=value=>Number(value.slice(5,7))+'月'+Number(value.slice(8))+'日';
@@ -389,7 +389,7 @@ try {
   await page.getByRole('button',{name:'前一天'}).click();
   assert.notEqual(await page.locator('#finance-date').inputValue(),today);
   await page.getByRole('button',{name:'查看整月'}).click();
-  await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
+  await page.getByText('synthetic legacy ent…',{exact:true}).waitFor();
   await page.getByRole('button',{name:'选择月份'}).click();
   await page.locator('#monthGrid').waitFor();
   await page.locator('#modalSave').click();
@@ -1257,7 +1257,7 @@ try {
   assert.equal(await ledger(),'{');
   await page.locator('#importInput').setInputFiles({name:'synthetic.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(backup))});
   await page.getByRole('dialog',{name:'恢复财务备份'}).getByRole('button',{name:'确认恢复'}).click();
-  await page.getByText('synthetic legacy entry',{exact:true}).waitFor();
+  await page.getByText('synthetic legacy ent…',{exact:true}).waitFor();
   assert.deepEqual(JSON.parse(await ledger()),backup.data);
   // The demo uses its own stored thread and ledger through the same review UI.
   await page.goto(base+'assistant/');

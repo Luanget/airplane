@@ -7,6 +7,7 @@ import {unpackBackup,combinedBackup} from '../health/backup.mjs';
 import {createSyncPackage} from '../health/sync-io.mjs';
 import {importSource} from '../health/sync-source.mjs';
 import {planHealthMerge} from '../health/sync.mjs';
+import {createAgentTools} from '../ai/agent-tools.mjs';
 import {executeAgentTask,orderAgentTasks,undoAgentTask} from '../ai/agent-executor.mjs';
 import {financeAutomation,setFinanceAutomation} from '../ai/finance.mjs';
 import {setHealthAuto} from '../ai/health-actions.mjs';
@@ -260,4 +261,24 @@ test('missing order number uses independent operation, image and product identit
  await runWith(different,'different-groceries');
  assert.equal((await w.readHealth()).local.purchases.length,3);
  assert.equal(ledger(w).transactions.filter(row=>row.receiptKey).reduce((sum,row)=>sum+row.amount,0),102);
+});
+
+test('paid receipt uses a short default note and preserves a long user note without losing item details',async()=>{
+ const w=make();authorize(w);
+ const recognized=orderReceipt(today);
+ const first=await run(w,recognized);
+ assert.equal(first.rows[0].state,'done');
+ const saved=ledger(w).transactions.filter(row=>row.receiptKey);
+ assert.equal(saved[0].note,'合成脱脂牛奶');
+ assert.equal(saved[0].receiptMerchant,'合成商店');
+ const note='\n用户备注\n'+'长'.repeat(1000)+'\n';
+ const second=await createAgentTools(w)('write_receipt',{...recognized,orderNo:'SYNTH-NOTE-002',note,inventoryLink:'distinct'},{
+  operationId:'explicit-note',run:{allowRead:true,date:today,clock:'12:00',messages:['新订单，我又买了一次'],
+   attachments:[{key:'different-proof'}]}
+ });
+ assert.equal(second.status,'saved',second.reason);
+ const explicit=ledger(w).transactions.filter(row=>row.receiptKey&&row.receiptKey!==saved[0].receiptKey);
+ assert.ok(explicit.length&&explicit.every(row=>row.note===note));
+ const last=(await w.readHealth()).local.agentReceipts.at(-1);
+ assert.deepEqual([last.lines[0].quantity,last.lines[0].packAmount,last.lines[0].net],[2,500,13]);
 });

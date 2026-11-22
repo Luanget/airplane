@@ -1,3 +1,4 @@
+import {markdownStream,renderMarkdown} from './markdown.mjs';
 import {mountAgentChat} from './agent-chat.mjs';
 import {executionDetails} from './audit.mjs';
 import {exportAiArchive,restoreAiArchive} from './archive.mjs';
@@ -55,6 +56,15 @@ const $=selector=>document.querySelector(selector);
 const transcript=$('.chat-transcript'),thread=$('.chat-thread'),review=$('.chat-review'),start=$('.assistant-start');
 const photoResults=$('[data-photo-results]');
 const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
+const conversation=composer.closest('.assistant-conversation'),viewport=window.visualViewport;
+function fitComposerViewport(){
+ const keyboard=viewport&&viewport.scale<=1.05&&window.innerHeight-viewport.height>90&&document.activeElement===composer.elements.text;
+ if(keyboard)conversation.style.setProperty('--assistant-viewport',viewport.height+'px');
+ else conversation.style.removeProperty('--assistant-viewport');
+}
+viewport?.addEventListener('resize',fitComposerViewport);
+composer.elements.text.addEventListener('focus',fitComposerViewport);
+composer.elements.text.addEventListener('blur',()=>conversation.style.removeProperty('--assistant-viewport'));
 const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]'),stop=$('[data-stop-request]');
 const retryFollowUp=$('[data-retry-follow-up]'),retryRequest=$('[data-retry-request]'),restoreReview=$('[data-restore-review]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');
@@ -193,12 +203,11 @@ async function requestReply(input,options,savePartial=()=>{}){
  answer.classList.add('streaming-reply');answer.hidden=true;answer.setAttribute('aria-live','off');
  start.hidden=true;
  transcript.append(answer);thread.scrollTop=thread.scrollHeight;
+ const stream=markdownStream(reply,thread,text=>{answer.hidden=!text;});
  const onReply=text=>{
   if(options.agentQuiet){tell('正在识别操作与凭据…');return;}
-  const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
   if(answer.hidden)tell(demo?'正在接收演示回复…':'正在接收 OpenAI 回复…');
-  answer.hidden=false;reply.textContent=text;savePartial(text);
-  if(follow)thread.scrollTop=thread.scrollHeight;
+  stream.update(text);savePartial(text);
  };
  const onTool=()=>tell('正在准备本机账本查询…');
  const controller=new AbortController();
@@ -219,7 +228,7 @@ async function requestReply(input,options,savePartial=()=>{}){
   }
   return result;
  }finally{
-  answer.remove();start.hidden=!!book.current?.messages.length;
+  stream.cancel();answer.remove();start.hidden=!!book.current?.messages.length;
   activeRequest=null;stop.hidden=true;
  }
 }
@@ -324,22 +333,29 @@ historyPanel.addEventListener('keydown',event=>{
  if(event.key==='Escape'){event.stopPropagation();openHistory(false);historyButton.focus();}
 });
 function messageNode(role,text){
- const row=document.createElement('div'),mark=document.createElement('span'),body=document.createElement('p');
  const assistant=role==='assistant';
+ const row=document.createElement('div'),mark=document.createElement('span'),body=document.createElement(assistant?'div':'p');
  row.className='chat-message '+role;
  row.setAttribute('role','group');row.setAttribute('aria-label',assistant?'助手':'你');
  mark.className='chat-avatar';mark.setAttribute('aria-hidden','true');
  mark.innerHTML=shellIcon(assistant?'sparkles':'person');
- body.className='chat-bubble '+role;body.textContent=text;
+ body.className='chat-bubble '+role;
+ if(assistant)renderMarkdown(body,text);else body.textContent=text;
  row.append(mark,body);
  return row;
 }
-function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[],media,taskId){
+function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[],media,taskId,preview){
  const scroll=thread.scrollTop;
  const follow=thread.scrollHeight-scroll-thread.clientHeight<48;
- const node=messageNode(role,text);
+ const node=preview?.isConnected?preview:messageNode(role,text);
  const insert=element=>transcript.insertBefore(element,transcript.querySelector('[data-queued-job]'));
- insert(node);
+ if(node===preview){
+  renderMarkdown(node.querySelector('.chat-bubble'),text);
+  node.classList.remove('agent-live','streaming-reply');
+  delete node.dataset.pendingReply;
+  node.removeAttribute('aria-live');
+  node.hidden=false;
+ }else insert(node);
  if(healthActionId){
   const undo=document.createElement('button');
   undo.type='button';undo.className='text-button health-write-undo';undo.textContent='撤销这次记录';
@@ -396,6 +412,7 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
   };
  }
  thread.scrollTop=!preserveScroll||follow?thread.scrollHeight:scroll;
+ return node;
 }
 function renderQueue(jobs){
  const nearEnd=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
@@ -477,7 +494,7 @@ function showPending(){
  retryRequest.textContent=pending?.healthAction?.agentTask?'重试未完成步骤':'重试这条消息';
  retryRequest.hidden=!pending;
  if(!pending)return;
- if(pending.partial)bubble('assistant',pending.partial);
+ if(pending.partial)bubble('assistant',pending.partial).dataset.pendingReply='';
  if(pending.request?.native)transcript.insertBefore(executionDetails(journal,pending.id,'上次执行详情'),transcript.querySelector('[data-queued-job]'));
  tell(pending.partial?'上次回复中断，已保留收到的部分。':'上次消息已保留，可以重试。');
 }
@@ -1110,7 +1127,7 @@ function photoSummary(jobs){
  return ['这组共 '+jobs.length+' 张照片，已识别 '+done.length+' 张。'+waiting,...details,notice].filter(Boolean).join('\n');
 }
 function showPhoto(job,text,action=''){
- job.output.textContent=text;
+ renderMarkdown(job.output,text);
  job.button.textContent=action? action+'照片 '+job.index:'';
  job.button.hidden=!action;
 }
@@ -1185,10 +1202,11 @@ function renderPhotoBatch(batch,files=[]){
  const group=document.createElement('section');
  group.className='card photo-batch';group.setAttribute('aria-label','照片识别结果');
  const jobs=batch.jobs.map((fields,i)=>{
-  const row=document.createElement('div'),name=document.createElement('strong'),output=document.createElement('p');
+  const row=document.createElement('div'),name=document.createElement('strong'),output=document.createElement('div');
   const button=document.createElement('button');button.type='button';button.className='text-button';
   const fileInput=document.createElement('input');fileInput.type='file';fileInput.accept='image/*';fileInput.hidden=true;
   const job={...fields,file:files[i]??null,output,button};
+  output.className='photo-reply';
   row.className='photo-result';name.textContent=job.label;row.append(name,output,button,fileInput);group.append(row);
   if(job.stage==='applying')showPhoto(job,job.reply+'\n上次保存未确认完成，请先核对账本。');
   else if(job.stage==='done'||job.stage==='settled')showPhoto(job,job.reply,job.proposal?'核对':'');
@@ -1450,10 +1468,10 @@ composer.onsubmit=async e=>{
 
 if(nativeAgentEnabled){
  nativeUi=mountAgentChat({book,journal,workspace,composer,review,stop,retry:retryRequest,replyRetry:$('[data-retry-agent-reply]'),
-  steerLabel:$('[data-agent-steer]'),transcript,thread,context:updateContext,trace,status:tell,onError:report,
+  steerLabel:$('[data-agent-steer]'),transcript,thread,messageNode,context:updateContext,trace,status:tell,onError:report,
   onQueue:jobs=>{renderQueue(jobs);if(jobs.length)tell('等待处理 '+jobs.length+' 条消息');},
   onUser:label=>{start.hidden=true;bubble('user',label,null,null,true);syncThreads();refreshWriteStatus();},
-  onFinal:(reply,source,undo,media,taskId)=>{bubble('assistant',reply,source,null,true,undo,media,taskId);syncThreads();updateContext();},
+  onFinal:(reply,source,undo,media,taskId,preview)=>{bubble('assistant',reply,source,null,true,undo,media,taskId,preview);syncThreads();updateContext();},
   onKey:revealKeySettings,resetPhoto});
  void nativeUi.restore();
 }

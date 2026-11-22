@@ -212,7 +212,7 @@ export function createAgentTools(workspace,{book,journal,authorized=()=>true}={}
    };
    return context.owner?owner.executeHealth(context,perform):perform(workspace);
   },true);
- add('write_finance','保存一笔实际人民币交易，金额必须有本轮用户原话，使用已启用分类。',obj({entry:financeSchema.properties.entry.anyOf[0],evidence:str(1,1600)}),
+ add('write_finance','保存一笔实际人民币交易，金额必须有本轮用户原话，使用已启用分类。默认用简短的商品名或用途作为备注。用户指定备注时完整保留。',obj({entry:financeSchema.properties.entry.anyOf[0],evidence:str(1,1600)}),
   (args,context)=>context.owner?owner.mutate({reason:'记账',operations:[{dataset:'transactions',action:'add',
    changes:JSON.stringify(args.entry)}]},context):execute('finance',args,context),true);
  add('read_stock_receipts','查询近期未关联财务的采购入库，供补记付款时关联原批次。',obj({date:opt(date),query:str(0,120)}),async(args)=>{
@@ -235,9 +235,9 @@ export function createAgentTools(workspace,{book,journal,authorized=()=>true}={}
      detail:'已记采购入库，成本未知的项目保留为空。'}};
    },grant);
   },true);
- add('write_receipt','按已付款截图写入或退款。inventoryLink 填已存在且数量相符的入库单 ID；仅在明确另一笔订单时填 distinct，否则 null。',
-  obj({...orderReceiptSchema.properties,inventoryLink:opt(str())}),
-  ({inventoryLink,...receipt},context)=>execute('receipt',{receipt},{...context,options:{inventoryLink}}),true);
+ add('write_receipt','按已付款截图写入或退款。inventoryLink 填已存在且数量相符的入库单 ID；仅在明确另一笔订单时填 distinct，否则 null。note 只用于用户明确指定的备注，原样传入，否则填 null。',
+  obj({...orderReceiptSchema.properties,inventoryLink:opt(str()),note:opt({type:'string',minLength:0})}),
+  ({inventoryLink,note,...receipt},context)=>execute('receipt',{receipt},{...context,options:{inventoryLink,userNote:note}}),true);
  add('read_medical','按明确名称或日期查询本机体检、症状或基础资料。仅在用户询问时调用。',obj({query:str(1,300)}),
   async(args,{run})=>output(queryMedical(await health(),args.query,run.date)));
  add('write_medical_report','录入本轮选定报告中有证据的体检指标。保留本机原件引用。',medicalResponseSchemas.extract,
@@ -360,7 +360,7 @@ export function createAgentTools(workspace,{book,journal,authorized=()=>true}={}
   if(name==='evaluate_meal_plan')args={dates:[],appendTo:[],...args};
   if(name==='write_meal_plan')args={appendTo:[],...args};
   if(name==='write_health')args={provenance:[],...args};
-  if(name==='write_receipt')args={inventoryLink:null,...args};
+  if(name==='write_receipt')args={inventoryLink:null,note:null,...args};
   if(name==='undo_operation')args={mode:null,sources:[],...args};
   if(name==='delete_actual_food')args={sources:[],...args};
   if(!tool||!matches(tool.schema,args))return {...failure('工具参数不符合结构或本地约束，请更正',tool?.schema),code:'invalid_arguments'};

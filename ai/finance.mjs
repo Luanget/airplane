@@ -34,7 +34,7 @@ export function financeFields(container,entry,today,ledger){
  const amount=input('金额 ¥','number',entry.amount);amount.min='0.01';amount.max='100000000';amount.step='0.01';
  const date=input('日期','date',entry.date);date.max=today;
  const category=field('分类',document.createElement('select'));category.required=true;
- const note=input('备注','text',entry.note,container);note.maxLength=200;
+ const note=field('备注',document.createElement('textarea'),container);note.value=entry.note;
  const budget=document.createElement('input');budget.type='checkbox';
  const budgetLabel=document.createElement('span');
  field(budgetLabel,budget,container).parentElement.className='checkbox';
@@ -58,7 +58,7 @@ export function financeFields(container,entry,today,ledger){
   const fields={type:type.value,amount:amount.valueAsNumber,date:date.value,categoryId:category.value};
   if(!selected||!validFinanceEntry(fields,{date:today,categories}))throw Error('请核对收支类型、金额、日期和分类');
   const now=new Date();
-  return {...fields,id,note:note.value.trim(),time:localClock(now),createdAt:now.toISOString(),
+  return {...fields,id,note:note.value,time:localClock(now),createdAt:now.toISOString(),
    categoryName:selected.name,categoryIcon:selected.icon,categoryColor:selected.color,
    budgetSync:fields.type==='income'&&budget.checked,budgetExcluded:fields.type==='expense'&&!budget.checked};
  };

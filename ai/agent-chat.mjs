@@ -1,3 +1,4 @@
+import {markdownStream,renderMarkdown} from './markdown.mjs';
 import {localClock,localDate} from '../calendar.mjs';
 import {makeMedicalAttachment} from '../health/medical.mjs';
 import {jpeg} from '../health/assistant.mjs';
@@ -30,7 +31,7 @@ async function attachmentInputs(imageFiles,reportFiles){
 }
 
 export function mountAgentChat({book,journal,workspace,composer,review,stop,retry,replyRetry,steerLabel,transcript,thread,context,trace,
- status,onUser,onFinal,onError,onQueue,onKey,resetPhoto}){
+ status,onUser,onFinal,onError,onQueue,onKey,resetPhoto,messageNode}){
  const steer=steerLabel.querySelector('input'),tools=createAgentTools(workspace,{book,journal,authorized:run=>run.allowRead});
  let current=null,submitting=false,restoring=false,restoredAttachments=[],attachmentRevision=0;
  const active=ticket=>book.current?.id===ticket.threadId;
@@ -88,7 +89,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   removeReview();
   book.checkpoint(ticket,run.reply);
   review.hidden=false;
-  const output=document.createElement('p');output.textContent=run.reply;review.append(output);
+  const output=document.createElement('div');renderMarkdown(output,run.reply);review.append(output);
   for(const row of rows){
    const confirmation=document.createElement('button'),skip=document.createElement('button'),actions=document.createElement('div');
    confirmation.type=skip.type='button';confirmation.className='primary-button';skip.className='text-button';
@@ -128,7 +129,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
  function disableReview(value){
   for(const button of review.querySelectorAll('button'))button.disabled=value;
  }
- async function finish(run,ticket){
+ async function finish(run,ticket,preview=transcript.querySelector('[data-pending-reply]')){
   const notes=run.receipts.map(({tool,result})=>({
    tool,status:result.status,reason:result.reason,receipt:result.receipt??null,
    ...(result.habit?{habitId:result.habit.id}:{}),...(result.data?.usedHabitIds?{usedHabitIds:result.data.usedHabitIds}:{}),
@@ -145,7 +146,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
    const failed=run.receipts.flatMap(row=>row.result.substeps??[row.result]).some(row=>['conflict','error','blocked','pending'].includes(row.status));
    await writeStatus(run.id,failed?'partial':'done');
    await journal.removeRun(run.id);
-   if(active(ticket)){removeReview();retry.hidden=true;replyRetry.hidden=true;onFinal(run.reply,source,undo,media,run.id);status('');}
+   if(active(ticket)){removeReview();retry.hidden=true;replyRetry.hidden=true;onFinal(run.reply,source,undo,media,run.id,preview);status('');}
   }
  }
  async function processRun(run,ticket,{replyOnly=false}={}){
@@ -158,17 +159,20 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   const controller=new AbortController(),state={ticket,run,controller,steers:[],reported:new Set()};
   current=state;steerLabel.hidden=false;stop.hidden=false;retry.hidden=true;replyRetry.hidden=true;
   await trace(run.id,{type:'start',route:'responses-tools',threadId:ticket.threadId});
-  let partial='',writtenAt=0;
-  const live=document.createElement('p');
-  live.className='chat-bubble assistant agent-live';live.hidden=true;
-  transcript.insertBefore(live,transcript.querySelector('[data-queued-job]'));
+  let partial=book.current?.pending?.partial??'',writtenAt=0;
+  const previous=transcript.querySelector('[data-pending-reply]');
+  const live=previous??messageNode('assistant','');
+  live.classList.add('agent-live','streaming-reply');
+  live.setAttribute('aria-live','off');
+  delete live.dataset.pendingReply;
+  live.hidden=!partial;
+  if(!previous)transcript.insertBefore(live,transcript.querySelector('[data-queued-job]'));
+  const stream=markdownStream(live.querySelector('.chat-bubble'),thread,reply=>{live.hidden=!reply;});
   const runningDetails=executionDetails(journal,run.id,'本次执行详情');
   if(active(ticket))live.after(runningDetails);
   const updatePartial=reply=>{
    if(!active(ticket))return;
-   const follow=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
-   partial=reply;live.textContent=reply;live.hidden=!reply;
-   if(follow)thread.scrollTop=thread.scrollHeight;
+   partial=reply;stream.update(reply);
    if(Date.now()-writtenAt>600){writtenAt=Date.now();try{book.checkpoint(ticket,reply);}catch{}}
   };
   try{
@@ -201,7 +205,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
     onStep:name=>{if(active(ticket))status(tools.isWrite(name)?'正在执行并核对本机账本…':'正在查询与计算…');},
     request:async(value,options)=>{
      if(active(ticket)){
-      updatePartial('');status('正在思考…');
+      status('正在思考…');
      }
      const available=value.allowRead?tools.definitions:[];
      const facts=value.allowRead?tools.context():null;
@@ -219,18 +223,24 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
       accepted=true;return result;
      }finally{await trace(value.id,{type:'input',input:{...audit,accepted}});}
     }});
-   if(!bindReview(run,ticket))await finish(run,ticket);
+   stream.cancel();
+   if(!bindReview(run,ticket))await finish(run,ticket,live);
   }catch(error){
    if(partial)try{book.checkpoint(ticket,partial);}catch{}
    await writeStatus(run.id,'pending',error);
    if(active(ticket)){
+    if(partial){
+     renderMarkdown(live.querySelector('.chat-bubble'),partial);
+     live.hidden=false;live.dataset.pendingReply='';live.classList.remove('agent-live','streaming-reply');live.removeAttribute('aria-live');
+    }
     retry.textContent='继续未完成任务';retry.hidden=false;
     replyRetry.hidden=run.phase!=='model'||!run.receipts.some(row=>row.result.status==='saved');
     onError(error);
     if(error.status===401||error.message.includes('导入自己的密钥'))onKey?.();
    }
   }finally{
-   live.remove();runningDetails.remove();current=null;stop.hidden=true;steerLabel.hidden=true;steer.checked=false;showQueue();
+   stream.cancel();if(live.classList.contains('agent-live'))live.remove();
+   runningDetails.remove();current=null;stop.hidden=true;steerLabel.hidden=true;steer.checked=false;showQueue();
    if(!book.current?.pending)void next();
   }
  }

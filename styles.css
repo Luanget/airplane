@@ -101,6 +101,7 @@ main { padding: 6px 16px 28px; }
 .tx-main { min-width:0; flex:1; }
 .tx-title { font-size:14px; font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tx-sub { margin-top:3px; color:var(--muted); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tx-amount { flex:none; white-space:nowrap; }
 .tx-money { text-align:right; font-size:14px; font-weight:730; font-variant-numeric:tabular-nums; }
 .tx-time { margin-top:3px; text-align:right; color:var(--muted); font-size:10px; }
 
@@ -424,3 +425,10 @@ body.reordering { overflow:hidden; user-select:none; -webkit-user-select:none; }
 /* Health entry: independent module; does not touch financial state or tabs. */
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .topbar-actions > a { text-decoration: none; }
+
+.transaction-purchase-detail { margin-top:10px; padding:10px 14px; overflow-wrap:anywhere }
+.transaction-purchase-detail summary { cursor:pointer; color:var(--muted); font-size:13px }
+.transaction-purchase-detail ul { padding:0; margin:8px 0 0; list-style:none }
+.transaction-purchase-detail li { display:grid; gap:3px; padding:7px 0; font-size:13px }
+.transaction-purchase-detail li + li { border-block-start:1px solid var(--line) }
+.transaction-purchase-detail small { color:var(--muted); font-size:12px }
