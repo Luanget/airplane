@@ -3,10 +3,11 @@ import test from 'node:test';
 import {createAgentRun,nativeRequest} from '../ai/agent-loop.mjs';
 import {createAgentTools} from '../ai/agent-tools.mjs';
 import {cycleReport,previousCycleHint} from '../ai/health-report.mjs';
-import {evaluateMealPlan,planOperation} from '../ai/meal-planning.mjs';
+import {setHealthAuto} from '../ai/health-actions.mjs';
+import {evaluateMealPlan,planOperation,planningGoals} from '../ai/meal-planning.mjs';
 import {memoryLibrary,MEMORY_KEY} from '../ai/memory.mjs';
 import {advanceModelPolicy,planNativeModel,saveChatModel} from '../ai/models.mjs';
-import {SKILLS_KEY,skillCatalog} from '../ai/skills.mjs';
+import {SKILLS_KEY,selectSkills,skillCatalog} from '../ai/skills.mjs';
 import {addDays,addFood,events,inventoryWithMoves,newState,recordEvent} from '../health/core.mjs';
 import {saveSku} from '../health/inventory.mjs';
 
@@ -120,4 +121,82 @@ test('skill overrides are read without rewriting the existing storage key',async
  assert.equal((await tools('load_skill',{id:'custom'},{run:{allowRead:true}})).data.steps,'我的独立技能');
  assert.equal(skillCatalog(finance).find(row=>row.id==='weighing').enabled,false);
  assert.equal(finance.getItem(SKILLS_KEY),original);
+});
+
+test('whole-day planning retries a vegetable shortfall against 500 g and saves an explicitly scoped single meal',async()=>{
+ let state=newState();
+ Object.assign(state.settings,{calorieTarget:1700,proteinMin:150,proteinMax:170,fatMin:45,sodiumTarget:2000});
+ const setting=structuredClone(state.settings),finance=local();
+ setHealthAuto(finance,true);
+ const sku=(id,name,nutrition,qty)=>{
+  saveSku(state,{id,name,unit:'g',basisUnit:'g',basisAmount:100,...nutrition}).qty=qty;
+  return id;
+ };
+ const main=sku('main','合成主餐',{kcal:158,protein:15.7,carbs:15,fat:4.8,sodium:90},1500);
+ const veg=sku('veg','合成芹菜',{kcal:18,protein:1,carbs:3,fat:.2,sodium:70},800);
+ const moves=structuredClone(state.local.stockMoves);
+ const tools=createAgentTools({finance,memory:memoryLibrary(finance),readHealth:async()=>structuredClone(state),
+  saveHealth:async(next,expected,guard)=>{assert.equal(state.revision??0,expected);guard();state={...next,revision:expected+1};}});
+ const evidence='安排明天午晚餐',run=createAgentRun({id:'day-menu',date:today,text:evidence});
+ const args={items:[portion(main,'午餐',600),portion(main,'晚餐',400),portion(veg,'晚餐',400)],replaceIds:[]};
+ const first=(await tools('evaluate_meal_plan',args,{run})).data;
+ assert.equal(first.feasible,true);
+ assert.deepEqual(first.days[0].nutritionCheck.outside,['vegetables']);
+ assert.deepEqual(first.days[0].nutritionCheck.checks.vegetables,{status:'below',value:400,min:500,max:null,difference:100});
+ assert.deepEqual(events(state,'foods'),[]);
+ const improved={...args,items:[...args.items.slice(0,2),portion(veg,'午餐',250),portion(veg,'晚餐',250)]};
+ const retry=(await tools('evaluate_meal_plan',improved,{run})).data;
+ assert.equal(retry.days[0].nutritionCheck.status,'within');
+ assert.equal(retry.days[0].vegetables.grams,500);
+ const saved=await tools('write_meal_plan',{...improved,evidence},{run,operationId:'day-menu'});
+ assert.equal(saved.status,'saved');
+ assert.deepEqual(state.settings,setting);
+ assert.equal(events(state,'foods').filter(row=>row.foodId===veg).reduce((sum,row)=>sum+row.amount,0),500);
+ assert.deepEqual(state.local.stockMoves,moves);
+ assert.ok(events(state,'foods').every(row=>row.status==='plan'));
+
+ state.settings.vegetableTargetGrams=450;
+ const limitedText='后天只安排晚餐300克芹菜，不追求全天达标',dayAfter=addDays(tomorrow,1);
+ const limitedRun=createAgentRun({id:'single-menu',date:today,text:limitedText});
+ const limited=await tools('write_meal_plan',{
+  items:[portion(veg,'晚餐',300,{date:dayAfter})],replaceIds:[],evidence:limitedText
+ },{run:limitedRun,operationId:'single-menu'});
+ assert.equal(limited.status,'saved');
+ assert.equal(limited.evaluation.days[0].nutritionCheck.status,'outside');
+ assert.equal(limited.evaluation.days[0].nutritionCheck.checks.vegetables.min,450);
+ assert.deepEqual(events(state,'foods').filter(row=>row.date===dayAfter).map(({meal,amount})=>({meal,amount})),
+  [{meal:'晚餐',amount:300}]);
+ assert.deepEqual(state.local.stockMoves,moves);
+ assert.equal(planningGoals(state).vegetableGrams,450);
+ assert.equal(state.settings.vegetableTargetGrams,450);
+});
+
+test('natural requests and planning facts apply enabled legacy Skill text without migrating or rewriting it',async()=>{
+ const finance=local(),memory=memoryLibrary(finance),state=newState();
+ const text='保留原来的配餐格式\n末行写出补货项。';
+ const settings={overrides:{'l-meals':{text,enabled:true},'l-food-preferences':{text:'已停用的饮食习惯',enabled:true}},
+  runtime:{'l-food-preferences':false},
+  personal:[{id:'l-stock',name:'旧库存规则',text:'保留原分装标记',enabled:true}]};
+ const raw=JSON.stringify(settings);
+ finance.setItem(SKILLS_KEY,raw);
+ const tools=createAgentTools({finance,memory,readHealth:async()=>state});
+ const run=createAgentRun({id:'automatic',date:today,text:'帮我安排明天午晚餐'});
+ assert.deepEqual(selectSkills(skillCatalog(finance),{text:run.messages[0]}).filter(row=>row.customized).map(row=>row.id),['l-meals']);
+ const context=tools.context(run);
+ assert.deepEqual(context.activeSkills.map(row=>[row.id,row.steps]),[['l-meals',text]]);
+ assert.equal(context.skills.some(row=>row.id==='l-food-preferences'),false);
+ const noCue=createAgentRun({id:'model-selected',date:today,text:'明天照上次来'});
+ assert.equal(tools.context(noCue).activeSkills,undefined);
+ const facts=await tools('planning_facts',{dates:[tomorrow]},{run:noCue});
+ assert.deepEqual(facts.data.workflows.map(row=>[row.id,row.steps]),[['l-meals',text]]);
+ assert.equal((await tools('planning_facts',{dates:[tomorrow]},{run})).data.workflows,undefined);
+ assert.deepEqual(tools.context(createAgentRun({id:'stock',date:today,text:'看看库存'})).activeSkills.map(row=>row.id),['l-stock']);
+ assert.deepEqual(memory.list(),[]);
+ assert.equal(finance.getItem(SKILLS_KEY),raw);
+
+ const copy=[{id:'l-meals',name:'旧配餐记忆',text:'上个版本复制的原文',enabled:true}];
+ finance.setItem(MEMORY_KEY,JSON.stringify(copy));
+ assert.deepEqual(tools.context(run).habits,[]);
+ assert.deepEqual(memory.list(),copy);
+ assert.equal(finance.getItem(MEMORY_KEY),JSON.stringify(copy));
 });

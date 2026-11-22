@@ -42,7 +42,7 @@ export function vegetableIntake(rows,inventory){
 export function planningGoals(state){
  const goals=dietGoals(state),custom=state.settings.vegetableTargetGrams;
  const maximumCarbs=Math.max(0,Math.floor((goals.kcal+goals.kcalTolerance-goals.proteinMin*4-goals.fatMin*9)/4));
- return {...goals,vegetableGrams:Number.isFinite(custom)&&custom>0?custom:300,
+ return {...goals,vegetableGrams:Number.isFinite(custom)&&custom>0?custom:500,
   carbTradeoff:goals.carbs?.low>maximumCarbs?{maximumCarbsWithPrimaryTargets:maximumCarbs}:null};
 }
 
@@ -192,7 +192,7 @@ export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]
    cost:{knownPlannedCost,knownDayCost,complete:!day.actualCostPartial&&priced.length===plans.length}};
  });
  return {feasible:violations.length===0,violations,goals:facts.goals,days,usedHabitIds:habits.map(row=>row.id),
-  assumptions:'feasible 仅检查库存和硬约束。全天目标看 nutritionCheck；未知营养与成本不会视为零。'};
+  assumptions:'feasible 仅检查库存和硬约束。全天方案的 nutritionCheck.status 若是 outside，按 checks 的差距调整后再试算。明确指定单餐、份量或不追求全天达标时按用户范围执行。未知营养与成本不会视为零。'};
 }
 
 export function planOperation(state,args,{id,today,habits}){

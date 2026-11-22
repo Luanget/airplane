@@ -1,26 +1,25 @@
 // Legacy preference storage stays readable for the one-time memory migration.
 export const SKILLS_KEY='airplane-ai-skills-v2';
-const builtInNames=[
- ['l-data','L · 数据与纠错规范',true],
- ['l-record','L · 记录与纠错',true],
- ['l-meals','L · 配餐与营养',true],
- ['l-stock','L · 库存与采购',true],
- ['l-progress','L · 运动与周期',true],
- ['l-food-preferences','L · 餐食偏好',false],
+const legacyWorkflows=[
+ ['l-data','L · 数据与纠错规范',true,['correction','sync']],
+ ['l-record','L · 记录与纠错',true,['intake','correction']],
+ ['l-meals','L · 配餐与营养',true,['meals']],
+ ['l-stock','L · 库存与采购',true,['stock','receipts','weighing']],
+ ['l-progress','L · 运动与周期',true,['exercise','progress']],
+ ['l-food-preferences','L · 餐食偏好',false,['meals']],
 ];
+const legacyTopics=new Map(legacyWorkflows.map(([id,,,topics])=>[id,topics]));
+
 export function migratedPreferences(store,legacyKey='airplane-ai-skill-v1'){
- let previous;
- try{previous=JSON.parse(store.getItem(SKILLS_KEY));}catch{}
- if(previous&&Array.isArray(previous.personal)){
-  const customized=builtInNames.flatMap(([id,name,enabled])=>{
-   const row=previous.overrides?.[id];
-   return typeof row?.text==='string'?[{id,name,text:row.text,enabled:row.enabled??enabled}]:[];
-  });
-  return [...customized,...previous.personal].filter(row=>typeof row?.id==='string'&&typeof row.name==='string'&&typeof row.text==='string')
-   .map(({id,name,text,enabled})=>({id,name,text,enabled:enabled!==false}));
- }
+ if(storedSkills(store))return [];
  const text=store.getItem(legacyKey)?.trim();
  return text?[{id:'legacy-preference',name:'原有个人偏好',text,enabled:true}]:[];
+}
+
+// Copies made by the older memory migration can stay on disk without being applied twice.
+export function migratedSkillIds(store){
+ const personal=storedSkills(store)?.personal;
+ return new Set([...legacyTopics.keys(),...(Array.isArray(personal)?personal.map(row=>row?.id):[])]);
 }
 
 // These definitions are data. Only the application's scoped operations run.
@@ -67,7 +66,7 @@ export function storedSkills(store){
 const object=row=>row&&typeof row==='object'&&!Array.isArray(row);
 export function skillCatalog(store){
  const saved=storedSkills(store),builtIds=new Set(HEALTH_SKILLS.map(row=>row.id));
- const legacy=builtInNames.flatMap(([id,name,enabled])=>object(saved?.overrides?.[id])?
+ const legacy=legacyWorkflows.flatMap(([id,name,enabled])=>object(saved?.overrides?.[id])?
   [{id,name,enabled,version:1}]:[]);
  const custom=(Array.isArray(saved?.personal)?saved.personal:[]).filter(row=>
   typeof row?.id==='string'&&typeof row.name==='string'&&!builtIds.has(row.id));
@@ -76,6 +75,11 @@ export function skillCatalog(store){
   const override=object(saved?.overrides?.[row.id])?saved.overrides[row.id]:{};
   const combined={...row,...override,id:row.id,pattern:row.pattern,customized:!builtIds.has(row.id)||Object.keys(override).length>0};
   if(builtIds.has(row.id))combined.version=row.version;
+  if(!builtIds.has(row.id)){
+   const topics=legacyTopics.get(row.id)??(Array.isArray(combined.relatedTo)?combined.relatedTo:
+    HEALTH_SKILLS.filter(skill=>skill.pattern.test(combined.name)).map(skill=>skill.id));
+   combined.relatedTo=topics;
+  }
   if(typeof override.text==='string'&&!Object.hasOwn(override,'steps'))combined.steps=override.text;
   combined.steps??=combined.text??'';
   for(const key of ['tools','actions'])combined[key]=Array.isArray(combined[key])?combined[key]:[];
@@ -91,8 +95,9 @@ export function setSkillEnabled(store,id,enabled){
 }
 export function selectSkills(catalog,{text='',photos=false,previousText=''}={}){
  const cue=/^(?:那|这|刚才|继续|然后)/.test(text)?previousText:'';
- return catalog.filter(skill=>skill.enabled&&(skill.pattern?.test(text+' '+cue)||
-  skill.customized&&text.includes(skill.name)||photos&&['photos','intake','receipts'].includes(skill.id)));
+ const matches=skill=>skill?.pattern?.test(text+' '+cue)||photos&&['photos','intake','receipts'].includes(skill?.id);
+ return catalog.filter(skill=>skill.enabled&&(matches(skill)||skill.customized&&text.includes(skill.name)||
+  Array.isArray(skill.relatedTo)&&skill.relatedTo.some(id=>matches(HEALTH_SKILLS.find(builtIn=>builtIn.id===id)))));
 }
 
 // Archives fill missing preferences; settings already edited on this device win.

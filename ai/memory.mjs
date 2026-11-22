@@ -1,5 +1,5 @@
 import {PROFILE_ID,compareProfileVersion,preferenceTopic} from './health-profile.mjs';
-import {migratedPreferences} from './skills.mjs';
+import {migratedPreferences,migratedSkillIds} from './skills.mjs';
 
 export const MEMORY_KEY='airplane-ai-memory-v1';
 const AUTO_MEMORY_KEY='airplane-ai-auto-memory-v1';
@@ -87,8 +87,9 @@ export function memoryLibrary(store,legacyKey){
  const historyEntry=row=>({name:row.name,text:row.text,evidence:row.evidence,updatedAt:row.updatedAt,
   constraint:row.constraint,origin:row.origin,source:row.source,enabled:row.enabled,kind:row.kind});
  function habitRows(){
-  const topics=new Set();
-  return read().rows.filter(row=>!row.archivedProfile&&memoryKind(row)==='habit')
+  const topics=new Set(),skillIds=migratedSkillIds(store);
+  return read().rows.filter(row=>!row.archivedProfile&&memoryKind(row)==='habit'&&
+   (row.origin||row.updatedAt||!skillIds.has(row.id)))
    .sort((a,b)=>Number(b.origin==='manual')-Number(a.origin==='manual')||
     String(b.updatedAt??'').localeCompare(String(a.updatedAt??''))||(b.priority??0)-(a.priority??0))
    .filter(row=>{

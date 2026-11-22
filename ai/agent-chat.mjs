@@ -209,7 +209,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
       status('正在思考…');
      }
      const available=value.allowRead?tools.definitions:[];
-     const facts=value.allowRead?tools.context():null;
+     const facts=value.allowRead?tools.context(value):null;
      if(facts&&value.periodHint===undefined)value.periodHint=await tools.periodHint(value).catch(()=>null);
      if(facts&&value.periodHint)facts.previousCycle=value.periodHint;
      if(facts)await trace(value.id,{type:'context',...auditSafe(facts)});

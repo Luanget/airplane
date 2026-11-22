@@ -16,6 +16,7 @@ import {makeMedicalAttachment} from '../health/medical.mjs';
 import {addBatch} from '../health/inventory.mjs';
 import {currentSources} from '../ai/evidence.mjs';
 import {identifyAttachments} from '../ai/conversation-evidence.mjs';
+import {SKILLS_KEY} from '../ai/skills.mjs';
 import {threadBook} from '../ai/threads.mjs';
 import {modelRates,estimatedCost,usageTokens} from '../ai/usage.mjs';
 import {readFinance,replaceFinance,STORAGE_KEY} from '../finance-storage.mjs';
@@ -98,11 +99,31 @@ const cases=[
   const day=checkedPlan(run)?.days[0],rows=plansOn(w,tomorrow);
   assert.ok(day?.meals.午餐&&day?.meals.晚餐);
   assert.ok(rows.length>2&&noNew(w));
+  assert.equal(day.nutritionCheck.checks.vegetables.min,500);
+  assert.ok(day.vegetables.grams>=500);
   assert.equal(day.nutritionCheck.status,'within',JSON.stringify(day.nutritionCheck));
   assert.ok(new Set(rows.filter(row=>row.foodId==='fixture-chicken').map(row=>row.meal)).size<=1);
   for(const key of ['kcal','protein','carbs','fat','sodium'])
    assert.equal(Math.round(rows.reduce((sum,row)=>sum+row.nutrition[key],0)*100),Math.round(day.projected[key]*100));
   return {...day.projected,vegetables:day.vegetables.grams,cost:day.cost,check:day.nutritionCheck.status,plans:rows.length};
+ }},
+ {id:'refine-outside-with-legacy-skill',effort:'medium',setup:w=>{
+  w.finance.setItem(SKILLS_KEY,JSON.stringify({overrides:{'l-meals':{
+   text:'配餐回执最后另起一行写「合成菜单核对完毕」。',enabled:true
+  }}}));
+ },turns:[{text:'先试算明天午餐一包合成荞麦面、晚餐400g合成芹菜的草案。这个只是起点，请继续安排并保存明天午晚餐。'}],verify:(w,run)=>{
+  const checks=run.receipts.filter(row=>row.tool==='evaluate_meal_plan'&&row.result.data?.days[0]);
+  assert.equal(checks[0]?.result.data.days[0].nutritionCheck.status,'outside');
+  assert.equal(checks[0].result.data.days[0].vegetables.grams,400);
+  assert.ok(checks.slice(1).some(row=>row.result.data.days[0].nutritionCheck.status==='within'));
+  const saved=run.receipts.find(row=>row.tool==='write_meal_plan'&&row.result.status==='saved');
+  const final=saved?.result.evaluation.days[0];
+  assert.equal(final?.nutritionCheck.status,'within');
+  assert.ok(final.vegetables.grams>=500);
+  assert.ok(noNew(w)&&plansOn(w,tomorrow).length>2);
+  assert.ok(!w.memory.list().some(row=>row.id==='l-meals'));
+  assert.match(run.reply,/合成菜单核对完毕/);
+  return {...final.projected,vegetables:final.vegetables.grams};
  }},
  {id:'limited-vegetable-plan',setup:w=>{
   Object.assign(w.state.local.inventory.find(row=>row.id==='fixture-celery').nutrition,
@@ -112,6 +133,8 @@ const cases=[
   assert.equal(rows.length,1);assert.equal(rows[0].foodId,'fixture-celery');assert.equal(rows[0].amount,300);
   assert.equal(rows[0].meal,'晚餐');assert.equal(rows[0].quality,'estimated');assert.ok(rows[0].nutritionEstimate?.source);
   assert.ok(rows[0].nutrition.kcal>0&&rows[0].nutrition.kcal<100);
+  const saved=run.receipts.find(row=>row.tool==='write_meal_plan'&&row.result.status==='saved');
+  assert.equal(saved?.result.evaluation.days[0].nutritionCheck.checks.vegetables.status,'below');
   assert.ok(noNew(w));assert.match(run.reply,/估/);return rows[0].nutrition;
  }},
  {id:'cycle-review',setup:w=>{
@@ -332,7 +355,7 @@ async function runCase(model,example){
      advanceModelPolicy(state);
      if(count>=invocationLimit)throw Error('Evaluation request cap');
      count++;
-     const facts=state.allowRead?tools.context():null;
+     const facts=state.allowRead?tools.context(state):null;
      if(facts&&state.periodHint===undefined)state.periodHint=await tools.periodHint(state).catch(()=>null);
      if(facts&&state.periodHint)facts.previousCycle=state.periodHint;
      const prompt=agentInstructions+(facts?tools.instructions()+'\n当前启用的稳定习惯和工作流程：'+JSON.stringify(facts)+

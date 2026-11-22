@@ -456,22 +456,29 @@ test('leaving a thread preserves its partial reply and only the matching ticket 
  assert.deepEqual(threadBook(store).current.messages.map(row=>row.text),['测试消息','完成']);
 });
 
-test('migration retains personal and customized built-in rules without restoring deleted memories',async()=>{
+test('legacy Skills retain their original content without recreating deleted memory copies',async()=>{
  const initial={overrides:{'l-stock':{text:'保留自己的盘点规则',baseText:'先前的默认版本',enabled:false}},
   personal:[{id:'personal',name:'旧个人规则',text:'晚餐优先高蛋白',enabled:true,folderId:'a'}]};
  const values=new Map([['airplane-ai-skills-v2',JSON.stringify(initial)]]);
  const storage={getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,value)};
  const memory=memoryLibrary(storage);
- assert.deepEqual(memory.list().map(row=>[row.id,row.text,row.enabled]),[
-  ['l-stock','保留自己的盘点规则',false],['personal','晚餐优先高蛋白',true]
- ]);
+ assert.deepEqual(memory.list(),[]);
+ const copies=[
+  {id:'l-stock',name:'L · 库存与采购',text:'保留自己的盘点规则',enabled:false},
+  {id:'personal',name:'旧个人规则',text:'晚餐优先高蛋白',enabled:true}
+ ];
+ values.set(MEMORY_KEY,JSON.stringify(copies));
+ assert.deepEqual(memory.list(),copies);
  assert.equal(memory.relevant('盘点').length,0);
+ assert.equal(memory.relevant('高蛋白').length,0);
  const action={dataset:'memory',action:'update',id:'personal',changes:JSON.stringify({text:'午餐优先高蛋白'})};
  await (await dataEdit({memory},null,action,date)).commit();
+ assert.equal(memory.relevant('高蛋白')[0].text,'午餐优先高蛋白');
  memory.prepare('l-stock',{},'delete').commit();
  memory.prepare('personal',{},'delete').commit();
  assert.deepEqual(memoryLibrary(storage).list(),[]);
  assert.equal(values.get(MEMORY_KEY),'[]');
+ assert.equal(values.get('airplane-ai-skills-v2'),JSON.stringify(initial));
 });
 
 test('complete mode gates raw reads and proposals and sends only data returned by the selected path',async()=>{

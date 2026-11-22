@@ -13,3 +13,8 @@
 - 对话状态和推理文档支持本地重放完整输出项目。Mid-turn steering 的客户端入队思路用于区分本轮补充和下一轮消息。浏览器在工具边界接收补充。 [对话状态](https://developers.openai.com/api/docs/guides/conversation-state) · [推理](https://developers.openai.com/api/docs/guides/reasoning) · [Steering](https://developers.openai.com/api/docs/guides/steering)
 - DeepSeek Harness 的 `steering-history.ts` 将下一步补充和下一轮消息设为不同 inbox 目标，重放时恢复来源。Airplane 使用本机任务和明确的补充入口承载这一差别。 [事件实现](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/model/steering-history.ts)
 - OpenNutriTracker 的 `add_tracked_day_usecase.dart` 采用幂等日写入，照片解释 use case 将事实提取和错误分类留在独立边界。CalorieCoach 的 `meal_planning_service.py` 用确定性计算校验模型选出的份量，并把首轮结果交回模型调整。NutriTrace 的 `log-meal.js` 让工具和常规应用路由共用本地写入逻辑。 [日账实现](https://github.com/simonoppowa/OpenNutriTracker/blob/main/lib/core/domain/usecase/add_tracked_day_usecase.dart) · [餐单评估](https://github.com/MNGChen/CalorieCoach/blob/main/services/meal_planning_service.py) · [餐单写入](https://github.com/TraceApps/nutritrace/blob/main/server/lib/mcp/tools/log-meal.js)
+
+
+## 已知待办
+
+历史照片目前可以按附件 ID 读取当前会话中仍有本机原件的照片。完整历史检索（含跨会话）待补齐。附件原件缺失时，只能显示引用和不可用状态。

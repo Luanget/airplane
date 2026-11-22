@@ -53,6 +53,7 @@ test('skills are versioned, scoped, toggleable, and preserve legacy storage',()=
 test('latest rule import excludes archived and lower versions while retaining revisable habits',()=>{
  const store=storage(),lib=memoryLibrary(store);
  store.setItem(SKILLS_KEY,JSON.stringify({personal:[],overrides:{'l-progress':{text:'旧 TDEE 规则',enabled:true}}}));
+ store.setItem(MEMORY_KEY,JSON.stringify([{id:'l-progress',name:'旧周期流程',text:'旧 TDEE 规则',enabled:true}]));
  const current=workflow('300403.2',ruleText);
  const outdated=workflow('300403.1','普通日参考 2400 kcal。');
  const core={name:'CORE_RULES_300403.2.md',text:'# 核心规则\n'+keys.join('\n')+'\n## 历史归档\nTDEE基线3000kcal'};
