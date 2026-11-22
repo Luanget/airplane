@@ -25,8 +25,8 @@ export function prepareStockReceipt(current,{date,lines,note},{id,today,time,evi
   if(skuId&&sku&&![sku.name,...(sku.aliases??[])].map(nameKey).some(key=>key.includes(nameKey(name))||nameKey(name).includes(key)))
    throw Error('所选 SKU 与「'+name+'」名称不一致，请用包装标签核对。');
   if(sku&&!sku.active)throw Error('「'+sku.name+'」已停用，请核对后再恢复。');
-  if(label&&!photographic)throw Error('录入营养标签前请提供对应的标签照片；仍可按未知营养入库。');
-  if(cost!==null&&!photographic&&!amountSupported(evidence.texts,cost,'元',sku)){
+  if(label&&!photographic&&!evidence.owner)throw Error('录入营养标签前请提供对应的标签照片；仍可按未知营养入库。');
+  if(cost!==null&&!photographic&&!evidence.owner&&!amountSupported(evidence.texts,cost,'元',sku)){
    // Money entered as an isolated explicit value also needs a separate expenditure action.
    throw Error('该批成本缺少可核对的原始金额。可以将成本留空继续入库。');
   }
@@ -35,16 +35,17 @@ export function prepareStockReceipt(current,{date,lines,note},{id,today,time,evi
    if(!stockUnit)throw Error('新食品缺少库存计量单位。');
    sku=saveSku(next,{id:'sku-stock-'+hash(nameKey(name)),name,unit:stockUnit,basisUnit:label?.unit??stockUnit,
     basisAmount:label?.amount??1,packageKind:packageUnits.has(unit)?unit:null,packageSize:packAmount,packageUnit:packUnit,
-    ...(label?.nutrition??{}),quality:label?'label':'unknown',source:label?'用户提供的包装标签':'用户申报入库'});
+    ...(label?.nutrition??{}),quality:label?'label':'unknown',
+    source:label?(photographic?'用户提供的包装标签照片':'用户申报营养值'):'用户申报入库'});
    stock.push(sku);
   }
   const conversion=packAmount&&packUnit&&packageUnits.has(unit)?{...sku,standard:'',pack:unit,packageSize:packAmount,packageUnit:packUnit}:sku;
   const convert=(value,from)=>quantityInUnit(conversion,value,from,sku.unit);
   const weights=portions.map(portion=>{
-   if(portion.status==='open'&&portion.gross!=null&&(!(portion.gross>0)||!photographic&&!amountSupported(evidence.texts,portion.gross,'g',sku)))
+   if(portion.status==='open'&&portion.gross!=null&&(!(portion.gross>0)||!photographic&&!evidence.owner&&!amountSupported(evidence.texts,portion.gross,'g',sku)))
     throw Error('开封分装需要可核对的当前毛重。');
    if(sku.unit!=='g')throw Error('独立净重分装需要按克管理的食品。整盒食品可直接填写盒数和规格。');
-   if(!photographic&&!amountSupported(evidence.texts,portion.amount,portion.unit,sku))throw Error('缺少分装重量依据：'+portion.amount+' '+portion.unit);
+   if(!photographic&&!evidence.owner&&!amountSupported(evidence.texts,portion.amount,portion.unit,sku))throw Error('缺少分装重量依据：'+portion.amount+' '+portion.unit);
    const value=convert(portion.amount,portion.unit);
    if(!(value>0))throw Error('分装净重无法换算。');
    return value;
@@ -53,7 +54,7 @@ export function prepareStockReceipt(current,{date,lines,note},{id,today,time,evi
   const count=unit==='份'&&weights.length===amount;
   const quantity=round(amount==null||count?split:convert(amount,unit),6);
   if(!(quantity>0)||quantity<split-1e-6)throw Error('「'+name+'」的采购量与分装不一致，请核对。');
-  if(amount!=null&&!photographic&&!(weights.length&&quantity===split&&(!count||amountSupported(evidence.texts,amount,unit,sku)))&&
+  if(amount!=null&&!photographic&&!evidence.owner&&!(weights.length&&quantity===split&&(!count||amountSupported(evidence.texts,amount,unit,sku)))&&
    !amountSupported(evidence.texts,amount,unit,conversion))throw Error('「'+name+'」的入库数量缺少可核对的消息或照片。');
   const associated=transcript.filter(turn=>[term,...aliases(sku)].some(alias=>alias&&nameKey(turn.text).includes(alias))&&
    (amount!=null&&amountSupported([turn.text],amount,unit,conversion)||weights.some(value=>amountSupported([turn.text],value,sku.unit,sku)))).slice(-1);

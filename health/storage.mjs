@@ -70,8 +70,26 @@ export function exportState(state,includeMedicalAttachments=true) {
 }
 
 const purchaseSlot=account=>slot(account)+':purchase-update';
+const ownerPrefix=account=>slot(account)+':owner-change:';
+const ownerIndex=account=>slot(account)+':owner-index:';
 const pack=(account,value)=>account?.id?account.seal('health',value):value;
 export function readPurchaseUpdate(account) {return readSlot(purchaseSlot(account),account);}
+export function readOwnerChange(account,id){return readSlot(ownerPrefix(account)+id,account);}
+export async function listOwnerChanges(account){
+ const db=await openDb();
+ try{
+  const prefix=ownerIndex(account);
+  return await new Promise((resolve,reject)=>{
+   const range=IDBKeyRange.bound(prefix,prefix+'\uffff');
+   const req=db.transaction('kv').objectStore('kv').getAll(range);
+   req.onsuccess=()=>resolve(req.result.map(value=>{
+    const {id,at,summary,reverts,revision,source,fingerprint}=unpack(account,value);
+    return {id,at,summary,reverts,revision,source,fingerprint};
+   }).sort((a,b)=>b.at.localeCompare(a.at)));
+   req.onerror=()=>reject(req.error);
+  });
+ }finally{db.close();}
+}
 
 async function purchaseWrite(account,operation){
  const db=await openDb();
@@ -124,7 +142,15 @@ export function finishPurchaseUpdate(account,jobId,apply){
  return purchaseWrite(account,(store,current,job)=>{
   if(!job)return current??newState();
   if(job.id!==jobId||(current?.revision??0)!==job.expected)throw Error('待同步的账本更新已变更，请刷新');
-  if(apply)store.put(pack(account,job.state),slot(account));
+  if(apply){
+   store.put(pack(account,job.state),slot(account));
+   if(job.change.kind==='owner'){
+    const {change}=job;
+    const {id,at,summary,reverts,source,fingerprint}=change.record,revision=job.state.revision;
+    store.add(pack(account,{...change.record,parts:change.parts,revision}),ownerPrefix(account)+id);
+    store.add(pack(account,{id,at,summary,reverts,source,fingerprint,revision}),ownerIndex(account)+id);
+   }
+  }
   store.delete(purchaseSlot(account));
   return apply?job.state:current??newState();
  });

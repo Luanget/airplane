@@ -206,7 +206,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
      const available=value.allowRead?tools.definitions:[];
      const facts=value.allowRead?tools.context():null;
      if(facts)await trace(value.id,{type:'context',...auditSafe(facts)});
-     const prompt=agentInstructions+(facts?'\n当前启用的稳定习惯和工作流程：'+JSON.stringify(facts)+
+     const prompt=agentInstructions+(facts?tools.instructions():'')+(facts?'\n当前启用的稳定习惯和工作流程：'+JSON.stringify(facts)+
       '\n本对话用户消息 ID（附短索引）：'+JSON.stringify(currentSources(value).map(({id,text,current})=>({id,current:!!current,text:text.slice(0,90)})))+
       '\n已附在本任务的附件 ID：'+value.attachments.map(row=>row.id??row.key).join('、'):'');
      const body=nativeRequest(value,prompt,available,options);

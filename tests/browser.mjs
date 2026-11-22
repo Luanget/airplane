@@ -874,7 +874,7 @@ try {
   await openAssistantSettings();
   const dataPermissions=assistantSettings.getByText('数据权限',{exact:true});
   await dataPermissions.click();
-  const rootPermission=assistantSettings.getByRole('checkbox',{name:'完整数据权限'});
+  const rootPermission=assistantSettings.getByRole('checkbox',{name:'所有者完全控制'});
   assert.equal(await rootPermission.isChecked(),false);
   await rootPermission.check();
   await closeAssistantSettings();

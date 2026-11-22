@@ -96,32 +96,48 @@ function recostBatch(state,batch,remainingFoods) {
 function usedPackages(state,batchId){
  return (state.local.containers??[]).filter(row=>row.batchId===batchId&&packageJournal(state,row.id).length>0);
 }
-function removeUnusedTree(state,batchId) {
+function removeUnusedTree(state,batchId,{archive=false}={}) {
  const ids=new Set();
+ let preserve=false;
  const visit=id=>{
   if(ids.has(id))throw Error('批次来源无效');
   ids.add(id);
   const children=childrenOf(state,id);
-  if(usedPackages(state,id).length)throw Error('该批次已有包装称重或消耗，请先核对包装历史');
+  if(usedPackages(state,id).length){
+   if(!archive)throw Error('该批次已有包装称重或消耗，请先核对包装历史');
+   preserve=true;
+  }
   const onlySplits=usageOf(state,id).every(move=>{
    const parts=children.filter(b=>b.id.startsWith(move.id+'-'));
    return parts.length>0&&Math.abs(parts.reduce((sum,b)=>sum+b.quantity,0)+move.delta)<1e-6;
   });
-  if(!onlySplits)throw Error('该批次已有摄入、丢弃或盘点。请先更正这些记录，再移除该项');
+  if(!onlySplits){
+   if(!archive)throw Error('该批次已有摄入、丢弃或盘点。请先更正这些记录，再移除该项');
+   preserve=true;
+  }
   for(const child of children)visit(child.id);
  };
  visit(batchId);
+ if(preserve){
+  const units=new Map(inventoryWithMoves(state).map(row=>[row.id,row.unit]));
+  for(const row of [...state.local.batches,...state.local.stockMoves,...(state.local.containers??[])]){
+   if(!ids.has(row.batchId??row.id)||row.stockArchived)continue;
+   Object.assign(row,{stockArchived:true,historicalUnit:units.get(row.foodId)??null,archivedBy:'purchase:'+batchId});
+  }
+  return true;
+ }
  state.local.batches=state.local.batches.filter(b=>!ids.has(b.id));
  state.local.stockMoves=state.local.stockMoves.filter(m=>!ids.has(m.batchId));
 }
 
 // Work on a copy so a failed correction cannot partially change the ledger.
-export function revisePurchase(current,id,fields,{receiptUndo=false}={}) {
+export function revisePurchase(current,id,fields,{receiptUndo=false,owner=false}={}) {
  const next=structuredClone(current),orders=next.local.purchases??[];
  const order=orders.find(x=>x.id===id);
  if(!order||order.status==='cancelled')throw Error('采购已撤销或不在此账本');
- if(order.receiptId&&(!receiptUndo||fields))throw Error('截图采购关联整单支出，请通过原对话撤销或核对后更正');
- const updated=fields?{...order,...fields,time:normalizeClock(fields.time??order.time),id,financeId:order.financeId}:null;
+ if(order.receiptId&&!owner&&(!receiptUndo||fields))throw Error('截图采购关联整单支出，请通过原对话撤销或核对后更正');
+ const updated=fields?{...order,...fields,time:normalizeClock(fields.time??order.time),id,
+  financeId:owner&&Object.hasOwn(fields,'financeId')?fields.financeId:order.financeId}:null;
  if(updated)validateOrder(next,updated);
  const originals=new Map(order.items.map((r,i)=>[orderBatchId(order,r,i),r]));
  const items=(updated?.items??[]).map(r=>({...r,batchId:r.batchId??makeId('purchase-lot')}));
@@ -137,10 +153,15 @@ export function revisePurchase(current,id,fields,{receiptUndo=false}={}) {
   changedFoods.add(line.foodId);
   const revised=mapped.get(batchId);
   if(!revised||revised.foodId!==batch.foodId){
-   removeUnusedTree(next,batchId);
-   if(revised)addBatch(next,{...revised,id:batchId,date:updated.date,time:updated.time,reason:'采购更正'});
+   const archived=removeUnusedTree(next,batchId,{archive:owner});
+   if(revised){
+    if(archived)revised.batchId=makeId('purchase-lot');
+    else addBatch(next,{...revised,id:batchId,date:updated.date,time:updated.time,reason:'采购更正'});
+   }
    continue;
   }
+  if(owner&&updated.date===order.date&&updated.time===normalizeClock(order.time)&&
+   revised.quantity===line.quantity&&revised.costCents===line.costCents&&revised.expires===line.expires)continue;
   const usage=usageOf(next,batchId);
   if(usedPackages(next,batchId).some(row=>row.stockMode==='whole'&&(row.ordinal+1)*row.stockAmount>revised.quantity))
    throw Error('修改后的数量会丢失已有称重或消耗的包装');

@@ -61,7 +61,7 @@ export async function runAgent(run,{request,dispatch,save,additions=()=>[],onSte
    if(run.phase==='done')return run;
    if(run.phase==='model'){
     await admit();
-    if(run.turns>=turnLimit)throw Error('本轮已达到运行保护上限，已保留回执，可续跑。');
+    if(run.turns>=(dispatch.ownerMode?.()?96:turnLimit))throw Error('本轮已达到运行保护上限，已保留回执，可续跑。');
     if(run.stalled>=stalledLimit)throw Error('工具连续未取得新结果，已保留回执，可补充信息或续跑。');
     const response=await request(run,{replyOnly});
     if(response?.status!=='completed'||!Array.isArray(response.output))throw Error('模型响应未完成，可继续本轮。');
@@ -101,7 +101,8 @@ export async function runAgent(run,{request,dispatch,save,additions=()=>[],onSte
      }
     }catch(error){
      if(signal?.aborted)throw error;
-     result={status:'error',reason:String(error.message??error)};
+     result={status:error.constructor?.name==='AssistantSyncPending'?'pending':'error',reason:String(error.message??error),
+      ...(error.constructor?.name==='AssistantSyncPending'?{code:'retry_same_operation'}:{})};
     }
     if(!result)result={status:'error',reason:'工具没有返回结果'};
     const progressed=!result.replayed&&['ok','saved','undone'].includes(result.status)&&

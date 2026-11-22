@@ -1,6 +1,6 @@
 {
   "name": "airplane-pwa",
-  "version": "0.9.21",
+  "version": "0.9.22",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -16,7 +16,8 @@
     "test:agent-eval": "node tests/agent-eval.mjs",
     "test:medical-ui": "node tests/medical-browser.mjs",
     "test:inventory-ui": "node tests/package-browser.mjs",
-    "dev:api": "wrangler dev --local --config worker/wrangler.toml --port 8787"
+    "dev:api": "wrangler dev --local --config worker/wrangler.toml --port 8787",
+    "test:owner-ui": "node tests/owner-browser.mjs"
   },
   "devDependencies": {
     "miniflare": "5.20261118.0-beta",

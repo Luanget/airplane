@@ -137,6 +137,20 @@ export function taskJournal(account={}){
     read.onsuccess=guard(()=>{if(!read.result)store.put(seal(task),key);});
    });
   },
+  replaceOwnerRecord(table,id,before,after){
+   if(table!=='tasks'&&(table!=='runs'||!id.startsWith('media:')))throw Error('只能编辑当前账户的任务日志或归档附件');
+   return transact('readwrite',(store,guard,recent)=>{
+    const key=prefix+id,read=store.get(key);
+    read.onsuccess=guard(()=>{
+     if(JSON.stringify(open(read.result)??null)!==JSON.stringify(before))throw Error('日志或原件已变更');
+     if(after===null)store.delete(key);else store.put(seal(after),key);
+     if(table==='tasks'){
+      const index=recent.get(owner);
+      index.onsuccess=guard(()=>recent.put((after?[key]:[]).concat((index.result??[]).filter(item=>item!==key)).slice(0,40),owner));
+     }
+    });
+   },table);
+  },
   redactThread(id){
    return transact('readwrite',(store,guard)=>{
     const rows=store.getAll(accountKeys());

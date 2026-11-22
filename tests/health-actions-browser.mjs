@@ -124,7 +124,7 @@ try{
  await open();
  await settings.getByText('数据权限',{exact:true}).click();
  const grant=settings.getByRole('checkbox',{name:'自动执行健康记录'});
- const full=settings.getByRole('checkbox',{name:'完整数据权限'});
+ const full=settings.getByRole('checkbox',{name:'所有者完全控制'});
  assert.equal(await grant.isChecked(),false);
  await grant.check();assert.equal(await full.isChecked(),false);await close();
  const say=async text=>{

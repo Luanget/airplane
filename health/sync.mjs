@@ -143,7 +143,7 @@ function chooseBaseline(current,next,selected,dates){
  }
 }
 
-function verifyGraph(state,baseline){
+export function verifyGraph(state,baseline){
  const inventory=new Map(inventoryWithMoves(state).map(row=>[row.id,row]));
  const batches=new Map((state.local.batches??[]).map(row=>[row.id,row]));
  const effective=events(state,'foods').filter(actualFood);
@@ -154,6 +154,7 @@ function verifyGraph(state,baseline){
  const report=(id,text)=>problems.push(id+' · '+text);
  const priorMoves=new Map(baseline.local.stockMoves.map(row=>[row.id,row]));
  for(const row of state.local.stockMoves){
+  if(row.stockArchived)continue;
   if(row.linkedFoodId&&row.delta<0)linked.set(row.linkedFoodId,(linked.get(row.linkedFoodId)??0)-row.delta);
   // Keep historical orphan records intact. New or changed links must be valid.
   if(same(row,priorMoves.get(row.id)))continue;
@@ -162,7 +163,8 @@ function verifyGraph(state,baseline){
   if(row.linkedFoodId&&!foods.has(row.linkedFoodId))report(row.id,'扣库流水没有关联的实际饮食');
  }
  for(const row of effective){
-  if(row.stockQty>0&&!same(row,oldFoods.get(row.id))&&Math.abs(row.stockQty-(linked.get(row.id)??0))>1e-6)
+  if(row.stockQty>0&&!same(row,oldFoods.get(row.id))&&!state.local.stockMoves.some(move=>move.stockArchived&&move.linkedFoodId===row.id)&&
+   Math.abs(row.stockQty-(linked.get(row.id)??0))>1e-6)
    report(row.name,'记录份量与关联扣库流水不一致');
  }
  const previousLots=new Map((baseline.local.batches??[]).map(row=>[row.id,row]));

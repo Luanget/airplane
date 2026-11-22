@@ -74,8 +74,20 @@ export function editDocument(original,operations){
  let next=structuredClone(original);
  for(const operation of operations){
   const {op,path,value}=operation??{};
-  if(typeof path!=='string'||!['test','add','replace','remove'].includes(op)||
-   (op!=='remove'&&!Object.hasOwn(operation,'value')))throw Error('JSON Patch 操作无效');
+  if(typeof path!=='string'||!['test','add','replace','remove','copy','move'].includes(op)||
+   (!['remove','copy','move'].includes(op)&&!Object.hasOwn(operation,'value')))throw Error('JSON Patch 操作无效');
+  if(op==='copy'||op==='move'){
+   const from=documentPath(operation.from),destination=documentPath(path);
+   if(op==='move'&&destination.length>from.length&&from.every((part,index)=>part===destination[index]))
+    throw Error('不能把数据移入自己的子路径');
+   const copied=structuredClone(readDocumentPath(next,operation.from));
+   if(op==='move'){
+    if(operation.from===path)continue;
+    next=changeAt(next,operation.from,'remove');
+   }
+   next=changeAt(next,path,'add',copied);
+   continue;
+  }
   if(op==='add'||op==='replace')verifyValue(value);
   next=changeAt(next,path,op,value);
  }

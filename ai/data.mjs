@@ -90,7 +90,7 @@ const rows=(values,key='id')=>values.map(value=>({...value,id:value[key]}));
 const entries=(values,field)=>Object.entries(values??{}).map(([id,value])=>({...(field?{[field]:value}:value),id}));
 const currentSettings=store=>({model:manualChatModel(store)?.id??'auto',history:readHistoryOption(store).id});
 
-function healthRows(state,dataset){
+export function healthRows(state,dataset){
  switch(dataset){
   case 'health_settings':return [state.settings];
   case 'foods':case 'weights':case 'activities':return events(state,dataset);
@@ -102,7 +102,7 @@ function healthRows(state,dataset){
   default:return state.local[{stock_moves:'stockMoves'}[dataset]??dataset]??[];
  }
 }
-function financeRows(state,dataset){
+export function financeRows(state,dataset){
  switch(dataset){
   case 'finance_settings':return [state.prefs??{}];
   case 'budgets':return entries(state.budgets,'amount');
@@ -287,7 +287,7 @@ function updateHealth(state,dataset,id,previous,fields,action,today){
  return updated;
 }
 
-function updateFinance(state,dataset,id,previous,fields,action){
+export function updateFinance(state,dataset,id,previous,fields,action,{owner=false}={}){
  if(dataset==='finance_settings'){
   const selected=state.prefs??={};
   for(const [key,type] of [['lastIncomeCategoryId','income'],['lastExpenseCategoryId','expense']]){
@@ -312,7 +312,7 @@ function updateFinance(state,dataset,id,previous,fields,action){
  }
  if(dataset==='categories'&&updated){
   check(updated.name&&updated.type,'分类需要名称和收支类别');
-  check(!previous||previous.type===updated.type,'变更分类类别请新建分类');
+  check(owner||!previous||previous.type===updated.type,'变更分类类别请新建分类');
   updated={custom:true,order:state.categories.length,hidden:false,icon:'more',color:'#9AA09A',...updated};
  }
  if(dataset==='balances'&&updated){
@@ -323,7 +323,7 @@ function updateFinance(state,dataset,id,previous,fields,action){
  }
  state[key]=replaceRow(state[key]??[],id,updated);
  if(dataset==='categories'){
-  check(['income','expense'].every(type=>state.categories.some(row=>row.type===type&&!row.hidden)),'收入和支出至少各保留一个可用分类');
+  check(owner||['income','expense'].every(type=>state.categories.some(row=>row.type===type&&!row.hidden)),'收入和支出至少各保留一个可用分类');
   if(action==='delete')for(const key of ['lastIncomeCategoryId','lastExpenseCategoryId'])if(state.prefs?.[key]===id)state.prefs[key]=null;
  }
  validateFinanceBackup(state);

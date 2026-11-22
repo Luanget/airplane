@@ -62,8 +62,8 @@ export function ensureContainers(state){
  };
  for(const sku of skuRows){
   if(!sku.active||isStockReference(sku))continue;
-  const skuLots=lots.filter(lot=>lot.foodId===sku.id);
-  const disposition=sku.unit==='g'&&auditedDisposition(state,sku);
+  const skuLots=lots.filter(lot=>lot.foodId===sku.id&&!lot.stockArchived);
+  const disposition=sku.unit==='g'&&!sku.stockHistory?.length&&auditedDisposition(state,sku);
   if(disposition?.event==='unopened_bottle_given_away'){
    const spec=packageInfo(sku);
    const container=newContainer(sku,virtualBatch(sku.id),0,{kind:'瓶',stockMode:'grossSnapshot',stockAmount:sku.qty,openingBaselinePartial:true,
@@ -75,9 +75,10 @@ export function ensureContainers(state){
   }
   const defaultSpec=packageSpec(sku);
   if(defaultSpec||skuLots.some(lot=>lot.packageSpec)){
-   const receipts=local.stockMoves.filter(row=>row.foodId===sku.id&&!row.batchId&&!row.containerId&&row.delta>0)
+   const receipts=local.stockMoves.filter(row=>row.foodId===sku.id&&!row.stockArchived&&!row.batchId&&!row.containerId&&row.delta>0&&!row.ownerCount)
     .map(row=>({id:'receipt:'+row.id,quantity:row.delta,costCents:row.costCents,origin:'receipt'}));
-   const groups=[...skuLots.filter(lot=>!lot.portion),{id:virtualBatch(sku.id),quantity:sku.qty,costCents:null,origin:'opening'},...receipts];
+   const opening=sku.stockHistory?.length?'recount:'+sku.stockHistory.at(-1).operationId:virtualBatch(sku.id);
+   const groups=[...skuLots.filter(lot=>!lot.portion),{id:opening,quantity:sku.qty,costCents:null,origin:'opening'},...receipts];
    for(const lot of groups){
     const declared=lot.packageSpec;
     const spec=declared?packageSpec({...sku,packageKind:declared.kind,packageSize:declared.size,packageUnit:declared.unit}):defaultSpec;
@@ -110,10 +111,11 @@ export function ensureContainers(state){
  const candidates=Object.values(local.edits?.foods??{}).filter(Boolean).concat(local.foods);
  for(const food of candidates){
   if(!food.foodId||!actualFood(food)||!validDate(food.date)||covered.has(food.id))continue;
-  const stock=local.stockMoves.filter(row=>row.linkedFoodId===food.id&&row.delta<0);
+  const stock=local.stockMoves.filter(row=>row.linkedFoodId===food.id&&row.delta<0&&!row.stockArchived);
+  if(local.stockMoves.some(row=>row.linkedFoodId===food.id&&row.stockArchived))continue;
   const weighed=!!food.weighing;
   const stockAmount=round(stock.reduce((sum,row)=>sum-row.delta,0),6);
-  const options=[...known.values()].filter(row=>row.foodId===food.foodId&&(!food.batchId||row.batchId===food.batchId));
+  const options=[...known.values()].filter(row=>!row.stockArchived&&row.foodId===food.foodId&&(!food.batchId||row.batchId===food.batchId));
   const container=options.find(row=>{
    const sitting=packageReading(row,packageJournal(state,row.id));
    return onShelf(sitting)&&(row.stockMode==='whole'?
@@ -140,6 +142,7 @@ export function packagesFor(state,foodId){
   const number=(numbers.get(container.foodId)??0)+1;
   numbers.set(container.foodId,number);
   const view={...packageReading(costed,journal),number};
+  if(container.stockArchived)return {...view,status:'retired'};
   const lot=lots.get(container.batchId);
   if(container.stockMode==='portion'||container.stockMode==='estimated'&&container.origin==='batch'){
    if(!lot)return {...view,status:'retired'};

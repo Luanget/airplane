@@ -99,12 +99,13 @@ documentAccess.checked=hasDocumentAccess(workspace.finance);
 documentAccess.onchange=()=>{
  try{setDocumentAccess(workspace.finance,documentAccess.checked);}
  catch(err){documentAccess.checked=hasDocumentAccess(workspace.finance);report(err);}
+ refreshWriteStatus();
 };
 const refreshModels=mountModelSettings($('#assistant-model-panel'),workspace.finance);
 const refreshTasks=mountTaskSettings($('[data-task-settings]'),journal,workspace.finance,demo);
 function refreshWriteStatus(){
  const allowed=composer.elements.allowRead.checked;
- $('[data-write-status]').textContent=allowed?['健康自动写入 '+(hasHealthAuto(workspace.finance)?'开':'关'),
+ $('[data-write-status]').textContent=allowed&&hasDocumentAccess(workspace.finance)?'所有者完全控制已开启':allowed?['健康自动写入 '+(hasHealthAuto(workspace.finance)?'开':'关'),
   '财务自动记账 '+(financeAutomation(workspace.finance).enabled?'开':'关')].join(' · '):'本轮本机读取和写入均关闭';
 }
 for(const input of [healthAuto,financeAuto,composer.elements.allowRead])input.addEventListener('change',()=>queueMicrotask(refreshWriteStatus));
@@ -363,7 +364,7 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
     undo.onclick=async()=>{
      if(busy||saving||undo.disabled)return;
      saving=true;undo.disabled=true;lock();
-     try{undo.textContent=await (['meal_plan','stock_receipt'].includes(token.kind)?nativeUi.undo(token):undoAgentTask(workspace,token));await journal.undo(token.id).catch(()=>{});}
+     try{undo.textContent=await (['meal_plan','stock_receipt','owner_change'].includes(token.kind)?nativeUi.undo(token):undoAgentTask(workspace,token));await journal.undo(token.id).catch(()=>{});}
      catch(err){report(err);undo.disabled=false;}
      finally{saving=false;lock();}
     };

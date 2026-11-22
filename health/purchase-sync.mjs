@@ -1,6 +1,7 @@
 import {addConfirmedTransactions,freshData,readFinance,replaceFinance} from '../finance-storage.mjs';
 import {purchaseForTransaction} from './purchases.mjs';
-import {finishPurchaseUpdate,readPurchaseUpdate,readState,saveState,stagePurchaseUpdate} from './storage.mjs';
+import {finishPurchaseUpdate,readOwnerChange,readPurchaseUpdate,readState,saveState,stagePurchaseUpdate} from './storage.mjs';
+import {readOwnerPart,samePart,writeOwnerPart} from '../ai/owner-store.mjs';
 
 export const readPendingPurchase=readPurchaseUpdate;
 export class AssistantSyncPending extends Error {}
@@ -36,6 +37,7 @@ function status(finance,change){
  return 'conflict';
 }
 async function settle(account,job){
+ if(job.change.kind==='owner')return settleOwner(account,job);
  const finance=readFinance(account.finance);
  const change=job.change,assistant=change.kind==='assistant',receipt=change.kind==='receipt';
  const phase=status(finance,change);
@@ -68,6 +70,51 @@ async function settle(account,job){
   if(assistant||receipt)throw new AssistantSyncPending('财务已保存，健康账本待同步。请继续同步。',{cause:err});
   throw err;
  }
+}
+async function settleOwner(account,job,{cancel=false}={}){
+ const parts=job.change.parts;
+ try{
+  const values=await Promise.all(parts.map(part=>readOwnerPart(account,part)));
+  const phase=parts.map((part,index)=>samePart(values[index],part.after)?'after':samePart(values[index],part.before)?'before':'conflict');
+  if(cancel||phase.includes('conflict')){
+   for(let i=parts.length-1;i>=0;i--)if(phase[i]==='after')await writeOwnerPart(account,parts[i],'after','before');
+   const original=await finishPurchaseUpdate(account,job.id,false);
+   if(cancel)return original;
+   throw Error('其他页面改动了数据，本次已回滚。重新查询后可重试原指令。');
+  }
+  for(const [i,part] of parts.entries())if(phase[i]==='before')await writeOwnerPart(account,part);
+  return await finishPurchaseUpdate(account,job.id,true);
+ }catch(error){
+  if(!(await readPurchaseUpdate(account)))throw error;
+  throw new AssistantSyncPending('所有者事务待恢复：'+error.message,{cause:error});
+ }
+}
+export function updateOwnerLedgers(account,state,expected,{record,parts},guard){
+ return locked(account,async()=>{
+  const saved=await readOwnerChange(account,record.id);
+  if(saved)return saved;
+  const pending=await readPurchaseUpdate(account);
+  if(pending){
+   if(pending.change.kind!=='owner'||pending.change.record.id!==record.id)
+    throw new AssistantSyncPending('有一项账本操作待恢复，请用原任务重试或恢复待办。');
+   await settleOwner(account,pending);
+   return readOwnerChange(account,record.id);
+  }
+  for(const part of parts)if(!samePart(await readOwnerPart(account,part),part.before))
+   throw Error('读取后账本已有变更，请重新查询再编辑。');
+  const job=await stagePurchaseUpdate(account,state,expected,{kind:'owner',record,parts},guard);
+  await settleOwner(account,job);
+  const verified=await readOwnerChange(account,record.id);
+  if(!verified)throw Error('未能验证所有者事务回执，请用原任务重试。');
+  return verified;
+ });
+}
+export function resumeOwnerLedgers(account,id){
+ return locked(account,async()=>{
+  const pending=await readPurchaseUpdate(account);
+  if(pending?.change.kind==='owner'&&pending.change.record.id===id)await settleOwner(account,pending);
+  return readOwnerChange(account,id);
+ });
 }
 function locked(account,fn){
  return globalThis.navigator?.locks?.request('airplane-purchases:'+(account.id??'device'),fn)??fn();
@@ -152,6 +199,7 @@ export function abandonPurchaseUpdate(account){
  return locked(account,async()=>{
   const job=await readPurchaseUpdate(account);
   if(!job)return readState(account);
+  if(job.change.kind==='owner')return settleOwner(account,job,{cancel:true});
   const finance=readFinance(account.finance);
   const phase=status(finance,job.change);
   if(phase==='applied'||['assistant','receipt'].includes(job.change.kind)&&phase==='conflict')

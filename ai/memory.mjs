@@ -107,16 +107,16 @@ export function memoryLibrary(store,legacyKey){
    }).map(({id,name,text,topic,updatedAt,constraint})=>({id,name,text,topic,updatedAt,
     constraint:constraint===undefined&&topic==='chicken-one'?{kind:'food_meal_limit',food:'鸡胸',maxMeals:1}:constraint??null}));
  }
- function learnHabit(update,source){
-  if(!automaticMemoryEnabled(store))throw Error('本机自动记忆已关闭');
+ function learnHabit(update,source,{owner=false}={}){
+  if(!owner&&!automaticMemoryEnabled(store))throw Error('本机自动记忆已关闭');
   const {name,text,evidence,constraint}=update;
-  if(!source.includes(evidence)||!evidence.trim()||memoryKind({name,text})!=='habit')throw Error('长期习惯需要本轮原话依据');
+  if(!owner&&(!source.includes(evidence)||!evidence.trim()||memoryKind({name,text})!=='habit'))throw Error('长期习惯需要本轮原话依据');
   if(/sk-[\w-]{12,}|\b(?:api[ -]?key|password|bearer)\b|密码|密钥|验证码|身份证/i.test([name,text,evidence].join(' ')))
    throw Error('敏感凭据不能写入记忆');
   const {raw,rows}=read(),topic=preferenceTopic(text)??update.topic;
   const previous=rows.find(row=>row.id!==PROFILE_ID&&row.topic===topic&&memoryKind(row)==='habit');
-  if(previous?.enabled===false)throw Error('此主题被手动停用，请使用本轮明确的偏好');
-  if(previous?.text===text&&JSON.stringify(previous.constraint??null)===JSON.stringify(constraint??null))return previous;
+  if(!owner&&previous?.enabled===false)throw Error('此主题被手动停用，请使用本轮明确的偏好');
+  if(previous?.enabled&&previous.text===text&&JSON.stringify(previous.constraint??null)===JSON.stringify(constraint??null))return previous;
   const priorHistory=previous?.history??[];
   const record={...previous,id:previous?.id??crypto.randomUUID(),name,text,topic,enabled:true,kind:'habit',
    origin:'conversation',constraint,priority:previous?.priority??50,updatedAt:new Date().toISOString(),evidence,

@@ -20,7 +20,7 @@ export function setDocumentAccess(store,allowed){
  else store.removeItem(ACCESS_KEY);
 }
 
-const names={
+export const documentNames={
  finance:'财务账本',health:'健康账本',finance_backup:'财务恢复快照',health_backup:'恢复快照',
  finance_draft:'财务录入草稿',memory:'记忆',skills:'旧版偏好备份',legacy_skill:'旧版个人 Skill',
  conversations:'完整对话',model:'模型设置',history:'上下文设置',local_usage:'本机用量估算'
@@ -93,7 +93,7 @@ function shape(value){
 
 export async function readAppDocument(workspace,{document,path,view}){
  if(!hasDocumentAccess(workspace.finance))throw Error('完整数据权限已关闭');
- if(document==='catalog')return {documents:names};
+ if(document==='catalog')return {documents:documentNames};
  const {value}=await openDocument(workspace,document);
  const safe=document==='health'||document==='health_backup'?redactMedicalDocument(value):
   document==='conversations'?publicConversations(value):value;
@@ -101,7 +101,7 @@ export async function readAppDocument(workspace,{document,path,view}){
  return {document,path,...(view==='shape'?{shape:shape(item)}:{value:item})};
 }
 
-function validateDocument(name,value){
+export function validateDocument(name,value){
  if(value===null)return;
  const valid={
   finance:()=>{validateFinanceBackup(value);return ['transactions','categories','budgets'].every(key=>Object.hasOwn(value,key));},
@@ -121,7 +121,7 @@ function validateDocument(name,value){
   local_usage:()=>Number.isSafeInteger(value)&&value>=0
  };
  try{if(valid[name]())return;}catch{}
- throw Error(names[name]+'修改后的格式无效。');
+ throw Error(documentNames[name]+'修改后的格式无效。');
 }
 
 export async function prepareDocumentEdit(workspace,result,finishReview){
@@ -136,8 +136,8 @@ export async function prepareDocumentEdit(workspace,result,finishReview){
  if(name==='conversations'&&!equal(privateMessages(before),privateMessages(next)))
   throw Error('请通过聊天界面删除含健康档案的对话。');
  validateDocument(name,next);
- const message=names[name]+'已保存。';
- return {name:names[name],operations,async save(){
+ const message=documentNames[name]+'已保存。';
+ return {name:documentNames[name],operations,async save(){
   if(!hasDocumentAccess(workspace.finance))throw Error('完整数据权限已关闭');
   const latest=await openDocument(workspace,name);
   if(!equal(latest.value,before))throw changed();
@@ -145,6 +145,6 @@ export async function prepareDocumentEdit(workspace,result,finishReview){
   finishReview?.(value,message);
   const modified=!equal(before,next);
   if(!equal(before,value))await latest.write(value);
-  return modified?message:names[name]+'没有变化。';
+  return modified?message:documentNames[name]+'没有变化。';
  }};
 }

@@ -337,7 +337,7 @@ function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,
   const evidence=provenance[index];
   if(evidence){
    const sku=step.name&&step.source!=='one_off'&&['eat','weigh','discard','split'].includes(step.kind)?skuFor(home(next),step):null;
-   verifyNativeStep(next,step,evidence,sku);
+   if(!evidence.owner)verifyNativeStep(next,step,evidence,sku);
    if(!step.evidence)step={...step,evidence:evidence.texts[0]??''};
   }
   const date=dateFor(step,today,{date:reference.date??foodDate},!!evidence);

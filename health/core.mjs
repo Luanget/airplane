@@ -71,7 +71,7 @@ export function recoverLegacyPortions(state){
  const seen=new Set();
  for(const [index,row] of rows.entries()){
   const id=String(row?.['食品ID']||`legacy-inventory-${index}`), sku=catalog.get(id);
-  if(!sku||seen.has(id))continue;
+  if(!sku||seen.has(id)||sku.stockHistory?.length)continue;
   seen.add(id);
   if(sku.unit!=='g'||!isOnHand(sku)||looseUse.has(id))continue;
   const snapshots=[...String(row['库存基准']??'').normalize('NFKC')
@@ -317,12 +317,14 @@ export function inventoryWithMoves(state){
  const adjusted=new Map();
  const opened=new Set();
  for(const move of state.local.stockMoves){
+  if(move.stockArchived)continue;
   if(move.opening)opened.add(move.foodId);
   adjusted.set(move.foodId,(adjusted.get(move.foodId)??0)+move.delta);
  }
  const batchQuantities=new Map(),lots=new Map((state.local.batches??[]).map(row=>[row.id,row]));
- for(const row of lots.values())if(row.openingPortion)batchQuantities.set(row.foodId,(batchQuantities.get(row.foodId)??0)+row.quantity);
- for(const move of state.local.stockMoves)if(lots.has(move.batchId))batchQuantities.set(move.foodId,(batchQuantities.get(move.foodId)??0)+move.delta);
+ for(const row of lots.values())if(row.openingPortion&&!row.stockArchived)batchQuantities.set(row.foodId,(batchQuantities.get(row.foodId)??0)+row.quantity);
+ for(const move of state.local.stockMoves)if(!move.stockArchived&&lots.has(move.batchId)&&!lots.get(move.batchId).stockArchived)
+  batchQuantities.set(move.foodId,(batchQuantities.get(move.foodId)??0)+move.delta);
  const normalize=value=>String(value??'').normalize('NFKC').trim().toLowerCase();
  const catalog=state.legacy.catalogs??{};
  return [...state.legacy.inventory,...(state.local.inventory??[])].map(item=>{
@@ -341,9 +343,9 @@ export function inventoryWithMoves(state){
 }
 export function batchBalances(state,foodId){
  const balances=new Map();
- for (const m of state.local.stockMoves) if (m.batchId) balances.set(m.batchId,(balances.get(m.batchId)??0)+m.delta);
+ for (const m of state.local.stockMoves) if (m.batchId&&!m.stockArchived) balances.set(m.batchId,(balances.get(m.batchId)??0)+m.delta);
  return (state.local.batches??[]).filter(b=>!foodId||b.foodId===foodId)
-   .map(b=>({...b,remaining:round((b.openingPortion===true?b.quantity:0)+(balances.get(b.id)??0),6)}))
+   .map(b=>({...b,remaining:b.stockArchived?0:round((b.openingPortion===true?b.quantity:0)+(balances.get(b.id)??0),6)}))
    .sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id));
 }
 export function availableBatches(state,foodId,date,editId){
@@ -383,7 +385,7 @@ export function allocateStock(state,foodId,qty,batchId,date) {
   if(b.remaining<=0 || batchId && b.id!==batchId || date&&b.date>date)continue;
   const part=Math.min(remaining,b.remaining);
   // Allocate the remaining cost. Reversals return exactly the original cents.
-  const allocated=state.local.stockMoves.filter(m=>m.batchId===b.id&&m.delta<0).reduce((n,m)=>n+(m.costCents??0),0);
+  const allocated=state.local.stockMoves.filter(m=>m.batchId===b.id&&m.delta<0&&!m.stockArchived).reduce((n,m)=>n+(m.costCents??0),0);
   const cents=b.costCents==null?null:Math.round(part/b.remaining*Math.max(0,b.costCents-allocated));
   allocations.push({batchId:b.id,qty:part,costCents:cents});
   remaining=round(remaining-part,6);
@@ -409,7 +411,7 @@ export function addFood(state,fields,id,newId) {
  const entry={id:id??newId??makeId('food'),source:'manual',date,time:normalizeClock(time),meal,name:name.trim(),portion:portion||'',status,nutrition,
   foodId:foodId||null,stockQty:qty,amount:numeric(amount),...(amountUnit?{amountUnit}:{}),...(weighing?{weighing}:{}),batchId:batchId||null,createdAt,quality,uncertainty,cost:explicitCost,costSource:fields.costEstimated?'estimated_package':explicitCost===null?'inventory':'manual'};
  const oldMoves=state.local.stockMoves;
- state.local.stockMoves=oldMoves.filter(m=>m.linkedFoodId!==entry.id);
+ state.local.stockMoves=oldMoves.filter(m=>m.linkedFoodId!==entry.id||m.stockArchived);
  try{
   const affected=new Set(oldMoves.filter(m=>m.linkedFoodId===entry.id).map(m=>m.foodId));
   if(status==='actual'&&foodId&&qty>0){
@@ -446,10 +448,10 @@ export function deleteEvent(state,key,id) {
  const previousEvent=events(state,key).find(row=>row.id===id);
  const related=key==='foods'&&managedFoodPackage(state,id);
  const older=related&&hasLaterPackageReading(related.journal,related.event);
- const moves=state.local.stockMoves.filter(m=>m.linkedFoodId===id);
+ const moves=state.local.stockMoves.filter(m=>m.linkedFoodId===id&&!m.stockArchived);
  if(key==='foods'&&!older){
   const previous=state.local.stockMoves;
-  state.local.stockMoves=previous.filter(m=>m.linkedFoodId!==id);
+  state.local.stockMoves=previous.filter(m=>m.linkedFoodId!==id||m.stockArchived);
   try {for(const m of moves)assertBalances(state,m.foodId);}catch(err){state.local.stockMoves=previous;throw err;}
  }
  if(previousEvent&&related)voidPackageFood(state,id,previousEvent.date);

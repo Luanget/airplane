@@ -17,6 +17,8 @@ import {identifyAttachments} from '../ai/conversation-evidence.mjs';
 import {threadBook} from '../ai/threads.mjs';
 import {modelRates,estimatedCost,usageTokens} from '../ai/usage.mjs';
 import {readFinance,replaceFinance,STORAGE_KEY} from '../finance-storage.mjs';
+import {setDocumentAccess} from '../ai/documents.mjs';
+import {attachOwnerStore,historicalDate,seedOwnerLedger} from './owner-fixture.mjs';
 import {assistantFixture} from './health-action-fixture.mjs';
 import {orderFinance} from './order-agent-fixture.mjs';
 
@@ -218,16 +220,45 @@ const cases=[
   assert.equal(foods(w).length,0);assert.equal(qty(w,'fixture-greens'),900);assert.equal(billing(w),0);
   assert.equal(w.state.local.purchases.filter(row=>row.stockOnly).length,1);
   assert.ok(run.receipts.some(row=>row.result.status==='undone'&&row.result.receipt?.operationId));
- }}
+ }},
+ {id:'owner-refund-correction',owner:true,turns:[{text:'把2020年8月18日合成订单的39.67元支出减去0.07元退款，这笔账按39.60元记。现有记录直接改，不单独记退款。'}],
+  verify:w=>{assert.deepEqual(readFinance(w.finance).payload.transactions.map(row=>[row.id,row.amount]),[['old-expense',39.6]]);
+   assert.equal(w.state.local.purchases[0].paymentCents,3960);}},
+ {id:'owner-count-precise',owner:true,turns:[{text:'合成鸡蛋现在不是按克算。我重新盘点有30个，改成按个的库存，奶和芹菜都保持原样，旧记录和采购付款保留。'},
+  {text:'再记录今天午饭吃掉两个合成鸡蛋。'}],verify:w=>{
+   const eggs=inventoryWithMoves(w.state).filter(row=>row.name==='合成鸡蛋');
+   assert.deepEqual(eggs.map(row=>[row.id,row.qty,row.unit]),[['egg',28,'个']]);
+   assert.equal(qty(w,'milk'),1000);assert.equal(qty(w,'celery'),600);
+   assert.equal(readFinance(w.finance).payload.transactions[0].amount,39.67);
+   assert.equal(events(w.state,'foods').find(row=>row.date===historicalDate).amount,200);}},
+ {id:'owner-history-multi',owner:true,turns:[{text:'把2020年8月18日合成鸡蛋那条实际饮食从午餐改到晚餐，量改成150克。再补记那天晚餐的50克合成外食炖菜，不知道营养和成本，也没有库存。最后询问当天账目一共有几笔。'}],
+  verify:(w,run)=>{const rows=foods(w,historicalDate);
+   assert.deepEqual(rows.map(row=>[row.meal,row.amount]).sort((a,b)=>a[1]-b[1]),[['晚餐',50],['晚餐',150]]);
+   assert.equal(rows.find(row=>row.amount===50).foodId,null);
+   assert.equal(qty(w,'egg'),1850);
+   assert.ok(run.receipts.some(row=>row.tool==='query_records'&&row.result.status==='ok'));}},
+ {id:'owner-medical-multi-turn',owner:true,turns:[{text:'给我补录2021年3月12日合成体检中心报告，收缩压122 mmHg，原报告参考90–139 mmHg。不确定值留空。'},
+  {text:'上一条体检的收缩压看错了，是128 mmHg，直接改原报告的指标。另外补一句当时用户自述头痛。'}],
+  verify:w=>{const data=w.state.local.medical;
+   assert.equal(data.reports.length,1);assert.deepEqual(data.measurements.map(row=>row.value),[128]);
+   assert.match(data.symptoms[0]?.description??'' ,/头痛/);}}
+
 ];
 
 async function runCase(model,example){
  const w=world(),book=threadBook(w.finance),rows=new Map(),tasks=new Map(),journal={
   readRun:async id=>rows.get(id),recent:async()=>[...tasks.values()].reverse()
- },tools=createAgentTools(w,{book,journal}),history=[],metric={model,case:example.id,calls:[],turns:[],success:false};
+ },history=[],metric={model,case:example.id,calls:[],turns:[],success:false};
  let run,snapshot,interrupted=false;
  const started=performance.now();
  try{
+  if(example.owner){
+   const ledger=orderFinance(today);
+   w.state.local.inventory=w.state.local.inventory.filter(row=>row.id!=='fixture-egg');
+   seedOwnerLedger(w.state,ledger);replaceFinance(w.finance,ledger,readFinance(w.finance).primary);
+   setDocumentAccess(w.finance,true);attachOwnerStore(w,()=>w.state,next=>{w.state=next;});
+  }
+  const tools=createAgentTools(w,{book,journal});
   example.setup?.(w);
   for(const [index,turn] of example.turns.entries()){
    const id=example.id+'-'+index,{files,group}=identifyAttachments(await turn.media?.()??[],'media:'+id);
@@ -248,7 +279,7 @@ async function runCase(model,example){
      }
      if(count>=invocationLimit)throw Error('Evaluation request cap');
      count++;
-     const request=nativeRequest(state,agentInstructions,state.allowRead?tools.definitions:[],options);
+     const request=nativeRequest(state,agentInstructions+(state.allowRead?tools.instructions():''),state.allowRead?tools.definitions:[],options);
      if(state.allowRead)request.instructions+='\n当前启用的本机习惯和工作流程：'+JSON.stringify(tools.context())+
       '\n用户消息 ID（按最近顺序）：'+JSON.stringify(state.userSources.map(row=>({id:row.id,current:!!row.current,text:row.text})))+
       '\n已附在本任务的附件 ID：'+state.attachments.map(row=>row.id).join('、');
@@ -294,7 +325,7 @@ await Promise.all(Array.from({length:Math.min(3,jobs.length)},async()=>{
  while(cursor<jobs.length){
   const {model,entry}=jobs[cursor++],result=await runCase(model,entry);
   reports.push(result);
-  console.error(JSON.stringify({model,case:entry.id,success:result.success,calls:result.calls.length,error:result.error}));
+  console.error(JSON.stringify({model,case:entry.id,success:result.success,calls:result.calls.length,error:result.error,failed:result.success?[]:result.steps.filter(row=>['error','blocked','conflict'].includes(row.status)).map(row=>row.reason)}));
  }
 }));
 console.log(JSON.stringify(reports,null,2));
