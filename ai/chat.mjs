@@ -31,7 +31,7 @@ import {displayUsage,modelRates,totalUsage} from './usage.mjs';
 import {executeHealthAction,healthActionReceipt,healthActionPreview,healthContext,hasHealthAuto,readPackages,READ_LIMIT,
  setHealthAuto,statedDate,undoHealthAction} from './health-actions.mjs';
 import {mountAgentSettings} from './agent-settings.mjs';
-import {assertSkillAction,selectSkills,skillCatalog} from './skills.mjs';
+import {selectSkills,skillCatalog} from './skills.mjs';
 import {habitPolicy} from './health-profile.mjs';
 import {healthReport,renderHealthReport} from './health-report.mjs';
 import {groupMealPhotos} from './meal-photos.mjs';
@@ -550,10 +550,6 @@ for(const button of document.querySelectorAll('[data-example]')){
 
 function requiresConfirmation(proposal){
  const {mode,result}=proposal;
- const associated={entry:'eat',food_edit:'correct',activity:'activity',portions:'split',inventory:'inventory',purchase:'purchase',plan:'next_meal'}[mode];
- if(associated){
-  try{assertSkillAction(skillCatalog(workspace.finance),associated);}catch{return true;}
- }
  if(mode==='document_edit'){
   // Conversation-only metadata edits have a narrowly scoped shortcut.
   if(result.document!=='conversations')return true;
@@ -808,12 +804,7 @@ async function saveHealthProposal(plan,flow,ticket,source,confirmed=false){
  try{
   const options=healthOptions(flow,ticket,confirmed);
   const base=flow.healthBase??await workspace.readHealth();
-  return await executeHealthAction(workspace,base,plan,{...options,signal:controller.signal,guard:()=>{
-   options.guard();
-   const currentSkills=skillCatalog(workspace.finance);
-   if(flow.photoSteps)assertSkillAction(currentSkills,'photo_meal');
-   for(const step of plan.steps)assertSkillAction(currentSkills,step.kind);
-  }});
+  return await executeHealthAction(workspace,base,plan,{...options,signal:controller.signal});
  }finally{
   activeRequest=null;stop.hidden=true;
  }
@@ -930,7 +921,6 @@ async function complete(response,flow,source,ticket){
  }
  if(ticket&&response.proposal?.mode==='photo_meal'){
   try{
-   assertSkillAction(skillCatalog(workspace.finance),'photo_meal');
    const grouped=groupMealPhotos(response.proposal.result,flow.input.text,flow.options.photos?.length??0);
    if(!grouped.plan.steps.length){echoHealth(ticket,{text:grouped.notes.join('；')||'这组照片暂时没有可记录的食物。'},source);return;}
    flow.photoSteps=grouped.photoSteps;flow.photoReview=grouped.review;flow.photoNotes=grouped.notes;

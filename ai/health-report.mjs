@@ -1,9 +1,11 @@
 import {displayDay} from '../calendar.mjs';
-import {NUTRIENTS,actualFood,cycleForDate,energyForDay,events,foodCost,inventoryWithMoves,round,
+import {NUTRIENTS,actualFood,addDays,cycleForDate,energyForDay,events,foodCost,inventoryWithMoves,round,
  sampleNutrientSum,validDate,weightTrend} from '../health/core.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {dietGoals,isMealPlan,mealDay} from '../health/meal-status.mjs';
 import {same} from '../health/sync-source.mjs';
+import {planningGoals,vegetableIntake} from './meal-planning.mjs';
+import {timelineGroup} from '../health/presentation.mjs';
 
 const labels=['热量','蛋白','碳水','脂肪','钠'],units=['kcal','g','g','g','mg'];
 const amount=value=>value==null?'未知':String(round(value,1));
@@ -87,6 +89,45 @@ export function renderHealthReport(report){
   ' kg（有效 '+weight.count+' 次） · 前窗 '+amount(weight.previous7)+' kg · 窗口变化 '+amount(weight.delta)+' kg');
  return lines.join('\n');
 }
+export function cycleReport(state,date,today){
+ if(!validDate(date)||date>today)throw Error('请指定已到的周期日期');
+ const cycle=cycleForDate(state,date,today),goals=planningGoals(state),asOf=cycle.end<today?cycle.end:today;
+ const foods=events(state,'foods').filter(actualFood),catalog=new Map(inventoryWithMoves(state).map(row=>[row.id,row]));
+ const activity=events(state,'activities').filter(row=>!['plan','cancelled'].includes(row.status)&&!/计划|取消|作废/.test(row.status??'')),moves=state.local.stockMoves;
+ let cumulative=null;
+ const days=cycle.entries.map(entry=>{
+  if(entry.date>today)return {date:entry.date,status:'future',deficit:null,nutrition:null,vegetables:null,cumulative};
+  const dayFoods=foods.filter(row=>row.date===entry.date),intake=mealDay(state,entry.date,{today}).actual;
+  const values=intake.totals;
+  if(entry.deficit!==null)cumulative=round((cumulative??0)+entry.deficit,2);
+  const meals=[...new Set(dayFoods.map(timelineGroup))];
+  const vegetables=vegetableIntake(dayFoods,catalog);
+  return {date:entry.date,status:entry.completeness.status,nutrition:values,partialNutrients:intake.incomplete,vegetables,
+   tdee:entry.tdee,tdeeSource:entry.source,deficit:entry.deficit,cumulative,possibleOverestimate:entry.possibleOverestimate,
+   meals,mealsWithoutEntry:dietKeys.slice(0,3).filter(meal=>!meals.includes(meal)),
+   activity:activity.filter(row=>row.date===entry.date).map(({name,kcal,minutes,km,energyKind,includedInBase,status})=>
+    ({name,kcal,minutes,km,energyKind,includedInBase,status})),
+   stockEvidence:moves.filter(row=>row.date===entry.date&&!row.stockArchived).length,
+   pendingStockFood:dayFoods.filter(row=>row.stockAssociation==='pending').map(row=>row.name),
+   belowProtein:values.protein==null?null:values.protein<goals.proteinMin,
+   belowFat:values.fat==null?null:values.fat<goals.fatMin,
+   aboveSodium:values.sodium==null?null:values.sodium>goals.sodiumTarget};
+ });
+ const weight=weightTrend(state,asOf),last=weight.points.slice(-7).map(({date,kg})=>({date,kg}));
+ return {start:cycle.start,end:cycle.end,asOf,days,goals,deficit:cycle.deficit,goal:cycle.goal,reportedDays:cycle.reportedDays,
+  possibleOverestimate:cycle.possibleOverestimate,weight:{observations:last,average:last.length===7?weight.last7:null,
+   rollingChange:weight.delta,changeAcrossSelected:last.length>1?round(last.at(-1).kg-last[0].kg,3):null},
+  interpretation:'无饮食、运动或库存条目只能说明账本缺少条目。缺报日缺口为 null，日目标参考当前设置。'};
+}
+
+export function previousCycleHint(state,today,seen){
+ if(!validDate(today))return null;
+ const current=cycleForDate(state,today,today),previousEnd=addDays(current.start,-1);
+ if(previousEnd===seen)return null;
+ const previous=cycleForDate(state,previousEnd,today);
+ return previous.reportedDays?{end:previousEnd,reportedDays:previous.reportedDays}:null;
+}
+
 export function inventoryDiff(before,after){
  const old=new Map(inventoryWithMoves(before).map(row=>[row.id,row]));
  return inventoryWithMoves(after).flatMap(sku=>{

@@ -36,7 +36,7 @@ try{
  const healthText='再喝完一盒牛奶';
  const expected=new Map(Object.entries(examples));
  expected.set(healthText,proposal(action('eat','喝完一盒牛奶',{name:'牛奶',amount:1,unit:'盒',whole:'yes'})));
- for(const [text,gross] of [['牛肉酱现在305g',305],['牛肉酱A瓶现在500g',500]])
+ for(const [text,gross] of [['牛肉酱现在305g',305],['牛肉酱现在285g',285],['牛肉酱A瓶现在500g',500]])
   expected.set(text,proposal(action('weigh',text,{name:'牛肉酱',gross})));
  const tomorrowText='安排明天的午餐和晚餐';
  const saveTomorrowText='把明天的饮食保存为计划';
@@ -67,7 +67,7 @@ try{
   if(input.text===photoText){
    assert.equal(body.input[0].content.filter(row=>row.type==='input_image').length,3);
    assert.match(body.instructions,/同一菜不同角度/);
-   assert.match(input.activeSkills??body.instructions,/photos v1/);
+   assert.match(input.activeSkills??body.instructions,/photos v2/);
    result={mode:'photo_meal',date:null,result:photoPlan};
   }else if(['','识别购物截图，食品入库',conversation,'补充购买付款截图','测试购物车','登记退款','确认顺序'].includes(input.text)){
    const order=orderReceipt(input.date);
@@ -234,13 +234,22 @@ try{
  await agent.getByText('已保存个人配置 310101.1，计算参数已采用。').waitFor();
  assert.equal((await read()).state.settings.baselineTdee,2900);
  assert.equal((await read()).state.settings.cycleDays,6);
- const weigh=agent.getByRole('checkbox',{name:'包装称重 · v1'});
+ const weigh=agent.getByRole('checkbox',{name:'包装称重 · v2'});
  await weigh.uncheck();
  await close();
  await page.locator('[data-new]').click();
- await sent('牛肉酱现在305g',/包装称重.*已停用/,0);
+ await page.evaluate(async()=>{
+  const {readState,saveState}=await import('../health/storage.mjs');
+  const {packagesFor,confirmPackageAction}=await import('../health/containers.mjs');
+  const state=await readState(),another=packagesFor(state,'fixture-sauce')[1];
+  const next=confirmPackageAction(state,{id:'demo-close-second',action:'discard',containerId:another.id,
+   date:(await import('../calendar.mjs')).localDate()}).next;
+  await saveState(next,state.revision);
+ });
+ await sent('牛肉酱现在285g',/已保存。.*5 g/,0);
+ assert.equal((await read()).sauce[0].gross,285);
  await open();await weigh.check();await close();
- console.log('PASS profile preview and explicit calculation adoption; Skill toggle gates writes');
+ console.log('PASS profile preview and explicit calculation adoption; Skill toggle keeps tool permissions');
  await page.locator('[data-new]').click();
  const assets=await page.evaluate(()=>['#aa2222','#228822','#2222aa'].map(color=>{
   const canvas=document.createElement('canvas');canvas.width=24;canvas.height=24;

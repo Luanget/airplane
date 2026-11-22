@@ -3,7 +3,6 @@ import {addDays,validDate} from '../health/core.mjs';
 import {indicatorKey,makeMedicalAttachment,matchIndicator,medicalData,medicalTrend,referenceFlag,saveMedicalNote,saveMedicalReport} from '../health/medical.mjs';
 import {jpeg} from '../health/assistant.mjs';
 import {hash,stable} from '../health/sync-source.mjs';
-import {assertSkillAction,skillCatalog} from './skills.mjs';
 
 const ACCESS='airplane-ai-medical-auto-v1';
 export const medicalAuto=store=>store.getItem(ACCESS)==='yes';
@@ -120,16 +119,14 @@ function draftLines(rows){
  return rows.map(row=>[summaryLine(row),row.method&&'方法 '+row.method,
   row.evidence?'证据 '+row.evidence:'证据待核对',row.uncertainty?'待核对 '+row.uncertainty:!fractionEvidence(row)?'证据需人工核对':null].filter(Boolean).join('\n')).join('\n\n');
 }
-function checkGrant(workspace,allowed,automatic,kind){
+function checkGrant(workspace,allowed,automatic){
  if(!allowed())throw Error('本轮未允许健康档案写入。');
  if(automatic&&!medicalAuto(workspace.finance))throw Error('健康档案自动保存已关闭。');
- assertSkillAction(skillCatalog(workspace.finance),kind);
 }
 
 export async function useMedicalTurn(workspace,{kind,text,files,ask,allowed,show,review,onSaved}){
  const previewOnly=/(?:只|仅)(?:识别|看看|预览)|先(?:看看|预览|别记)|(?:不要|不用|不必|暂不)(?:录入|保存|写入|记录)/.test(text);
- const today=localDate(),action=kind==='extract'?'medical_extract':kind==='symptom'?'medical_symptom':'medical_read';
- assertSkillAction(skillCatalog(workspace.finance),action);
+ const today=localDate();
  if(kind==='read'){
   if(!allowed())throw Error('请先允许本轮查询本机数据。');
   const result=queryMedical(await workspace.readHealth(),text,today);
@@ -154,13 +151,13 @@ export async function useMedicalTurn(workspace,{kind,text,files,ask,allowed,show
   const draft=symptomDraft(await ask(text,{kind}),text,today);
   const save=async(_date,automatic=false)=>{
    const latest=await workspace.readHealth(),next=structuredClone(latest);
-   checkGrant(workspace,allowed,automatic,action);
+   checkGrant(workspace,allowed,automatic);
    if(medicalData(latest).symptoms.some(row=>row.id===draft.id)){
     onSaved?.({symptomId:draft.id,revision:latest.revision??0,source:'medical'});
     return '症状已记录，重试未新增。';
    }
    saveMedicalNote(next,'symptoms',draft);
-   await workspace.saveHealth(next,latest.revision??0,()=>checkGrant(workspace,allowed,automatic,action));
+   await workspace.saveHealth(next,latest.revision??0,()=>checkGrant(workspace,allowed,automatic));
    const stored=await workspace.readHealth();
    if(!medicalData(stored).symptoms.some(row=>row.id===draft.id))throw Error('未能核对症状保存回执。');
    onSaved?.({symptomId:draft.id,revision:stored.revision??0,source:'medical'});
@@ -186,10 +183,10 @@ export async function useMedicalTurn(workspace,{kind,text,files,ask,allowed,show
  }
  const save=async(date,automatic=false)=>{
   const latest=await workspace.readHealth(),next=structuredClone(latest);
-  checkGrant(workspace,allowed,automatic,action);
+  checkGrant(workspace,allowed,automatic);
   if(!validDate(date)||date>today)throw Error('请核对体检日期。');
   const result=saveMedicalReport(next,{...draft,date},originals,{rejectConflicts:true,dedupeByResult:true});
-  if(result.changed)await workspace.saveHealth(next,latest.revision??0,()=>checkGrant(workspace,allowed,automatic,action));
+  if(result.changed)await workspace.saveHealth(next,latest.revision??0,()=>checkGrant(workspace,allowed,automatic));
   const stored=await workspace.readHealth(),saved=medicalData(stored);
   const record=saved.reports.find(row=>row.id===result.id);
   if(!record||originals.some(file=>!record.attachmentIds.includes(file.id)||

@@ -791,8 +791,8 @@ try {
   await openAssistantSettings();
   const modelPanel=assistantSettings.locator('#assistant-model-panel');
   await modelPanel.getByText('模型',{exact:true}).click();
-  assert.equal(await modelPanel.getByRole('button',{name:'默认',exact:true}).getAttribute('aria-pressed'),'true');
-  await modelPanel.getByText('默认使用 Terra',{exact:true}).waitFor();
+  assert.equal(await modelPanel.getByRole('button',{name:'自动',exact:true}).getAttribute('aria-pressed'),'true');
+  await modelPanel.getByText('自动 · Luna / Terra',{exact:true}).waitFor();
   assert.equal(await assistantSettings.getByRole('link',{name:/API 余额|用量明细/}).count(),0);
   await modelPanel.getByRole('button',{name:'Terra',exact:true}).click();
   expectedModel='gpt-6.1-terra';

@@ -8,11 +8,11 @@ export const toolResult=(call,output)=>({type:'function_call_output',call_id:cal
 const validCall=call=>typeof call.call_id==='string'&&call.call_id.length>0&&typeof call.name==='string';
 const changed=result=>result?.status==='saved'||result?.status==='undone';
 
-export function createAgentRun({id,model,date,clock,text,attachments=[],history=[],sources,summary=null,allowRead=true,threadId,messageId=id,attachmentGroup}){
+export function createAgentRun({id,model,modelPolicy,date,clock,text,attachments=[],history=[],sources,summary=null,allowRead=true,threadId,messageId=id,attachmentGroup}){
  const context=[...(summary?[userMessage([inputText('较早对话摘要：'+summary)])]:[]),
   ...history.map(({role,text})=>({role,content:text}))];
  const previous=sources??history.flatMap((row,index)=>row.role==='user'?[{id:row.id??id+':prior:'+index,text:row.text,date:row.date??null}]:[]);
- return {id,threadId,attachmentGroup,model,date,clock,allowRead,effort:attachments.length?'medium':'low',phase:'model',index:0,
+ return {id,threadId,attachmentGroup,model,modelPolicy,date,clock,allowRead,effort:attachments.length||modelPolicy?.mode==='auto'&&model==='gpt-6.1-terra'?'medium':'low',phase:'model',index:0,
   messages:[text],userSources:[...previous,{id:messageId,text,date,current:true}],attachments,
   input:[...context,userMessage([inputText(text||'请查看本轮附件。'),...attachments.map(row=>row.input)])],
   receipts:[],turns:0,stalled:0,steering:[]};
@@ -22,7 +22,7 @@ export function nativeRequest(run,instructions,tools,{replyOnly=false}={}){
  const steering=run.allowRead?'按本机工具的回执重新核对已完成事项。':'本轮关闭本机账本访问。';
  return {model:run.model,store:false,include:['reasoning.encrypted_content'],
   reasoning:{effort:run.effort},instructions:instructions+'\n当前本地日期 '+run.date+'。'+steering,
-  input:run.input,tools,parallel_tool_calls:false,tool_choice:replyOnly?'none':'auto'};
+  input:run.modelPolicy?.previousModel?run.input.filter((row,index)=>row.type!=='reasoning'||index>=run.modelPolicy.reasoningFrom):run.input,tools,parallel_tool_calls:false,tool_choice:replyOnly?'none':'auto'};
 }
 
 function answerOf(output){

@@ -15,7 +15,7 @@ export function inputAudit(run,body){
    if(['input_image','input_file'].includes(part.type))return [{attachmentId:files.get(part.image_url??part.file_data)??'附件',type:part.type}];
    return part.type==='input_text'||part.type==='output_text'?[auditSafe(part.text)]:[];
   })??[]}));
- return {model:body.model,effort:body.reasoning?.effort,instructions:auditSafe(body.instructions),messages,
+ return {model:body.model,effort:body.reasoning?.effort,modelPolicy:run.modelPolicy,instructions:auditSafe(body.instructions),messages,
   toolResults:body.input.filter(row=>row.type==='function_call_output').map(row=>row.call_id),
   attachments:[...new Set(messages.flatMap(row=>Array.isArray(row.content)?row.content.map(part=>part?.attachmentId).filter(Boolean):[]))]};
 }
@@ -40,6 +40,8 @@ export function executionDetails(journal,taskId,label='执行详情'){
    const status=names[task.status]??task.status;
    const models=[...new Set((task.inputs??[]).map(row=>row.model+' · '+row.effort))].join(' / ');
    body.replaceChildren(make('p',[status,models,task.attempts>1?task.attempts+' 次执行':''].filter(Boolean).join(' · '),'execution-summary'));
+   const decisions=[...new Set((task.inputs??[]).map(row=>row.modelPolicy?.reason).filter(Boolean))];
+   if(decisions.length)body.append(make('p',decisions.join(' → ')));
    if(task.failure)body.append(make('p','失败原因：'+task.failure));
    if(task.context)body.append(showJson('发送的习惯与可用 Skills',task.context));
    const marked=new Map((task.media??[]).map(row=>[row.id,row]));

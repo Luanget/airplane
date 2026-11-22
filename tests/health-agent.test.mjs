@@ -5,7 +5,7 @@ import {addBatch,saveSku} from '../health/inventory.mjs';
 import {addFood,addDays,dayIntake,energyForDay,events,inventoryWithMoves,recordEvent,setDayCompleteness,validateAppState} from '../health/core.mjs';
 import {ensureContainers,packagesFor} from '../health/containers.mjs';
 import {recordPurchase} from '../health/purchases.mjs';
-import {HEALTH_SKILLS,SKILLS_KEY,assertSkillAction,selectSkills,setSkillEnabled,skillCatalog} from '../ai/skills.mjs';
+import {HEALTH_SKILLS,SKILLS_KEY,selectSkills,setSkillEnabled,skillCatalog} from '../ai/skills.mjs';
 import {CORE_RULES,applyProfileSettings,habitPolicy,prepareHealthProfile} from '../ai/health-profile.mjs';
 import {MEMORY_KEY,memoryLibrary} from '../ai/memory.mjs';
 import {healthReport,renderHealthReport} from '../ai/health-report.mjs';
@@ -39,13 +39,13 @@ test('skills are versioned, scoped, toggleable, and preserve legacy storage',()=
  assert.deepEqual(first.map(row=>row.id),['weighing']);
  assert.ok(HEALTH_SKILLS.every(row=>row.version>0&&row.tools.length&&row.checks&&row.output));
  setSkillEnabled(store,'weighing',false);
- assert.throws(()=>assertSkillAction(skillCatalog(store),'weigh'),/已停用/);
+ assert.equal(skillCatalog(store).find(row=>row.id==='weighing').enabled,false);
  assert.equal(selectSkills(skillCatalog(store),{text:'牛肉酱现在310g'}).length,0);
  assert.deepEqual(JSON.parse(store.getItem(SKILLS_KEY)).personal,[{id:'old'}]);
  const text='牛肉酱现在310g',input={mode:'chat',text,date,photo:null,history:[]};
  const req=modelRequest(input,{allowRead:true,healthActions:true,skills:first});
- assert.match(req.instructions,/weighing v1/);
- assert.doesNotMatch(req.instructions,/correction v1|exercise v1/);
+ assert.match(req.instructions,/weighing v2/);
+ assert.doesNotMatch(req.instructions,/correction v2|exercise v2/);
  assert.equal(pendingLedgerRead({status:'completed',output:[{type:'function_call',name:'read_health_report',call_id:'x',
   arguments:JSON.stringify({date,view:'summary'})}]},{allowRead:true}).args.scope,'health_report');
 });

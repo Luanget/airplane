@@ -5,7 +5,7 @@ import {jpeg} from '../health/assistant.mjs';
 import {hash,stable} from '../health/sync-source.mjs';
 import {createAgentRun,nativeRequest,runAgent} from './agent-loop.mjs';
 import {agentInstructions,createAgentTools} from './agent-tools.mjs';
-import {readChatModel} from './models.mjs';
+import {advanceModelPolicy,planNativeModel} from './models.mjs';
 import {requestResponses} from './client.mjs';
 import {modelRates} from './usage.mjs';
 import {identifyAttachments} from './conversation-evidence.mjs';
@@ -145,6 +145,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   if(book.finish(ticket,run.reply,source,null,{agentUndo:undo,native:true,privateMedical,media,taskId:run.id})){
    const failed=run.receipts.flatMap(row=>row.result.substeps??[row.result]).some(row=>['conflict','error','blocked','pending'].includes(row.status));
    await writeStatus(run.id,failed?'partial':'done');
+   try{tools.notePeriodRecap(run);}catch{/* Bookkeeping does not affect a saved response. */}
    await journal.removeRun(run.id);
    if(active(ticket)){removeReview();retry.hidden=true;replyRetry.hidden=true;onFinal(run.reply,source,undo,media,run.id,preview);status('');}
   }
@@ -209,10 +210,13 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
      }
      const available=value.allowRead?tools.definitions:[];
      const facts=value.allowRead?tools.context():null;
+     if(facts&&value.periodHint===undefined)value.periodHint=await tools.periodHint(value).catch(()=>null);
+     if(facts&&value.periodHint)facts.previousCycle=value.periodHint;
      if(facts)await trace(value.id,{type:'context',...auditSafe(facts)});
      const prompt=agentInstructions+(facts?tools.instructions():'')+(facts?'\n当前启用的稳定习惯和工作流程：'+JSON.stringify(facts)+
       '\n本对话用户消息 ID（附短索引）：'+JSON.stringify(currentSources(value).map(({id,text,current})=>({id,current:!!current,text:text.slice(0,90)})))+
       '\n已附在本任务的附件 ID：'+value.attachments.map(row=>row.id??row.key).join('、'):'');
+     if(advanceModelPolicy(value))await journal.saveRun(value);
      const body=nativeRequest(value,prompt,available,options);
      if(value.attachmentGroup)await trace(value.id,{type:'media',files:value.attachmentGroup.files.map(file=>({...file,groupId:value.attachmentGroup.id}))});
      const audit=inputAudit(value,body);
@@ -282,7 +286,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
     const id=crypto.randomUUID();
     const {files,group}=identifyAttachments(attachments,'media:'+id),date=localDate();
     if(group)await journal.saveRun({id:group.id,attachments:files});
-    await journal.saveRun({id,messageId:id,model:readChatModel(workspace.finance).id,text,date,clock:localClock(),attachments:files,attachmentGroup:group,
+    await journal.saveRun({id,messageId:id,...planNativeModel(workspace.finance,{text,attachments:files}),text,date,clock:localClock(),attachments:files,attachmentGroup:group,
      allowRead:composer.elements.allowRead.checked});
     book.enqueueAgent({id,label,messageId:id,date,attachmentGroup:group});
     showQueue();

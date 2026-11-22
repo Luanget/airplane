@@ -7,12 +7,14 @@ import {setHealthAuto} from '../ai/health-actions.mjs';
 import {setFinanceAutomation} from '../ai/finance.mjs';
 import {setMedicalAuto} from '../ai/medical-chat.mjs';
 import {memoryLibrary} from '../ai/memory.mjs';
+import {planNativeModel,advanceModelPolicy} from '../ai/models.mjs';
 import {planOperation} from '../ai/meal-planning.mjs';
 import {addDays,addFood,events,inventoryWithMoves} from '../health/core.mjs';
 import {packagesFor} from '../health/containers.mjs';
 import {saveSku} from '../health/inventory.mjs';
 import {makeMedicalAttachment} from '../health/medical.mjs';
 import {addBatch} from '../health/inventory.mjs';
+import {currentSources} from '../ai/evidence.mjs';
 import {identifyAttachments} from '../ai/conversation-evidence.mjs';
 import {threadBook} from '../ai/threads.mjs';
 import {modelRates,estimatedCost,usageTokens} from '../ai/usage.mjs';
@@ -24,6 +26,7 @@ import {orderFinance} from './order-agent-fixture.mjs';
 
 const endpoint='https://api.openai.com/v1/responses',today='2026-11-21',tomorrow=addDays(today,1);
 const portfolio=['gpt-6-luna','gpt-6.1-terra'];
+if(process.env.AIRPLANE_EVAL_AUTO==='1')portfolio.push('auto');
 let key=process.env.AIRPLANE_EVAL_OPENAI_KEY;
 if(!key){
  const input=createInterface({input:process.stdin,terminal:false});
@@ -87,6 +90,41 @@ function evidenceInventory(w){
 }
 const typedFood=(name,stamp)=>image([name,'净含量 1 L','每 100 mL 营养：能量 66 kcal','蛋白质 3.5 g 碳水 4.8 g 脂肪 3.8 g 钠 40 mg'],stamp);
 const cases=[
+ {id:'auto-morning',turns:[{text:'记录晨重72.4kg'}],verify:(w,run)=>{
+  assert.deepEqual(w.state.local.weights.map(row=>row.kg),[72.4]);
+  assert.equal(run.receipts.filter(row=>row.tool==='write_health'&&row.result.status==='saved').length,1);
+ }},
+ {id:'auto-full-day',turns:[{text:'安排明天午晚餐'}],verify:(w,run)=>{
+  const day=checkedPlan(run)?.days[0],rows=plansOn(w,tomorrow);
+  assert.ok(day?.meals.午餐&&day?.meals.晚餐);
+  assert.ok(rows.length>2&&noNew(w));
+  assert.equal(day.nutritionCheck.status,'within',JSON.stringify(day.nutritionCheck));
+  assert.ok(new Set(rows.filter(row=>row.foodId==='fixture-chicken').map(row=>row.meal)).size<=1);
+  for(const key of ['kcal','protein','carbs','fat','sodium'])
+   assert.equal(Math.round(rows.reduce((sum,row)=>sum+row.nutrition[key],0)*100),Math.round(day.projected[key]*100));
+  return {...day.projected,vegetables:day.vegetables.grams,cost:day.cost,check:day.nutritionCheck.status,plans:rows.length};
+ }},
+ {id:'limited-vegetable-plan',setup:w=>{
+  Object.assign(w.state.local.inventory.find(row=>row.id==='fixture-celery').nutrition,
+   {kcal:null,protein:null,fat:null,carbs:null,sodium:null});
+ },turns:[{text:'安排明天晚餐，只用库存里300克合成芹菜。按常见生芹菜估算营养并标明，别补其它餐。'}],verify:(w,run)=>{
+  const rows=plansOn(w,tomorrow);
+  assert.equal(rows.length,1);assert.equal(rows[0].foodId,'fixture-celery');assert.equal(rows[0].amount,300);
+  assert.equal(rows[0].meal,'晚餐');assert.equal(rows[0].quality,'estimated');assert.ok(rows[0].nutritionEstimate?.source);
+  assert.ok(rows[0].nutrition.kcal>0&&rows[0].nutrition.kcal<100);
+  assert.ok(noNew(w));assert.match(run.reply,/估/);return rows[0].nutrition;
+ }},
+ {id:'cycle-review',setup:w=>{
+  const date=addDays(today,-1);
+  Object.assign(w.state.settings,{baselineTdee:2900,cycleAnchor:addDays(today,-6),cycleDays:6});
+  addFood(w.state,{date,meal:'午餐',name:'合成测试午餐',kcal:1550,protein:110,carbs:140,fat:35,sodium:2400,status:'actual'});
+  addFood(w.state,{date,meal:'晚餐',name:'合成未执行晚餐',kcal:600,protein:50,carbs:60,fat:20,sodium:300,status:'plan'});
+ },turns:[{text:'复盘昨天结束的六天周期。按账本讲讲缺报、营养和接下来怎么调整。'}],verify:(w,run)=>{
+  const report=run.receipts.find(row=>row.tool==='read_cycle_report'&&row.result.status==='ok')?.result.data;
+  assert.ok(report,run.reply);assert.match(run.reply,/缺报|没记录|未记录|无记录/);
+  assert.match(run.reply,/钠/);assert.match(run.reply,/脂肪|蛋白/);return report;
+ }},
+
  {id:'habit-then-plan',effort:'medium',turns:[{text:'一天不要安排两顿鸡胸'}, {text:'规划明天午餐和晚餐。'+mealRequirements}],
   verify:(w,run)=>{const plan=checkedPlan(run);assert.ok(plan);assert.ok(w.memory.activeHabits().length);
    const day=plan.days[0];assert.equal(day.date,tomorrow);assert.ok(day.meals.午餐&&day.meals.晚餐);
@@ -279,7 +317,7 @@ async function runCase(model,example){
    if(turn.dropMedia)rows.clear();
    if(group)rows.set(group.id,{id:group.id,attachments:files});
    book.append('user',turn.text,true,null,{id,taskId:id,date:today,attachmentGroup:group});
-   run=createAgentRun({id,threadId:book.current.id,model,date:today,clock:'12:01',text:turn.text,history,
+   run=createAgentRun({id,threadId:book.current.id,...(model==='auto'?planNativeModel(w.finance,{text:turn.text,attachments:files}):{model}),date:today,clock:'12:01',text:turn.text,history,
     attachments:files,allowRead:turn.allowRead??true});
    if(process.env.AIRPLANE_EVAL_EFFORT||example.effort)run.effort=process.env.AIRPLANE_EVAL_EFFORT??example.effort;
    const queue=[];
@@ -291,28 +329,33 @@ async function runCase(model,example){
      if(turn.interrupt&&state.receipts.some(r=>r.result.status==='saved')&&!interrupted){
       interrupted=true;throw Error('synthetic transport interruption after verified write');
      }
+     advanceModelPolicy(state);
      if(count>=invocationLimit)throw Error('Evaluation request cap');
      count++;
-     const request=nativeRequest(state,agentInstructions+(state.allowRead?tools.instructions():''),state.allowRead?tools.definitions:[],options);
-     if(state.allowRead)request.instructions+='\n当前启用的本机习惯和工作流程：'+JSON.stringify(tools.context())+
-      '\n用户消息 ID（按最近顺序）：'+JSON.stringify(state.userSources.map(row=>({id:row.id,current:!!row.current,text:row.text})))+
-      '\n已附在本任务的附件 ID：'+state.attachments.map(row=>row.id).join('、');
+     const facts=state.allowRead?tools.context():null;
+     if(facts&&state.periodHint===undefined)state.periodHint=await tools.periodHint(state).catch(()=>null);
+     if(facts&&state.periodHint)facts.previousCycle=state.periodHint;
+     const prompt=agentInstructions+(facts?tools.instructions()+'\n当前启用的稳定习惯和工作流程：'+JSON.stringify(facts)+
+      '\n本对话用户消息 ID（附短索引）：'+JSON.stringify(currentSources(state).map(({id,text,current})=>({id,current:!!current,text:text.slice(0,90)})))+
+      '\n已附在本任务的附件 ID：'+state.attachments.map(row=>row.id??row.key).join('、'):'');
+     const request=nativeRequest(state,prompt,facts?tools.definitions:[],options);
      const begin=performance.now();
      const response=await fetch(endpoint,{method:'POST',headers:{'Authorization':'Bearer '+key,'Content-Type':'application/json'},
       body:JSON.stringify(request),signal:AbortSignal.timeout(100000)});
      const value=await response.json();
      metric.calls.push({http:response.status,code:value.error?.code??null,parameter:value.error?.param??null,
-      effort:state.effort,usage:usageTokens(value.usage),cost:estimatedCost(model,value.usage,modelRates(w.finance)),ms:Math.round(performance.now()-begin)});
+      model:state.model,policy:state.modelPolicy,effort:state.effort,usage:usageTokens(value.usage),cost:estimatedCost(state.model,value.usage,modelRates(w.finance)),ms:Math.round(performance.now()-begin)});
      if(!response.ok)throw Error('HTTP '+response.status+' '+(value.error?.code??'')+' '+(value.error?.param??''));
      if(turn.steer&&!dispatchedSteer){dispatchedSteer=true;queue.push({text:turn.steer,attachments:[]});}
      return value;
     }});
    try{run=await execute(run);}
    catch(error){if(!turn.interrupt||!interrupted)throw error;run=await execute(snapshot,true);}
-   metric.turns.push({reply:run.reply,review:run.receipts.filter(row=>row.result.status==='review').length,
+   metric.turns.push({reply:run.reply,question:/[？?]/.test(run.reply),review:run.receipts.filter(row=>row.result.status==='review').length,
     writes:run.receipts.filter(row=>tools.isWrite(row.tool)).map(row=>({tool:row.tool,status:row.result.status,
      reason:row.result.reason,receipt:row.result.receipt}))});
    turn.verify?.(w,run);
+   tools.notePeriodRecap(run);
    const agentUndo=run.receipts.flatMap(row=>row.result.undo?[row.result.undo]:row.result.undos??[]);
    book.append('assistant',run.reply,true,null,{agentUndo,taskId:id});
    tasks.set(id,{id,threadId:book.current.id,status:'done',steps:run.receipts.map(({tool,result})=>

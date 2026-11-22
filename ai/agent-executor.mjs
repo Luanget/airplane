@@ -8,7 +8,6 @@ import {hash,same} from '../health/sync-source.mjs';
 import {chooseFinanceCategory,financeAutomation,financeEntry} from './finance.mjs';
 import {executeHealthAction,hasHealthAuto,undoHealthAction} from './health-actions.mjs';
 import {executeReceipt,undoReceipt} from './receipts.mjs';
-import {assertSkillAction,skillCatalog} from './skills.mjs';
 
 const terminal=new Set(['done','skipped']);
 const labels={health:'健康',finance:'记账',receipt:'截图订单'};
@@ -97,7 +96,6 @@ export async function executeAgentTask(workspace,plan,options){
   const check=()=>{options.signal?.throwIfAborted();options.guard?.();};
   const guard=({total,health})=>{
    check();
-   if(!options.native)assertSkillAction(skillCatalog(workspace.finance),step.kind==='finance'?'finance_write':'receipt_order');
    const grant=financeAutomation(workspace.finance);
    if(!confirmed&&(!grant.enabled||total>grant.limitCents||health&&!hasHealthAuto(workspace.finance)))
     throw Error('执行授权或金额上限已更改，账本待重新核对。');
@@ -107,11 +105,9 @@ export async function executeAgentTask(workspace,plan,options){
    options.onStep?.(labels[step.kind]);
    options.onStepEvent?.(tracedStep(step,null,id));
    if(step.kind==='receipt'){
-    if(!options.native)assertSkillAction(skillCatalog(workspace.finance),'receipt_order');
     results[step.id]=await executeReceipt(workspace,step.receipt,{...options,id,confirmed,guard,
      grant:financeAutomation(workspace.finance),healthAuto:hasHealthAuto(workspace.finance)});
    }else if(step.kind==='finance'){
-    assertSkillAction(skillCatalog(workspace.finance),'finance_write');
     results[step.id]=await executeFinance(workspace,step,{...options,id,confirmed,guard});
    }else{
     const base=await workspace.readHealth();
@@ -120,7 +116,6 @@ export async function executeAgentTask(workspace,plan,options){
      mediaKey:(options.mediaKey??'')+':'+(options.native?hash(JSON.stringify(step.action)):step.id),auto:hasHealthAuto(workspace.finance),guard:()=>{
       check();
       if(!confirmed&&!hasHealthAuto(workspace.finance))throw Error('健康自动执行已关闭。');
-      if(!options.native)for(const action of step.action.steps)assertSkillAction(skillCatalog(workspace.finance),action.kind);
      }});
     reference=result.record?.reference??reference;
     const undo=result.record&&!result.record.undone&&(!result.duplicate||result.record.id===id)?{kind:'health',id:result.record.id}:null;

@@ -59,8 +59,12 @@ export function memoryLibrary(store,legacyKey){
    if(!['habit','fact','plan'].includes(updated.kind))throw Error('强制规则由程序维护。');
    if(updated.kind==='habit')updated.kind=memoryKind(updated);
    if(!Number.isInteger(updated.priority)||updated.priority<0||updated.priority>100)throw Error('优先级请输入 0 至 100 的整数');
-   updated.topic=previous?.topic??preferenceTopic(updated.name+' '+updated.text);
+   updated.topic=changes.topic??preferenceTopic(updated.name+' '+updated.text)??previous?.topic;
+   if(previous&&updated.text!==previous.text&&!Object.hasOwn(changes,'constraint'))updated.constraint=null;
    if(rows.some(row=>row.id!==id&&normalize(row.text)===normalize(updated.text)))throw Error('已经记住这条内容');
+  }
+  if(previous&&updated&&(updated.text!==previous.text||updated.enabled!==previous.enabled||updated.kind!==previous.kind)){
+   updated.history=[...(previous.history??[]),historyEntry(previous)];
   }
   const next=action==='add'?[...rows,updated]:rows.flatMap(row=>row.id!==id?[row]:updated?[updated]:[]);
   return {previous,updated,commit(){
@@ -69,58 +73,53 @@ export function memoryLibrary(store,legacyKey){
   }};
  }
  function rememberFromTurn(updates,source){
-  if(!automaticMemoryEnabled(store)||!updates?.length||
-   /(?:(?:不要|别|不用)(?:把[^。！\n]{0,24})?(?:记|存|保存)|忘掉|忘记|不要保留)/.test(source))return [];
-  const {raw,rows}=read();
+  if(/(?:不要|别|不用|别再|不必)记(?:忆|住|这条|下来)/.test(source))return [];
   const saved=[];
-  for(const update of updates){
-   const {name,text,evidence}=update;
-   if(typeof name!=='string'||typeof text!=='string'||typeof evidence!=='string'||
-    !name.trim()||!text.trim()||!evidence.trim()||!source.includes(evidence))continue;
-   if(!/平时|通常|常常|总是|以后|习惯|长期|喜欢|偏好|默认|记住|一直|不再|优先|每[天周月]|归为/.test(evidence)||
-    /如果|假如|假设|例如|比如|举例|这次|仅今天|光这次|[？?]/.test(evidence)||memoryKind({name,text})!=='habit')continue;
-   if(/sk-[\w-]{12,}|\b(?:api[ -]?key|password|bearer)\b|密码|密钥|验证码|身份证/i.test([name,text,evidence].join(' ')))continue;
-   const title=normalize(name).trim(),content=normalize(text).trim();
-   if(rows.some(row=>normalize(row.text).trim()===content))continue;
-   const topic=preferenceTopic([name,text,evidence].join(' '));
-   const related=rows.filter(row=>row.id!==PROFILE_ID&&memoryKind(row)==='habit'&&(normalize(row.name).trim()===title||topic&&row.topic===topic));
-   if(related.length>1||related[0]?.enabled===false)continue;
-   const row=related[0];
-   const fields={text:text.trim(),kind:'habit',topic:topic??row?.topic??null,updatedAt:new Date().toISOString(),origin:'conversation',priority:Math.max(45,row?.priority??0)};
-   if(row)Object.assign(row,fields);
-   else rows.push({id:crypto.randomUUID(),name:name.trim(),enabled:true,...fields});
-   saved.push(row?.name??name.trim());
-  }
-  if(saved.length){
-   if(store.getItem(MEMORY_KEY)!==raw)throw Error('记忆已在另一页面更新。');
-   store.setItem(MEMORY_KEY,JSON.stringify(rows));
+  for(const update of updates??[]){
+   if(typeof update.evidence!=='string'||!update.evidence.trim())continue;
+   try{
+    const before=read().raw,record=learnHabit(update,source);
+    if(store.getItem(MEMORY_KEY)!==before)saved.push(record.name);
+   }catch{/* Ineligible or protected suggestion. */}
   }
   return [...new Set(saved)];
  }
- function activeHabits(){
+ const historyEntry=row=>({name:row.name,text:row.text,evidence:row.evidence,updatedAt:row.updatedAt,
+  constraint:row.constraint,origin:row.origin,source:row.source,enabled:row.enabled,kind:row.kind});
+ function habitRows(){
   const topics=new Set();
-  return read().rows.filter(row=>row.enabled&&!row.archivedProfile&&memoryKind(row)==='habit')
-   .sort((a,b)=>String(b.updatedAt??'').localeCompare(String(a.updatedAt??''))||(b.priority??0)-(a.priority??0))
+  return read().rows.filter(row=>!row.archivedProfile&&memoryKind(row)==='habit')
+   .sort((a,b)=>Number(b.origin==='manual')-Number(a.origin==='manual')||
+    String(b.updatedAt??'').localeCompare(String(a.updatedAt??''))||(b.priority??0)-(a.priority??0))
    .filter(row=>{
     if(row.topic&&topics.has(row.topic))return false;
-    if(row.topic)topics.add(row.topic);return true;
-   }).map(({id,name,text,topic,updatedAt,constraint})=>({id,name,text,topic,updatedAt,
-    constraint:constraint===undefined&&topic==='chicken-one'?{kind:'food_meal_limit',food:'鸡胸',maxMeals:1}:constraint??null}));
+    if(row.topic)topics.add(row.topic);
+    return row.enabled;
+   });
+ }
+ function activeHabits(){
+  return habitRows().map(({id,name,text,topic,updatedAt,constraint})=>({id,name,text,topic,updatedAt,
+   constraint:constraint===undefined&&topic==='chicken-one'?{kind:'food_meal_limit',food:'鸡胸',maxMeals:1}:constraint??null}));
  }
  function learnHabit(update,source,{owner=false}={}){
   if(!owner&&!automaticMemoryEnabled(store))throw Error('本机自动记忆已关闭');
   const {name,text,evidence,constraint}=update;
-  if(!owner&&(!source.includes(evidence)||!evidence.trim()||memoryKind({name,text})!=='habit'))throw Error('长期习惯需要本轮原话依据');
+  if(typeof name!=='string'||!name.trim()||typeof text!=='string'||!text.trim())throw Error('请提供偏好名称和内容');
+  if(/(?:只这次|仅本轮|仅今天|这次例外|这次可以|这顿可以|不要记住|别记这条|假如|假设|如果|[？?])/.test(evidence??''))throw Error('临时指令仅在本轮生效');
+  if(typeof evidence!=='string'||!evidence.trim()||!owner&&!source.includes(evidence)||memoryKind({name,text})!=='habit'||update.kind&&update.kind!=='habit')throw Error('长期习惯需要本轮原话依据');
   if(/sk-[\w-]{12,}|\b(?:api[ -]?key|password|bearer)\b|密码|密钥|验证码|身份证/i.test([name,text,evidence].join(' ')))
    throw Error('敏感凭据不能写入记忆');
-  const {raw,rows}=read(),topic=preferenceTopic(text)??update.topic;
-  const previous=rows.find(row=>row.id!==PROFILE_ID&&row.topic===topic&&memoryKind(row)==='habit');
-  if(!owner&&previous?.enabled===false)throw Error('此主题被手动停用，请使用本轮明确的偏好');
+  const {raw,rows}=read(),topic=preferenceTopic(text)??update.topic??preferenceTopic(evidence);
+  const matches=rows.filter(row=>row.id!==PROFILE_ID&&(topic&&row.topic===topic||
+   normalize(row.name).trim()===normalize(name).trim()));
+  const previous=matches.find(row=>!row.enabled||row.origin==='manual')??
+   matches.sort((a,b)=>String(b.updatedAt??'').localeCompare(String(a.updatedAt??'')))[0];
+  if(previous?.enabled===false||previous?.origin==='manual')throw Error('这项记忆由用户管理，请只在当轮应用新指令。');
   if(previous?.enabled&&previous.text===text&&JSON.stringify(previous.constraint??null)===JSON.stringify(constraint??null))return previous;
   const priorHistory=previous?.history??[];
-  const record={...previous,id:previous?.id??crypto.randomUUID(),name,text,topic,enabled:true,kind:'habit',
+  const record={...previous,id:previous?.id??crypto.randomUUID(),name:previous?.name??name,text,topic,enabled:true,kind:'habit',
    origin:'conversation',constraint,priority:previous?.priority??50,updatedAt:new Date().toISOString(),evidence,
-   history:[...priorHistory,...(previous?[{text:previous.text,evidence:previous.evidence,updatedAt:previous.updatedAt}]:[])]};
+   source:update.source??{kind:'user_message'},history:[...priorHistory,...(previous?[historyEntry(previous)]:[])]};
   if(store.getItem(MEMORY_KEY)!==raw)throw Error('记忆已在另一页面更新，请重新读取');
   store.setItem(MEMORY_KEY,JSON.stringify(rows.filter(row=>row.id!==record.id).concat(record)));
   return record;
@@ -144,17 +143,22 @@ export function memoryLibrary(store,legacyKey){
  return {
   list:()=>read().rows.filter(row=>row.id!==PROFILE_ID),profile:()=>read().rows.find(row=>row.id===PROFILE_ID)??null,
   prepare,rememberFromTurn,importProfile,activeHabits,learnHabit,
+  planningHabits(){
+   const habits=activeHabits();
+   const previous=read().rows.some(row=>row.topic==='chicken-one'||row.constraint?.kind==='food_meal_limit'&&row.constraint.food.includes('鸡胸'));
+   return previous?habits:[...habits,{id:'default:chicken-meals',topic:'chicken-one',name:'默认鸡胸安排',
+    text:'通常安排一袋鸡胸，一天最多一餐。',constraint:{kind:'food_meal_limit',food:'鸡胸',maxMeals:1}}];
+  },
   relevant(text,{budget=1800,limit=8}={}){
    const terms=keywords(text);
-   const ranked=read().rows.filter(row=>row.enabled&&!row.archivedProfile&&memoryKind(row)==='habit').map(({name,text,priority,updatedAt,topic})=>{
+   const ranked=habitRows().map(({name,text,priority,updatedAt})=>{
     const title=keywords(name),body=keywords(text);
     const score=[...terms].reduce((n,term)=>n+(title.has(term)?2:body.has(term)?1:0),0);
-    return {name,text,score,priority,updatedAt,topic};
+    return {name,text,score,priority,updatedAt};
    }).filter(row=>row.score>0).sort((a,b)=>b.score-a.score||(b.priority??0)-(a.priority??0)||String(b.updatedAt??'').localeCompare(String(a.updatedAt??'')));
-   let chars=0,count=0;const topics=new Set();
-   return ranked.flatMap(({name,text,topic})=>{
-    if(count>=limit||topic&&topics.has(topic))return [];
-    if(topic)topics.add(topic);
+   let chars=0,count=0;
+   return ranked.flatMap(({name,text})=>{
+    if(count>=limit)return [];
     const remaining=budget-chars;
     if(remaining<=name.length)return [];
     const snippet=text.slice(0,remaining-name.length);

@@ -76,8 +76,8 @@ test('focused memory keeps current ledger facts and tentative plans outside cont
  memory.prepare(null,{name:'酱料习惯',text:'平时牛肉酱少放',kind:'habit'},'add').commit();
  assert.deepEqual(memory.list().map(memoryKind),['fact','plan','habit']);
  assert.equal(JSON.stringify(memory.relevant('当前余额、鸡胸、牛肉酱')).includes('30 元'),false);
- assert.deepEqual(memory.rememberFromTurn([{name:'酱料习惯',text:'平时牛肉酱放一勺',evidence:'以后牛肉酱放一勺'}],'以后牛肉酱放一勺'),['酱料习惯']);
- assert.equal(memory.relevant('牛肉酱')[0].text,'平时牛肉酱放一勺');
+ assert.deepEqual(memory.rememberFromTurn([{name:'酱料习惯',text:'平时牛肉酱放一勺',evidence:'以后牛肉酱放一勺'}],'以后牛肉酱放一勺'),[]);
+ assert.equal(memory.relevant('牛肉酱')[0].text,'平时牛肉酱少放');
  assert.deepEqual(memory.rememberFromTurn([{name:'退款余额',text:'当前余额 5 元',evidence:'以后记住余额 5 元'}],'以后记住余额 5 元'),[]);
  const turns=Array.from({length:12},(_,i)=>({role:i%2?'assistant':'user',text:'之前的反复文本'.repeat(100)}));
  assert.equal(scopedHistory('receipt','识别这张截图',{turns,summary:'总结'}).turns.length,12);

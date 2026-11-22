@@ -5,10 +5,11 @@ import {packagesFor} from '../health/containers.mjs';
 import {onShelf} from '../health/container-ledger.mjs';
 import {dietGoals,isMealPlan,mealDay} from '../health/meal-status.mjs';
 import {same} from '../health/sync-source.mjs';
+import {recordedPortion} from '../health/food-history.mjs';
 
 export {isMealPlan};
 const brief=row=>({id:row.id,date:row.date,meal:row.meal,name:row.name,foodId:row.foodId,
- containerId:row.containerId??null,amount:row.amount,unit:row.amountUnit??null,portion:row.portion,nutrition:row.nutrition,cost:row.cost});
+ containerId:row.containerId??null,amount:row.amount,unit:row.amountUnit??null,portion:row.portion,nutrition:row.nutrition,cost:row.cost,quality:row.quality,uncertainty:row.uncertainty,nutritionEstimate:row.nutritionEstimate});
 const sum=records=>Object.fromEntries(NUTRIENTS.map(key=>{
  const values=records.map(row=>row.nutrition[key]);
  return [key,values.every(Number.isFinite)?round(values.reduce((a,b)=>a+b,0),2):null];
@@ -21,6 +22,30 @@ const byMeal=foods=>Object.fromEntries([...new Set(foods.map(row=>row.meal))].ma
 }));
 const label=value=>String(value??'').normalize('NFKC').toLowerCase().trim();
 
+const commonVegetables=['芹菜','青菜','西兰花','白菜','菠菜','生菜','番茄','西红柿','黄瓜','西葫芦','胡萝卜','茄子','菜花','甘蓝','油麦菜','青椒','冬瓜'];
+const isVegetable=(row,sku)=>[row.foodGroup,sku?.foodGroup,sku?.category].some(value=>value==='vegetable'||value==='蔬菜')||
+ commonVegetables.some(name=>String(row.name??sku?.name??'').includes(name));
+export function vegetableIntake(rows,inventory){
+ const known=[],unmeasured=[];
+ for(const row of rows){
+  const sku=inventory.get(row.foodId);
+  if(!isVegetable(row,sku))continue;
+  let grams=null;
+  try{
+   const portion=recordedPortion({...row,amountUnit:row.amountUnit??row.unit});
+   grams=quantityInUnit(sku,portion.amount,portion.unit,'g');
+  }catch{/* A vegetable without a measured portion is still visible as unknown. */}
+  if(grams==null)unmeasured.push(row.name);else known.push(grams);
+ }
+ return {grams:known.length?round(known.reduce((a,b)=>a+b,0),2):null,unmeasured,knownItems:known.length};
+}
+export function planningGoals(state){
+ const goals=dietGoals(state),custom=state.settings.vegetableTargetGrams;
+ const maximumCarbs=Math.max(0,Math.floor((goals.kcal+goals.kcalTolerance-goals.proteinMin*4-goals.fatMin*9)/4));
+ return {...goals,vegetableGrams:Number.isFinite(custom)&&custom>0?custom:300,
+  carbTradeoff:goals.carbs?.low>maximumCarbs?{maximumCarbsWithPrimaryTargets:maximumCarbs}:null};
+}
+
 export function planningFacts(state,dates,today,habits){
  const inventory=inventoryWithMoves(state).filter(isOnHand).map(sku=>{
   const [targetAmount,targetUnit]=basis(sku);
@@ -30,7 +55,7 @@ export function planningFacts(state,dates,today,habits){
     nominal:row.nominal??null,estimated:row.estimated===true,latestGross:row.gross,costCents:row.costCents??null}))};
  });
  const datesSet=[...new Set(dates)];
- return {revision:state.revision??0,inventory,habits,settingsPreferences:state.settings.preferences??null,goals:dietGoals(state),days:datesSet.map(date=>{
+ return {revision:state.revision??0,inventory,habits,settingsPreferences:state.settings.preferences??null,goals:planningGoals(state),days:datesSet.map(date=>{
   if(!validDate(date))throw Error('请指定日历日期 YYYY-MM-DD');
   const {actual,actualRows,plans,planned,projected}=mealDay(state,date,{today});
   return {date,actual:actualRows.map(brief),existingPlans:plans.map(({row,remaining,status,actualIds,fulfilledAmount})=>
@@ -48,19 +73,19 @@ function measured(amount,unit,container){
  return {amount,unit};
 }
 
-function targetChecks(projected,goals){
+function targetChecks(projected,goals,vegetables){
  const bounds={kcal:[goals.kcal-goals.kcalTolerance,goals.kcal+goals.kcalTolerance],
   protein:[goals.proteinMin,goals.proteinMax],fat:[goals.fatMin,null],carbs:[goals.carbs?.low??null,goals.carbs?.high??null],
-  sodium:[null,goals.sodiumTarget]};
+  sodium:[null,goals.sodiumTarget],vegetables:[goals.vegetableGrams,null]};
  return Object.fromEntries(Object.entries(bounds).map(([key,[min,max]])=>{
-  const value=projected[key];
+  const value=key==='vegetables'?vegetables.grams:projected[key];
   const status=min==null&&max==null?'no_target':value==null?'unknown':min!=null&&value<min?'below':max!=null&&value>max?'above':'within';
   const difference=status==='below'?round(min-value,2):status==='above'?round(value-max,2):status==='within'?0:null;
   return [key,{status,value,min,max,difference}];
  }));
 }
 
-export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]},today,habits=[]){
+export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[],exceptions=[]},today,habits=[]){
  const activePlans=events(state,'foods').filter(isMealPlan);
  const selected=[...replaceIds,...appendTo];
  const selectedPlans=activePlans.filter(row=>selected.includes(row.id));
@@ -77,7 +102,7 @@ export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]
   const conversion=container?.nominal?{...sku,standard:'',packageSize:container.nominal.value,packageUnit:container.nominal.unit}:sku;
   const count=quantityInUnit(conversion,sizing.amount,sizing.unit,baseUnit);
   const usage=quantityInUnit(conversion,sizing.amount,sizing.unit,sku.unit);
-  if(count==null||usage==null||!(base>0)||!Number.isFinite(sizing.amount)||sizing.amount<=0)throw Error('食品 '+sku.name+' 的份量和库存或营养基准无法可靠换算');
+  if(usage==null||!Number.isFinite(sizing.amount)||sizing.amount<=0)throw Error('食品 '+sku.name+' 的份量和库存单位无法可靠换算');
   const nominal=container?.nominal;
   const packageUnit=container?.net!=null?'g':nominal?.unit;
   const packageSize=container?.net??(container?.status==='sealed'?nominal?.value:null);
@@ -87,7 +112,17 @@ export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]
   const total=round((stockUsed.get(sku.id)??0)+usage,6);
   if(total>sku.qty+1e-6)throw Error(sku.name+' 的合计用量 '+total+' '+sku.unit+' 超过可用库存 '+sku.qty+' '+sku.unit);
   stockUsed.set(sku.id,total);if(container)packagesUsed.set(container.id,packUsed);
-  const nutrition=Object.fromEntries(NUTRIENTS.map(k=>[k,sku.nutrition[k]==null?null:round(sku.nutrition[k]*count/base,2)]));
+  const estimate=row.estimate??row.nutritionEstimate;
+  const estimatedAmount=estimate?quantityInUnit(conversion,sizing.amount,sizing.unit,estimate.unit):null;
+  const estimatedKeys=[];
+  const nutrition=Object.fromEntries(NUTRIENTS.map(key=>{
+   if(sku.nutrition[key]!=null&&count!=null&&base>0)return [key,round(sku.nutrition[key]*count/base,2)];
+   if(estimate&&estimatedAmount!=null&&estimate.amount>0&&Number.isFinite(estimate.nutrition?.[key])&&estimate.nutrition[key]>=0){
+    estimatedKeys.push(key);
+    return [key,round(estimate.nutrition[key]*estimatedAmount/estimate.amount,2)];
+   }
+   return [key,null];
+  }));
   let cost=null;
   if(container?.costCents!=null&&packageSize>0)
    cost=round(Math.max(0,container.costCents-(container.spent??0)-(container.lossCost??0))*packageUsage/packageSize/100,2);
@@ -101,7 +136,10 @@ export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]
    }catch{/* Price remains unknown if no priced allocation is available. */}
   }
   return {...row,amount:sizing.amount,unit:sizing.unit,name:sku.name,nutrition,cost,portion:sizing.amount+' '+sizing.unit,
-   nutritionBasis:{amount:base,unit:baseUnit},estimated:!!container?.estimated||!!nominal&&container?.net==null,stockQty:usage};
+   nutritionBasis:{amount:base,unit:baseUnit},
+   ...(estimatedKeys.length?{quality:'estimated',uncertainty:'通用估算 · '+estimate.source+' · '+estimate.uncertainty,
+    nutritionEstimate:{...estimate,usedFor:estimatedKeys}}:{}),
+   estimated:!!container?.estimated||!!nominal&&container?.net==null,stockQty:usage};
  };
  const proposed=[];
  // Reserve existing plans before evaluating additions. Existing plans stay visible
@@ -130,9 +168,10 @@ export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]
   const {remaining:plans,planned,projected}=mealDay(state,day.date,{today,foods:[...foodsForDay(state,day.date),...originals,
    ...accepted.map((row,index)=>({...row,status:'plan',id:'proposed:'+index,amountUnit:row.unit}))]});
   const all=[...day.actual,...plans];
+  const vegetables=vegetableIntake(all,inventory);
   for(const habit of habits){
    const constraint=habit.constraint;
-   if(!constraint||constraint.kind!=='food_meal_limit')continue;
+   if(!constraint||constraint.kind!=='food_meal_limit'||exceptions.some(row=>row.habitId===habit.id&&row.date===day.date))continue;
    const limit=constraint.maxMeals;
    const meals=new Set(all.filter(row=>label(row.name).includes(label(constraint.food))).map(row=>row.meal));
    if(meals.size>limit)violations.push({date:day.date,habitId:habit.id,reason:constraint.food+' 出现在 '+meals.size+' 餐，当前偏好上限 '+limit+' 餐'});
@@ -141,12 +180,12 @@ export function evaluateMealPlan(state,{items,replaceIds=[],appendTo=[],dates=[]
   const gaps={kcal:gap('kcal',facts.goals.kcal),proteinMin:gap('protein',facts.goals.proteinMin),
    proteinMax:gap('protein',facts.goals.proteinMax),fatMin:gap('fat',facts.goals.fatMin),
    carbMin:gap('carbs',facts.goals.carbs?.low),carbMax:gap('carbs',facts.goals.carbs?.high),sodiumLimit:gap('sodium',facts.goals.sodiumTarget)};
-  const checks=targetChecks(projected,facts.goals);
+  const checks=targetChecks(projected,facts.goals,vegetables);
   const outside=Object.keys(checks).filter(key=>['below','above'].includes(checks[key].status));
   const unknown=Object.keys(checks).filter(key=>checks[key].status==='unknown');
   const priced=plans.filter(row=>row.cost!=null),knownPlannedCost=priced.length?round(priced.reduce((sum,row)=>sum+row.cost,0),2):null;
   const knownDayCost=knownPlannedCost==null&&day.actualCost==null?null:round((knownPlannedCost??0)+(day.actualCost??0),2);
-  return {...day,proposed:accepted,meals:byMeal(plans),planned,projected,gaps,
+  return {...day,proposed:accepted,meals:byMeal(plans),planned,projected,vegetables,gaps,
    targetsMet:Object.fromEntries(Object.entries(checks).map(([key,{status}])=>[key,
     ['unknown','no_target'].includes(status)?null:status==='within'])),
    nutritionCheck:{status:outside.length?'outside':unknown.length?'unknown':'within',checks,outside,unknown},
@@ -167,6 +206,7 @@ export function planOperation(state,args,{id,today,habits}){
  for(const row of evaluation?.days.flatMap(day=>day.proposed)??[]){
   const record=addFood(next,{...row,...row.nutrition,amountUnit:row.unit,status:'plan',stockQty:null},undefined,'meal-plan:'+id+':'+created.length);
   if(row.containerId)record.containerId=row.containerId;
+  if(row.nutritionEstimate)record.nutritionEstimate=row.nutritionEstimate;
   created.push(record);
  }
  return {next,evaluation,changes:{created,removed:confirmed}};

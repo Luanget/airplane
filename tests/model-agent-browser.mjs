@@ -180,6 +180,37 @@ try{
  }finally{await restored.close();}
  console.log('PASS historical attachment use, visible tool audit, conversation and attachment restore without write replay');
 
+ const skillArchive=await page.evaluate(async()=>{
+  const {SKILLS_KEY}=await import('/ai/skills.mjs');
+  const {combinedBackup}=await import('/health/backup.mjs'),{exportAiArchive}=await import('/ai/archive.mjs');
+  const account=globalThis.airplaneAccount;
+  account.finance.setItem(SKILLS_KEY,JSON.stringify({
+   runtime:{weighing:false,meals:false},
+   overrides:{meals:{steps:'优先用带标签的待验食品',output:'逐项列出'}},
+   personal:[{id:'custom-plan',name:'合成个人配餐流程',text:'先检查冰箱',enabled:true}]
+  }));
+  return combinedBackup(null,null,await exportAiArchive(account,{attachments:false}));
+ });
+ const skillCopy=await browser.newContext();
+ try{
+  const copy=await skillCopy.newPage();
+  await copy.goto(origin+'/assistant/');
+  const result=await copy.evaluate(async archive=>{
+   const {restoreBackup,unpackBackup}=await import('/health/backup.mjs');
+   const {SKILLS_KEY,skillCatalog}=await import('/ai/skills.mjs'),account=globalThis.airplaneAccount;
+   account.finance.setItem(SKILLS_KEY,JSON.stringify({overrides:{meals:{output:'新设备上已改'}}}));
+   await restoreBackup(null,unpackBackup(archive),account);
+   const {createAgentTools}=await import('/ai/agent-tools.mjs');
+   const tools=createAgentTools({finance:account.finance});
+   const custom=await tools('load_skill',{id:'custom-plan'},{run:{allowRead:true}});
+   const meals=skillCatalog(account.finance).find(row=>row.id==='meals');
+   return {custom:custom.data.steps,steps:meals.steps,output:meals.output,active:meals.enabled,version:meals.version};
+  },skillArchive);
+  assert.deepEqual(result,{custom:'先检查冰箱',steps:'优先用带标签的待验食品',output:'新设备上已改',active:false,version:2});
+ }finally{await skillCopy.close();}
+ console.log('PASS combined backup restores custom Skill, enabled state and partial overrides');
+
+
  const tomorrow=addDays(today,1);
  await page.evaluate(async({tomorrow})=>{
   const storage=await import('/health/storage.mjs'),core=await import('/health/core.mjs');

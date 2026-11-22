@@ -1,5 +1,6 @@
 import {auditSafe} from './audit.mjs';
 import {attachmentGroups} from './conversation-evidence.mjs';
+import {SKILLS_KEY,storedSkills,mergeSkillSettings} from './skills.mjs';
 import {MEMORY_KEY} from './memory.mjs';
 import {THREADS_KEY,threadBook} from './threads.mjs';
 import {taskJournal} from './task-log.mjs';
@@ -24,12 +25,19 @@ export async function exportAiArchive(account,{threadId=null,attachments=true,me
    ({id,key,input:{...input,...(input.filename?{filename:auditSafe(input.filename)}:{})},...(original?{original:{...original,name:auditSafe(original.name)}}:{})}))});
  }
  return {format:AI_ARCHIVE,version:1,threads:threads.map(row=>({id:row.id,title:auditSafe(row.title),updatedAt:row.updatedAt,
-  messages:row.messages.map(recordedMessage)})),media,tasks:auditSafe(tasks),habits:auditSafe(readArray(store,MEMORY_KEY))};
+  messages:row.messages.map(recordedMessage)})),media,tasks:auditSafe(tasks),habits:auditSafe(readArray(store,MEMORY_KEY)),
+  ...(!threadId&&storedSkills(store)?{skills:auditSafe(storedSkills(store))}:{})};
 }
 
 export function validateAiArchive(archive){
  if(archive?.format!==AI_ARCHIVE||archive.version!==1||!['threads','tasks','media','habits'].every(key=>Array.isArray(archive[key])))
   throw Error('无法识别 AI 对话备份。');
+ const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
+ if(archive.skills!==undefined&&(!object(archive.skills)||
+  ['personal','folders'].some(key=>archive.skills[key]!==undefined&&
+   (!Array.isArray(archive.skills[key])||archive.skills[key].some(row=>!object(row)||!validId(row.id))))||
+  ['overrides','runtime'].some(key=>archive.skills[key]!==undefined&&!object(archive.skills[key]))))
+  throw Error('备份中的 Skills 格式无效。');
  const ids=new Set();
  for(const thread of archive.threads){
   if(!validId(thread?.id)||ids.has(thread.id)||typeof thread.title!=='string'||!Array.isArray(thread.messages)||
@@ -72,5 +80,6 @@ export async function restoreAiArchive(account,input){
  const habits=readArray(store,MEMORY_KEY),known=new Set(habits.flatMap(row=>[row.id,row.topic]).filter(Boolean));
  const newHabits=archive.habits.filter(row=>!known.has(row.id)&&(!row.topic||!known.has(row.topic)));
  if(newHabits.length)store.setItem(MEMORY_KEY,JSON.stringify([...habits,...auditSafe(newHabits)]));
+ if(archive.skills)store.setItem(SKILLS_KEY,JSON.stringify(mergeSkillSettings(auditSafe(archive.skills),storedSkills(store))));
  return {added:added.length,attachments:archive.media.length};
 }

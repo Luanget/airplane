@@ -9,7 +9,6 @@ import {basis,quantityInUnit} from '../health/candidates.mjs';
 import {recordedPortion,reviseFoodPortion} from '../health/food-history.mjs';
 import {portionSources,registerPortions} from '../health/inventory.mjs';
 import {activityPolicy,duplicateActivity} from '../health/agent-rules.mjs';
-import {assertSkillAction} from './skills.mjs';
 import {healthReport,inventoryDiff,renderHealthReport,renderInventoryDiff} from './health-report.mjs';
 import {hash,same,stable} from '../health/sync-source.mjs';
 import {verifyNativeStep} from './evidence.mjs';
@@ -322,12 +321,11 @@ function planRequest(state,step,date,habits){
  return {items,reply:lines.join('\n')||'午餐和晚餐已有实际记录，可查看当天报告。'};
 }
 
-function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,skills,habits,native=false,photoSteps={},provenance=[]}){
+function localPlan(state,plan,{id,text,today,clock,reference={},foodDate,habits,native=false,photoSteps={},provenance=[]}){
  let next=ensureContainers(structuredClone(state));
  const messages=[],queryMessages=[],touched=new Set();
  let resultReference=null;
  for(let [index,step] of plan.steps.entries()){
-  if(skills&&!native)assertSkillAction(skills,step.kind);
   const operationId='health:'+id+':'+index;
   if(!native&&plan.steps.filter(interpretedWrite).length===1&&['eat','correct','weigh'].includes(step.kind)&&
    plausible(text,{name:step.name})&&statedDate(step.evidence,today)===null&&statedDate(text,today)!==null)
