@@ -33,7 +33,7 @@ async function attachmentInputs(imageFiles,reportFiles){
 }
 
 export function mountAgentChat({book,journal,workspace,composer,review,stop,retry,replyRetry,steerLabel,transcript,thread,context,trace,
- status,onUser,onFinal,onError,onQueue,onKey,resetPhoto,messageNode}){
+ status,onUser,onFinal,onError,onQueue,onKey,resetPhoto,keepThreadScroll,messageNode}){
  const steer=steerLabel.querySelector('input'),tools=createAgentTools(workspace,{book,journal,authorized:run=>run.allowRead});
  let current=null,submitting=false,restoring=false,restoredAttachments=[],attachmentRevision=0;
  const active=ticket=>book.current?.id===ticket.threadId;
@@ -149,7 +149,9 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
    await writeStatus(run.id,failed?'partial':'done');
    try{tools.notePeriodRecap(run);}catch{/* Bookkeeping does not affect a saved response. */}
    await journal.removeRun(run.id);
-   if(active(ticket)){removeReview();retry.hidden=true;replyRetry.hidden=true;onFinal(run.reply,source,undo,media,run.id,preview);status('');}
+   if(active(ticket))keepThreadScroll(()=>{
+    removeReview();retry.hidden=true;replyRetry.hidden=true;onFinal(run.reply,source,undo,media,run.id,preview);status('');
+   });
   }
  }
  async function processRun(run,ticket,{replyOnly=false}={}){
@@ -160,19 +162,22 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
    return;
   }
   const controller=new AbortController(),state={ticket,run,controller,steers:[],reported:new Set()};
-  current=state;steerLabel.hidden=false;stop.hidden=false;retry.hidden=true;replyRetry.hidden=true;
+  current=state;
+  keepThreadScroll(()=>{steerLabel.hidden=false;stop.hidden=false;retry.hidden=true;replyRetry.hidden=true;});
   await trace(run.id,{type:'start',route:'responses-tools',threadId:ticket.threadId});
   let partial=book.current?.pending?.partial??'',writtenAt=0;
   const previous=transcript.querySelector('[data-pending-reply]');
   const live=previous??messageNode('assistant','');
-  live.classList.add('agent-live','streaming-reply');
-  live.setAttribute('aria-live','off');
-  delete live.dataset.pendingReply;
-  live.hidden=!partial;
-  if(!previous)transcript.insertBefore(live,transcript.querySelector('[data-queued-job]'));
-  const stream=markdownStream(live.querySelector('.chat-bubble'),thread,reply=>{live.hidden=!reply;});
   const runningDetails=executionDetails(journal,run.id,'本次执行详情');
-  if(active(ticket))live.after(runningDetails);
+  keepThreadScroll(()=>{
+   live.classList.add('agent-live','streaming-reply');
+   live.setAttribute('aria-live','off');
+   delete live.dataset.pendingReply;
+   live.hidden=!partial;
+   if(!previous)transcript.insertBefore(live,transcript.querySelector('[data-queued-job]'));
+   if(active(ticket))live.after(runningDetails);
+  });
+  const stream=markdownStream(live.querySelector('.chat-bubble'),thread,reply=>{live.hidden=!reply;});
   const updatePartial=reply=>{
    if(!active(ticket))return;
    partial=reply;stream.update(reply);
@@ -241,24 +246,29 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
      }
     }});
    stream.cancel();
-   if(!bindReview(run,ticket))await finish(run,ticket,live);
+   if(!keepThreadScroll(()=>bindReview(run,ticket)))await finish(run,ticket,live);
   }catch(error){
    if(partial)try{book.checkpoint(ticket,partial);}catch{}
    await writeStatus(run.id,'pending',error);
    if(active(ticket)){
-    if(partial){
-     renderMarkdown(live.querySelector('.chat-bubble'),partial);
-     live.hidden=false;live.dataset.pendingReply='';live.classList.remove('agent-live','streaming-reply');live.removeAttribute('aria-live');
-    }
-    retry.textContent='继续未完成任务';retry.hidden=false;
-    replyRetry.hidden=run.phase!=='model'||!hasSavedChanges(run);
-    onError(error);
-    if(error.status===400&&hasSavedChanges(run))status(error.message+' 本轮已有保存或撤销回执，可在执行详情核对。');
+    keepThreadScroll(()=>{
+     if(partial){
+      renderMarkdown(live.querySelector('.chat-bubble'),partial);
+      live.hidden=false;live.dataset.pendingReply='';live.classList.remove('agent-live','streaming-reply');live.removeAttribute('aria-live');
+     }
+     retry.textContent='继续未完成任务';retry.hidden=false;
+     replyRetry.hidden=run.phase!=='model'||!hasSavedChanges(run);
+     onError(error);
+     if(error.status===400&&hasSavedChanges(run))status(error.message+' 本轮已有保存或撤销回执，可在执行详情核对。');
+    });
     if(error.status===401||error.message.includes('导入自己的密钥'))onKey?.();
    }
   }finally{
-   stream.cancel();if(live.classList.contains('agent-live'))live.remove();
-   runningDetails.remove();current=null;stop.hidden=true;steerLabel.hidden=true;steer.checked=false;showQueue();
+   stream.cancel();current=null;
+   keepThreadScroll(()=>{
+    if(live.classList.contains('agent-live'))live.remove();
+    runningDetails.remove();stop.hidden=true;steerLabel.hidden=true;steer.checked=false;showQueue();
+   });
    if(!book.current?.pending)void next();
   }
  }
@@ -269,8 +279,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
   if(!entry)return;
   const ticket=book.startAgent(entry.id);
   if(!ticket)return;
-  showQueue();
-  onUser(entry.label);
+  keepThreadScroll(()=>{showQueue();onUser(entry.label);});
   try{
    const seed=await journal.readRun(entry.id);
    if(!seed)throw Error('找不到该任务的本机附件或恢复点');

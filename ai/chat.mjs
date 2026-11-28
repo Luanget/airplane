@@ -56,6 +56,12 @@ const $=selector=>document.querySelector(selector);
 const transcript=$('.chat-transcript'),thread=$('.chat-thread'),review=$('.chat-review'),start=$('.assistant-start');
 const photoResults=$('[data-photo-results]');
 const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
+function keepThreadScroll(change){
+ const top=thread.scrollTop,follow=thread.scrollHeight-top-thread.clientHeight<48;
+ const result=change();
+ thread.scrollTop=follow?thread.scrollHeight:top;
+ return result;
+}
 const shell=composer.closest('.assistant-shell'),textbox=composer.elements.text,viewport=window.visualViewport;
 let fullHeight=window.innerHeight,layoutWidth=window.innerWidth,viewportFrame=0;
 function fitComposerViewport(){
@@ -63,20 +69,24 @@ function fitComposerViewport(){
  viewportFrame=requestAnimationFrame(()=>{
   viewportFrame=0;
   if(!viewport)return;
-  const focused=document.activeElement===textbox,height=viewport.height;
-  if(layoutWidth!==window.innerWidth||!focused&&window.innerHeight-height<=90){
+  const fitted=shell.classList.contains('assistant-keyboard'),tracking=document.activeElement===textbox||fitted;
+  const height=viewport.height;
+  if(layoutWidth!==window.innerWidth||!tracking&&window.innerHeight-height<=90){
    layoutWidth=window.innerWidth;fullHeight=window.innerHeight;
   }
-  const keyboard=focused&&viewport.scale<=1.05&&height>0&&(window.innerHeight-height>90||navigator.maxTouchPoints>0&&fullHeight-height>90);
-  if(keyboard){
-   shell.style.setProperty('--assistant-viewport',Math.floor(height)+'px');
-   shell.style.setProperty('--assistant-top',Math.max(0,Math.round(viewport.offsetTop))+'px');
-  }else if(shell.classList.contains('assistant-keyboard')){
-   shell.style.removeProperty('--assistant-viewport');
-   shell.style.removeProperty('--assistant-top');
-   composer.scrollTop=0;
-  }
-  shell.classList.toggle('assistant-keyboard',keyboard);
+  const keyboard=tracking&&viewport.scale<=1.05&&height>0&&(window.innerHeight-height>90||navigator.maxTouchPoints>0&&fullHeight-height>90);
+  if(!keyboard&&!fitted)return;
+  keepThreadScroll(()=>{
+   if(keyboard){
+    shell.style.setProperty('--assistant-viewport',Math.floor(height)+'px');
+    shell.style.setProperty('--assistant-top',Math.max(0,Math.round(viewport.offsetTop))+'px');
+   }else{
+    shell.style.removeProperty('--assistant-viewport');
+    shell.style.removeProperty('--assistant-top');
+    composer.scrollTop=0;
+   }
+   shell.classList.toggle('assistant-keyboard',keyboard);
+  });
  });
 }
 viewport?.addEventListener('resize',fitComposerViewport);
@@ -214,7 +224,9 @@ function revealKeySettings(){
  if(!settings.open)settings.showModal();
  keyPanel.querySelector('summary').scrollIntoView({block:'nearest'});
 }
-function tell(text){status.textContent=text;}
+function tell(text){
+ if(status.textContent!==text)keepThreadScroll(()=>{status.textContent=text;});
+}
 function report(err){tell(err.name==='TypeError'?'无法完成请求，请检查网络或本机存储':err.message);}
 async function requestReply(input,options,savePartial=()=>{}){
  const answer=messageNode('assistant','');
@@ -434,18 +446,18 @@ function bubble(role,text,source,healthActionId,preserveScroll=false,agentUndo=[
  return node;
 }
 function renderQueue(jobs){
- const nearEnd=thread.scrollHeight-thread.scrollTop-thread.clientHeight<48;
- const nodes=new Map([...transcript.querySelectorAll('[data-queued-job]')].map(node=>[node.dataset.queuedJob,node]));
- const ids=new Set(jobs.map(job=>job.id));
- for(const [id,node] of nodes)if(!ids.has(id))node.remove();
- for(const job of jobs){
-  if(nodes.has(job.id))continue;
-  const node=messageNode('user',job.label);
-  const badge=document.createElement('small');badge.className='chat-queued-label';badge.textContent='待处理';
-  node.querySelector('.chat-bubble').append(badge);node.dataset.queuedJob=job.id;transcript.append(node);
- }
- if(jobs.length)start.hidden=true;
- if(nearEnd)thread.scrollTop=thread.scrollHeight;
+ keepThreadScroll(()=>{
+  const nodes=new Map([...transcript.querySelectorAll('[data-queued-job]')].map(node=>[node.dataset.queuedJob,node]));
+  const ids=new Set(jobs.map(job=>job.id));
+  for(const [id,node] of nodes)if(!ids.has(id))node.remove();
+  for(const job of jobs){
+   if(nodes.has(job.id))continue;
+   const node=messageNode('user',job.label);
+   const badge=document.createElement('small');badge.className='chat-queued-label';badge.textContent='待处理';
+   node.querySelector('.chat-bubble').append(badge);node.dataset.queuedJob=job.id;transcript.append(node);
+  }
+  if(jobs.length)start.hidden=true;
+ });
 }
 function remember(role,text,carry,source){
  try{book.append(role,text,carry,source);}
@@ -527,7 +539,7 @@ function renderThread(previousPhotos){
    current.photos.jobs.map(job=>previousPhotos.jobs.find(old=>old.index===job.index)?.file):[];
   renderPhotoBatch(current.photos,files);
  }
- showPending();
+ keepThreadScroll(showPending);
  restoreReview.hidden=!current?.review;
  if(current?.followUp){
   followUp=current.followUp;retryFollowUp.hidden=false;
@@ -1480,6 +1492,6 @@ if(nativeAgentEnabled){
   onQueue:jobs=>{renderQueue(jobs);if(jobs.length)tell('等待处理 '+jobs.length+' 条消息');},
   onUser:label=>{start.hidden=true;bubble('user',label,null,null,true);syncThreads();refreshWriteStatus();},
   onFinal:(reply,source,undo,media,taskId,preview)=>{bubble('assistant',reply,source,null,true,undo,media,taskId,preview);syncThreads();updateContext();},
-  onKey:revealKeySettings,resetPhoto});
+  onKey:revealKeySettings,resetPhoto:()=>keepThreadScroll(resetPhoto),keepThreadScroll});
  void nativeUi.restore();
 }

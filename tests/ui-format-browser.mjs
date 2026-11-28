@@ -207,6 +207,47 @@ try{
  }
  console.log('PASS six-column mobile Markdown, nested lists, code, focus, draft and send during keyboard resize/pan, and 20/200/1000-character notes at 375/390/430px in both themes');
 
+ const waitingContext=await createContext(390,'dark'),waitingPage=await waitingContext.newPage();
+ await waitingPage.clock.install();
+ await waitingContext.addInitScript(()=>{
+  const request=window.fetch.bind(window);
+  window.waitingRequests=0;
+  window.fetch=(url,options)=>{
+   if(url!=='https://api.openai.com/v1/responses')return request(url,options);
+   window.waitingRequests++;
+   return new Promise((resolve,reject)=>{
+    options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});
+   });
+  };
+ });
+ await waitingPage.goto(origin+'/assistant/');await waitChat(waitingPage);
+ await waitingPage.evaluate(async()=>{await (await import('/ai/keys.mjs')).importKey('sk-synthetic-waiting-scroll-only');});
+ const waitingTextbox=waitingPage.getByRole('textbox',{name:'消息'});
+ const waitingThread=waitingPage.locator('.chat-thread');
+ const latest=()=>waitingThread.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop);
+ await waitingTextbox.fill('检查等待时对话能否保持在这条消息附近');
+ await waitingPage.evaluate(()=>resizeKeyboardViewport(285,72));
+ await waitingPage.locator('.assistant-keyboard').waitFor();
+ await waitingThread.evaluate(el=>{el.scrollTop=el.scrollHeight;});
+ await waitingPage.getByRole('button',{name:'发送',exact:true}).click();
+ await waitingPage.evaluate(()=>resizeKeyboardViewport(null));
+ await waitingPage.waitForFunction(()=>window.waitingRequests===1);
+ await waitingPage.locator('.assistant-keyboard').waitFor({state:'detached'});
+ assert.ok(await latest()<=2,'the new message moved out of view while waiting for the first response');
+ await waitingPage.clock.fastForward(61000);
+ await waitingPage.getByText('等待 OpenAI 开始回复超时。原消息仍在，可以重试。',{exact:true}).waitFor();
+ assert.ok(await latest()<=2,'the latest message moved out of view on timeout');
+ await waitingPage.getByRole('button',{name:'继续未完成任务',exact:true}).click();
+ await waitingPage.waitForFunction(()=>window.waitingRequests===2);
+ assert.ok(await latest()<=2,'the latest message moved out of view on retry');
+ const earlier=await waitingThread.evaluate(el=>el.scrollTop=Math.min(el.scrollTop-80,36));
+ assert.ok(earlier>0,'fixture must leave room to read older messages');
+ await waitingPage.clock.fastForward(61000);
+ await waitingPage.getByText('等待 OpenAI 开始回复超时。原消息仍在，可以重试。',{exact:true}).waitFor();
+ assert.ok(Math.abs(await waitingThread.evaluate(el=>el.scrollTop)-earlier)<=1,'timeout interrupted reading older messages');
+ await waitingContext.close();
+ console.log('PASS waiting without response and retry keep the latest message visible; timeout respects manual scroll');
+
  const context=await createContext(390,'light'),page=await context.newPage();
  const badRequests=[];
  await context.route('**/external-markdown.png',route=>{badRequests.push(route.request().url());return route.abort();});

@@ -9,7 +9,7 @@ import {orderFinance} from './order-agent-fixture.mjs';
 import {lab,syntheticPdf} from './medical-fixture.mjs';
 import {APP_VERSION} from '../shell.mjs';
 
-const baseRevision=process.env.AIRPLANE_UPGRADE_BASELINE??'a4398be',date='2034-05-06';
+const baseRevision=process.env.AIRPLANE_UPGRADE_BASELINE??'390c7d7',date='2034-05-06';
 const baseVersion=execFileSync('git',['show',baseRevision+':shell.mjs'],{encoding:'utf8'}).match(/APP_VERSION='([^']+)'/)[1];
 const assets=source=>new Set(['sw.js',...Array.from(source.split('const assets')[0].matchAll(/'\.\/([^']+)'/g),match=>match[1])]);
 const oldSource=execFileSync('git',['show',baseRevision+':sw.js'],{encoding:'utf8'});
