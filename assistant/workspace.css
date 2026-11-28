@@ -28,7 +28,7 @@
 .assistant-fields .chat-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px }
 .assistant-fields .chat-actions button { margin:0 }
 .assistant-conversation {
- --conversation-height:calc(var(--assistant-viewport,100dvh) - 94px - env(safe-area-inset-top,0px) - var(--safe-bottom));
+ --conversation-height:calc(100dvh - 94px - env(safe-area-inset-top,0px) - var(--safe-bottom));
  display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(70px,1fr) auto;
  min-height:min(480px,var(--conversation-height)); height:var(--conversation-height);
  padding:14px; min-width:0
@@ -110,6 +110,26 @@
 .assistant-query input { width:16px; height:16px }
 .assistant-conversation .chat-composer { border-top:1px solid var(--line); padding-top:8px }
 .assistant-workspace .chat-attach { flex:none }
+.assistant-conversation .chat-composer textarea {
+ block-size:56px; max-block-size:56px; line-height:1.35; overflow-y:auto;
+}
+.assistant-request-status output { min-width:0; overflow-wrap:anywhere }
+.assistant-shell.assistant-keyboard {
+ position:fixed; inset-inline:0; top:var(--assistant-top); height:var(--assistant-viewport); min-height:0;
+ display:grid; grid-template-rows:auto minmax(0,1fr); overflow:hidden;
+}
+.assistant-keyboard > .topbar {
+ width:100%; padding-block:max(5px,calc(env(safe-area-inset-top,0px) - var(--assistant-top))) 5px;
+}
+.assistant-keyboard .assistant-workspace { min-height:0; padding-bottom:0 }
+.assistant-keyboard .assistant-conversation {
+ height:100%; min-height:0; grid-template-rows:auto minmax(0,1fr) auto;
+}
+.assistant-keyboard .assistant-history { max-height:calc(var(--assistant-viewport) * .2) }
+.assistant-keyboard .chat-composer {
+ max-height:min(210px,calc(var(--assistant-viewport) * .54)); padding-top:4px; overflow-y:auto; overscroll-behavior:contain;
+}
+.assistant-keyboard .assistant-conversation .chat-composer textarea { block-size:48px; max-block-size:48px; margin-block:3px 6px }
 @media (max-width:390px) {
  .assistant-conversation { padding:10px }
  .assistant-start { padding:12px 0 }

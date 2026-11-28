@@ -11,6 +11,7 @@ export function failureKind(error){
   /超时|秒没有|timeout/i.test(text)?'timeout':
   /HTTP 401|HTTP 403|API Key|权限|authorization/i.test(text)?'authorization':
   /HTTP 429|额度|quota|rate.limit/i.test(text)?'rate_or_quota':
+  error?.status===400?'invalid_request':
   /格式|候选|schema|model result/i.test(text)?'invalid_response':
   /待同步|账本.{0,10}更新|保存|存储|revision|database/i.test(text)?'storage_or_conflict':
   /网络|离线|fetch|network/i.test(text)?'network':
@@ -79,7 +80,7 @@ export function requestMetric({model,servedModel,body,elapsedMs,error,bytes,rate
  const [input,cached,output]=prices[name]??[];
  return {model,servedModel:servedModel??null,bytes,elapsedMs:Math.round(elapsedMs),httpStatus:httpStatus??null,
   tokens,cost:estimatedCost(name,body?.usage,prices),rates:input===undefined?null:{input,cached,output},
-  status:error?'failed':'done',failure:failureKind(error),reportedAt:Date.now()};
+  status:error?'failed':'done',failure:failureKind(error),...(error?.responseError?{responseError:error.responseError}:{}),reportedAt:Date.now()};
 }
 
 function database(){

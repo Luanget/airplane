@@ -22,6 +22,7 @@ const output=(...items)=>({status:'completed',output:items});
 const answer=text=>({type:'message',role:'assistant',content:[{type:'output_text',text}]});
 const call=(name,id,args)=>({type:'function_call',name,id:'fc_'+id,call_id:id,arguments:JSON.stringify(args)});
 const message='帮我记录真实的晨重72.4kg',correction='本轮改成晨重72.6kg',independent='独立的问题：余额是多少？';
+const parameterError='合成测试：查询今天的支出';
 const needsReview='帮我记录下午体重73.0kg';
 const stockMessage='用刚才的照片，采购入库合成小青菜三份，每份500g，价格未知。';
 let browser;
@@ -30,7 +31,7 @@ try{
  const ctx=await browser.newContext({viewport:{width:390,height:650},isMobile:true,hasTouch:true});
  const page=await ctx.newPage();
  page.setDefaultTimeout(10000);
- let requested=0,failed=false,release,firstStarted,stockLabel,expectedModel='gpt-6.1-terra';
+ let requested=0,failed=false,replayRejected=false,release,firstStarted,stockLabel,expectedModel='gpt-6.1-terra';
  const waitFirst=new Promise(resolve=>{firstStarted=resolve;});
  const releaseFirst=new Promise(resolve=>{release=resolve;});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -58,6 +59,18 @@ try{
    failed=true;await route.fulfill({headers,status:500,json:{error:{code:'synthetic'}}});return;
   }else if(last.call_id==='corrected'){
    assert.equal(body.tool_choice,'none');
+   assert.equal(replayRejected,false);
+   replayRejected=true;
+   await route.fulfill({status:400,headers:{...headers,'Access-Control-Expose-Headers':'x-request-id','x-request-id':'req_replay_regression'},
+    json:{error:{type:'invalid_request_error',param:'input[4].encrypted_content',code:'invalid_encrypted_content',message:'Encrypted content could not be verified.'}}});
+   return;
+  }else if(last.content?.[0]?.text?.startsWith('应用执行回执')&&body.tool_choice==='none'){
+   assert.equal(replayRejected,true);
+   assert.equal(body.input.some(row=>row.type==='reasoning'||row.call_id),false);
+   assert.ok(body.input.some(row=>row.content?.[0]?.text===correction));
+   const receipt=JSON.parse(last.content[0].text.slice(last.content[0].text.indexOf('：')+1));
+   assert.equal(receipt.callId,'corrected');
+   assert.equal(receipt.result.status,'saved');
    reply=output(answer('晨重已按你的补充记录为72.6公斤。'));
   }else if(last.content?.[0]?.text===independent){
    assert.ok(last.content.some(part=>part.type==='input_image'));
@@ -68,6 +81,11 @@ try{
    const stream=[{type:'response.output_text.delta',output_index:0,content_index:0,delta:text},
     {type:'response.completed',response:output(answer(text))}].map(event=>'data: '+JSON.stringify(event)+'\n\n').join('');
    await route.fulfill({headers:{...headers,'Content-Type':'text/event-stream'},body:stream});return;
+  }else if(last.content?.[0]?.text===parameterError){
+   reply=output(call('read_ledger','parameter-check',{scope:'balance',query:''}));
+  }else if(last.call_id==='parameter-check'){
+   await route.fulfill({status:400,headers,json:{error:{code:'invalid_json_schema',param:'tools[0].parameters',
+    message:'Synthetic provider diagnostic must not be displayed.'}}});return;
   }else if(last.content?.[0]?.text===needsReview){
    reply=output(call('write_health','review',proposal(action('weight',needsReview,{kg:73,morning:'no'}))));
   }else if(last.call_id==='review'){
@@ -125,7 +143,13 @@ try{
  await page.getByText('晨重已按你的补充记录为72.6公斤。',{exact:true}).waitFor();
  await page.getByText('查询的本机余额是0元。',{exact:true}).waitFor();
  assert.deepEqual(await weights(),[72.6]);
- assert.equal(requested,6);
+ assert.equal(requested,7);
+ const recovered=page.locator('.execution-details').filter({hasText:'执行详情'}).first();
+ await recovered.locator(':scope > summary').click();
+ await recovered.getByText('已尝试从保存的执行回执恢复请求。',{exact:true}).waitFor();
+ const rejection=recovered.getByText('API 请求错误',{exact:true});
+ await rejection.click();
+ await recovered.getByText(/req_replay_regression/).waitFor();
  assert.equal(await page.locator('[data-queued-job]').count(),0);
  assert.equal(await page.locator('.chat-bubble.user').filter({hasText:independent}).count(),1);
  await page.evaluate(async()=>{
@@ -140,7 +164,7 @@ try{
  await page.reload();
  await page.getByText('本轮附件 · 1 个',{exact:true}).click();
  await page.getByRole('img',{name:'附件 1',exact:true}).waitFor();
- console.log('PASS visible queue before execution, persisted attachments, steering, default Terra and manual Luna, durable retry');
+ console.log('PASS visible queue before execution, persisted attachments, steering, default Terra and manual Luna, resumed HTTP 400 without duplicate writes');
 
  await page.evaluate(async()=>{
   (await import('/ai/health-actions.mjs')).setHealthAuto(localStorage,true);
@@ -209,6 +233,18 @@ try{
   assert.deepEqual(result,{custom:'先检查冰箱',steps:'优先用带标签的待验食品',output:'新设备上已改',active:false,version:2});
  }finally{await skillCopy.close();}
  console.log('PASS combined backup restores custom Skill, enabled state and partial overrides');
+
+ await page.reload();
+ await page.waitForFunction(()=>typeof document.querySelector('.chat-composer')?.onsubmit==='function');
+ const beforeError=requested;
+ await say(parameterError);
+ const apiStatus=page.locator('[data-status]');
+ await apiStatus.filter({hasText:'参数 tools[0].parameters'}).waitFor();
+ assert.match(await apiStatus.textContent(),/invalid_json_schema/);
+ assert.doesNotMatch(await apiStatus.textContent(),/Synthetic provider diagnostic/);
+ assert.equal(requested,beforeError+2);
+ assert.deepEqual(await weights(),[72.6]);
+ console.log('PASS unrelated HTTP 400 reports a safe parameter and error code without replaying the request');
 
 
  const tomorrow=addDays(today,1);

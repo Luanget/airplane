@@ -58,14 +58,21 @@ let browser;
 async function createContext(width,theme){
  const context=await browser.newContext(mobile(width,theme));
  await context.addInitScript(({book,ledger,THREADS_KEY,STORAGE_KEY})=>{
+  const viewport=window.visualViewport;
+  const resize=(height,offsetTop=0)=>{
+   Object.defineProperties(viewport,{height:{value:height??innerHeight,configurable:true},offsetTop:{value:offsetTop,configurable:true}});
+   viewport.dispatchEvent(new Event('resize'));
+   viewport.dispatchEvent(new Event('scroll'));
+  };
+  window.resizeKeyboardViewport=resize;
   if(!localStorage.getItem(THREADS_KEY))localStorage.setItem(THREADS_KEY,JSON.stringify(book));
   if(!localStorage.getItem(STORAGE_KEY))localStorage.setItem(STORAGE_KEY,JSON.stringify(ledger));
  },{book:fixture,ledger:finance,THREADS_KEY,STORAGE_KEY});
  return context;
 }
-async function screenshot(page,name){
+async function screenshot(page,name,clip){
  if(!screenshots)return;
- await page.screenshot({path:join(screenshots,name+'.png'),animations:'disabled'});
+ await page.screenshot({path:join(screenshots,name+'.png'),animations:'disabled',clip});
 }
 async function waitChat(page){
  await page.waitForFunction(()=>typeof document.querySelector('.chat-composer')?.onsubmit==='function');
@@ -152,6 +159,34 @@ try{
    el.getBoundingClientRect().bottom<=window.innerHeight+1),true);
   assert.ok(await noOverflow(page));
   await page.setViewportSize({width,height:760});
+  await page.evaluate(()=>{
+   document.querySelector('[data-status]').textContent='OpenAI 拒绝了请求参数（HTTP 400，参数 input[27].encrypted_content）';
+   document.querySelector('[data-retry-request]').hidden=false;
+   resizeKeyboardViewport(285,72);
+  });
+  await page.waitForFunction(()=>{
+   const field=document.querySelector('.chat-composer textarea'),box=field.getBoundingClientRect();
+   const send=document.querySelector('.chat-composer [type=submit]').getBoundingClientRect();
+   const composer=field.closest('form').getBoundingClientRect();
+   const {offsetTop,height}=visualViewport;
+   return document.activeElement===field&&box.height>=44&&box.height<=70&&box.top>=offsetTop&&
+    send.bottom<=composer.bottom+1&&composer.bottom<=offsetTop+height+1;
+  },null,{timeout:2000});
+  await textbox.fill('补记昨天的饮食，保留这条尚未发送的草稿。\n'.repeat(25));
+  await page.evaluate(()=>resizeKeyboardViewport(245,104));
+  await page.waitForFunction(()=>{
+   const composer=document.querySelector('.chat-composer').getBoundingClientRect();
+   const send=document.querySelector('.chat-composer [type=submit]').getBoundingClientRect();
+   return send.bottom<=composer.bottom+1&&composer.bottom<=visualViewport.offsetTop+visualViewport.height+1;
+  },null,{timeout:2000});
+  if(width===390&&theme==='dark'){
+   await page.evaluate(()=>resizeKeyboardViewport(350,72));
+   await page.waitForFunction(()=>document.querySelector('.assistant-shell').clientHeight===350);
+   await screenshot(page,'07-iphone-keyboard',{x:0,y:72,width,height:350});
+  }
+  await textbox.blur();
+  await page.evaluate(()=>resizeKeyboardViewport(null));
+  assert.match(await textbox.inputValue(),/^补记昨天的饮食/);
   await page.goto(origin+'/');
   if(width===390&&theme==='light'){
    await page.locator('[data-open-tx=summary-1]').first().evaluate(el=>el.scrollIntoView({block:'center'}));
@@ -170,7 +205,7 @@ try{
   }
   await context.close();
  }
- console.log('PASS six-column mobile Markdown, nested lists, code, focus during viewport resize, and 20/200/1000-character notes at 375/390/430px in both themes');
+ console.log('PASS six-column mobile Markdown, nested lists, code, focus, draft and send during keyboard resize/pan, and 20/200/1000-character notes at 375/390/430px in both themes');
 
  const context=await createContext(390,'light'),page=await context.newPage();
  const badRequests=[];

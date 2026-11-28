@@ -56,15 +56,34 @@ const $=selector=>document.querySelector(selector);
 const transcript=$('.chat-transcript'),thread=$('.chat-thread'),review=$('.chat-review'),start=$('.assistant-start');
 const photoResults=$('[data-photo-results]');
 const composer=$('.chat-composer'),send=composer.querySelector('[type=submit]');
-const conversation=composer.closest('.assistant-conversation'),viewport=window.visualViewport;
+const shell=composer.closest('.assistant-shell'),textbox=composer.elements.text,viewport=window.visualViewport;
+let fullHeight=window.innerHeight,layoutWidth=window.innerWidth,viewportFrame=0;
 function fitComposerViewport(){
- const keyboard=viewport&&viewport.scale<=1.05&&window.innerHeight-viewport.height>90&&document.activeElement===composer.elements.text;
- if(keyboard)conversation.style.setProperty('--assistant-viewport',viewport.height+'px');
- else conversation.style.removeProperty('--assistant-viewport');
+ if(viewportFrame)return;
+ viewportFrame=requestAnimationFrame(()=>{
+  viewportFrame=0;
+  if(!viewport)return;
+  const focused=document.activeElement===textbox,height=viewport.height;
+  if(layoutWidth!==window.innerWidth||!focused&&window.innerHeight-height<=90){
+   layoutWidth=window.innerWidth;fullHeight=window.innerHeight;
+  }
+  const keyboard=focused&&viewport.scale<=1.05&&height>0&&(window.innerHeight-height>90||navigator.maxTouchPoints>0&&fullHeight-height>90);
+  if(keyboard){
+   shell.style.setProperty('--assistant-viewport',Math.floor(height)+'px');
+   shell.style.setProperty('--assistant-top',Math.max(0,Math.round(viewport.offsetTop))+'px');
+  }else if(shell.classList.contains('assistant-keyboard')){
+   shell.style.removeProperty('--assistant-viewport');
+   shell.style.removeProperty('--assistant-top');
+   composer.scrollTop=0;
+  }
+  shell.classList.toggle('assistant-keyboard',keyboard);
+ });
 }
 viewport?.addEventListener('resize',fitComposerViewport);
-composer.elements.text.addEventListener('focus',fitComposerViewport);
-composer.elements.text.addEventListener('blur',()=>conversation.style.removeProperty('--assistant-viewport'));
+viewport?.addEventListener('scroll',fitComposerViewport);
+window.addEventListener('resize',fitComposerViewport);
+textbox.addEventListener('focus',fitComposerViewport);
+textbox.addEventListener('blur',fitComposerViewport);
 const status=$('[data-status]'),clearPhoto=$('[data-remove-photo]'),newChat=$('[data-new]'),stop=$('[data-stop-request]');
 const retryFollowUp=$('[data-retry-follow-up]'),retryRequest=$('[data-retry-request]'),restoreReview=$('[data-restore-review]');
 const historyButton=$('[data-toggle-threads]'),historyPanel=$('#assistant-history'),historyList=$('[data-thread-list]');

@@ -52,9 +52,19 @@ export async function readDeviceKey(){
  catch{throw Error('无法读取本机 API Key，请打开设置重新导入。');}
 }
 
+const safeToken=value=>typeof value==='string'&&/^[A-Za-z0-9_.\[\]-]{1,100}$/.test(value)&&!value.startsWith('sk-')?value:null;
+
 function apiError(response,body,model){
- const code=body?.error?.code;
+ const provider=body?.error;
+ const code=safeToken(provider?.code),type=safeToken(provider?.type),parameter=safeToken(provider?.param);
+ const id=safeToken(response.headers.get('x-request-id'));
+ const invalidReplay=response.status===400&&(
+  ['invalid_encrypted_content','missing_reasoning_item'].includes(code)||
+  /(?:encrypted_content|reasoning).*?(?:invalid|not valid|could not be verified)|without its required ['"\x60]?reasoning|no tool call found for function call output/i.test(provider?.message??'')||
+  /^input\[\d+\]\.encrypted_content$/.test(parameter??''));
  const causes={
+  invalid_encrypted_content:'OpenAI 无法读取本轮保存的推理上下文',
+  missing_reasoning_item:'OpenAI 拒绝继续本轮的工具上下文',
   context_length_exceeded:'本轮内容超过模型能处理的范围，请缩小本轮查询范围',
   invalid_json_schema:'OpenAI 拒绝了当前版本的输出格式，请更新 Airplane',
   insufficient_quota:'此 Key 所属项目的 API 额度或余额不足',
@@ -71,9 +81,9 @@ function apiError(response,body,model){
   404:'当前项目无法访问 '+model,429:'OpenAI 触发本项目的额度或频率限制'
  };
  const reason=Object.hasOwn(causes,code)?causes[code]:errors[response.status]??'OpenAI 暂时无法处理请求';
- const id=response.headers.get('x-request-id')??'';
- return Object.assign(Error(reason+'（HTTP '+response.status+(/^[A-Za-z0-9_-]{1,100}$/.test(id)?'，请求 ID '+id:'')+'）。'),
-  {status:response.status,code,parameter:body?.error?.param});
+ const details=['HTTP '+response.status,parameter&&'参数 '+parameter,code&&'错误码 '+code,id&&'请求 ID '+id].filter(Boolean);
+ return Object.assign(Error(reason+'（'+details.join('，')+'）。'),{status:response.status,invalidReplay,
+  responseError:{status:response.status,code,type,parameter,requestId:id}});
 }
 
 export async function recognize(input,{onMetric,rates,onReply,onTool,signal,...options}={}){

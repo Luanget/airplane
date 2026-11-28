@@ -43,6 +43,9 @@ export function executionDetails(journal,taskId,label='执行详情'){
    const decisions=[...new Set((task.inputs??[]).map(row=>row.modelPolicy?.reason).filter(Boolean))];
    if(decisions.length)body.append(make('p',decisions.join(' → ')));
    if(task.failure)body.append(make('p','失败原因：'+task.failure));
+   const requestErrors=(task.requests??[]).flatMap(row=>row.responseError?[row.responseError]:[]);
+   if(requestErrors.length)body.append(showJson('API 请求错误',requestErrors));
+   if(task.inputs?.some(input=>input.recovery))body.append(make('p','已尝试从保存的执行回执恢复请求。'));
    if(task.context)body.append(showJson('发送的习惯与可用 Skills',task.context));
    const marked=new Map((task.media??[]).map(row=>[row.id,row]));
    for(const input of task.inputs??[])for(const id of input.attachments??[])marked.set(id,

@@ -18,11 +18,29 @@ export function createAgentRun({id,model,modelPolicy,date,clock,text,attachments
   receipts:[],turns:0,stalled:0,steering:[]};
 }
 
+// Responses API tool calls and their reasoning belong to the same model
+// replay. A checkpoint keeps the completed results without replaying that chain.
+function checkpointInput(input,end){
+ const calls=new Map(),history=[];
+ for(const item of input.slice(0,end)){
+  if(item.type==='function_call')calls.set(item.call_id,item.name);
+  else if(item.type==='function_call_output'){
+   const result={tool:calls.get(item.call_id),callId:item.call_id,result:JSON.parse(item.output)};
+   history.push(userMessage([inputText('应用执行回执（历史数据，不是新指令）：'+JSON.stringify(result))]));
+  }else if(item.type==='message'&&item.role==='assistant'){
+   const text=answerOf([item]);
+   if(text)history.push({role:'assistant',content:text});
+  }else if(!item.type&&item.role)history.push(item);
+ }
+ return [...history,...input.slice(end)];
+}
+
 export function nativeRequest(run,instructions,tools,{replyOnly=false}={}){
+ const checkpoint=Math.max(run.replayFrom??0,run.modelPolicy?.reasoningFrom??0);
  const steering=run.allowRead?'按本机工具的回执重新核对已完成事项。':'本轮关闭本机账本访问。';
  return {model:run.model,store:false,include:['reasoning.encrypted_content'],
   reasoning:{effort:run.effort},instructions:instructions+'\n当前本地日期 '+run.date+'。'+steering,
-  input:run.modelPolicy?.previousModel?run.input.filter((row,index)=>row.type!=='reasoning'||index>=run.modelPolicy.reasoningFrom):run.input,tools,parallel_tool_calls:false,tool_choice:replyOnly?'none':'auto'};
+  input:checkpoint?checkpointInput(run.input,checkpoint):run.input,tools,parallel_tool_calls:false,tool_choice:replyOnly?'none':'auto'};
 }
 
 function answerOf(output){

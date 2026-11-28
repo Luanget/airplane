@@ -10,9 +10,11 @@ import {requestResponses} from './client.mjs';
 import {modelRates} from './usage.mjs';
 import {identifyAttachments} from './conversation-evidence.mjs';
 import {auditSafe,executionDetails,inputAudit} from './audit.mjs';
+import {failureKind} from './task-log.mjs';
 import {currentSources} from './evidence.mjs';
 
 const draftKey='airplane-agent-composer-v1';
+const hasSavedChanges=run=>run.receipts?.some(row=>['saved','undone'].includes(row.result.status));
 const labelFor=(text,count)=>[text,count?'（附 '+count+' 个文件）':''].filter(Boolean).join(' ');
 
 async function attachmentInputs(imageFiles,reportFiles){
@@ -71,7 +73,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
  function showQueue(){
   onQueue(book.current?.agentQueue??[]);
  }
- const writeStatus=(id,value,error)=>trace(id,{type:'status',status:value,failure:error?.name??null});
+ const writeStatus=(id,value,error)=>trace(id,{type:'status',status:value,failure:failureKind(error)});
  const removeReview=()=>{review.hidden=true;review.replaceChildren();review.onsubmit=null;};
  function openLog(row,message){
   const summary=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');
@@ -217,15 +219,26 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
       '\n本对话用户消息 ID（附短索引）：'+JSON.stringify(currentSources(value).map(({id,text,current})=>({id,current:!!current,text:text.slice(0,90)})))+
       '\n已附在本任务的附件 ID：'+value.attachments.map(row=>row.id??row.key).join('、'):'');
      if(advanceModelPolicy(value))await journal.saveRun(value);
-     const body=nativeRequest(value,prompt,available,options);
      if(value.attachmentGroup)await trace(value.id,{type:'media',files:value.attachmentGroup.files.map(file=>({...file,groupId:value.attachmentGroup.id}))});
-     const audit=inputAudit(value,body);
-     let accepted=false;
-     try{
-      const result=await requestResponses(body,{signal:controller.signal,rates:modelRates(workspace.finance),onReply:updatePartial,
-       onTool:()=>updatePartial(''),onMetric:request=>trace(value.id,{type:'request',request})});
-      accepted=true;return result;
-     }finally{await trace(value.id,{type:'input',input:{...audit,accepted}});}
+     const send=async(body,recovery)=>{
+      const audit=inputAudit(value,body);
+      let accepted=false;
+      try{
+       const result=await requestResponses(body,{signal:controller.signal,rates:modelRates(workspace.finance),onReply:updatePartial,
+        onTool:()=>updatePartial(''),onMetric:request=>trace(value.id,{type:'request',request})});
+       accepted=true;return result;
+      }finally{await trace(value.id,{type:'input',input:{...audit,accepted,...(recovery?{recovery}:{})}});}
+     };
+     const body=nativeRequest(value,prompt,available,options);
+     try{return await send(body);}
+     catch(error){
+      if(!error.invalidReplay||!body.input.some(item=>['reasoning','function_call','function_call_output'].includes(item.type)))throw error;
+      controller.signal.throwIfAborted();
+      value.replayFrom=value.input.length;
+      await journal.saveRun(value);
+      if(active(ticket))status('正在从已核对的执行回执继续…');
+      return send(nativeRequest(value,prompt,available,options),'responses_replay_checkpoint');
+     }
     }});
    stream.cancel();
    if(!bindReview(run,ticket))await finish(run,ticket,live);
@@ -238,8 +251,9 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
      live.hidden=false;live.dataset.pendingReply='';live.classList.remove('agent-live','streaming-reply');live.removeAttribute('aria-live');
     }
     retry.textContent='继续未完成任务';retry.hidden=false;
-    replyRetry.hidden=run.phase!=='model'||!run.receipts.some(row=>row.result.status==='saved');
+    replyRetry.hidden=run.phase!=='model'||!hasSavedChanges(run);
     onError(error);
+    if(error.status===400&&hasSavedChanges(run))status(error.message+' 本轮已有保存或撤销回执，可在执行详情核对。');
     if(error.status===401||error.message.includes('导入自己的密钥'))onKey?.();
    }
   }finally{
@@ -328,7 +342,7 @@ export function mountAgentChat({book,journal,workspace,composer,review,stop,retr
     }else await processRun(run,ticket,{replyOnly});
    }else{
     retry.hidden=false;
-    replyRetry.hidden=run.phase!=='model'||!run.receipts?.some(row=>row.result.status==='saved');
+    replyRetry.hidden=run.phase!=='model'||!hasSavedChanges(run);
    }
   }catch(error){onError(error);}
   finally{restoring=false;if(!book.current?.pending)void next();}

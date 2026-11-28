@@ -27,7 +27,8 @@ test('mode selection respects manual settings and escalates with the previous to
  assert.equal(planNativeModel(finance,{text:'记录晨重72.4kg',attachments:[{}]}).model,'gpt-6.1-terra');
  const run=createAgentRun({...seed,date:today,id:'route-1',text:'记录晨重72.4kg'});
  run.input.push({type:'reasoning',encrypted_content:'luna-reasoning'},
-  {type:'function_call_output',call_id:'earlier',output:'保存晨重72.4kg'});
+  {type:'function_call',id:'fc_earlier',call_id:'earlier',name:'read_cycle_report',arguments:'{}'},
+  {type:'function_call_output',call_id:'earlier',output:JSON.stringify({status:'saved',message:'保存晨重72.4kg'})});
  run.receipts.push({tool:'read_cycle_report',result:{status:'ok'}});
  assert.equal(advanceModelPolicy(run),true);
  assert.equal(run.model,'gpt-6.1-terra');
@@ -35,7 +36,8 @@ test('mode selection respects manual settings and escalates with the previous to
  const input=nativeRequest(run,'',[]).input;
  assert.equal(input.some(row=>row.encrypted_content==='luna-reasoning'),false);
  assert.ok(input.some(row=>row.encrypted_content==='terra-reasoning'));
- assert.ok(input.some(row=>row.output==='保存晨重72.4kg'));
+ assert.ok(input.every(row=>row.call_id!=='earlier'));
+ assert.match(JSON.stringify(input),/保存晨重72.4kg/);
  saveChatModel(finance,'gpt-6-luna');
  Object.assign(run,planNativeModel(finance,{text:'分析体检报告'}));
  assert.equal(advanceModelPolicy(run),false);
